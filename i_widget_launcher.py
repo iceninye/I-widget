@@ -18,7 +18,6 @@
 用法：呢個檔案就係 widget 指向嘅 script（取代直接指向 i_widget.py）。
 """
 
-import hashlib
 import os
 import re
 import time
@@ -56,8 +55,49 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.6.0"
+LAUNCHER_VERSION = "1.7.0"
 REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
+
+
+# ==========================================================================
+# 足跡（trace）：真機除錯用
+# ==========================================================================
+#
+# 綠色 default template = process 死咗或者 show_widget() 冇叫到，冇任何錯誤訊息。
+# try/except 捉唔到硬崩潰、被系統殺（記憶體／超時），所以每過一個關卡就即刻
+# 寫一行去 userkeys。下次喺 Pyto 入面行 i_widget_trace.py 就睇到「最後去到邊」。
+TRACE_KEY = "i_widget.trace"
+TRACE_MAX_LINES = 60
+_T0 = time.time()
+_trace_lines = []
+
+
+def _crumb(step):
+    """記低一個關卡（連同距離開始嘅秒數）。本身絕不會 raise。"""
+    try:
+        _trace_lines.append(f"{time.time() - _T0:6.2f}s {step}")
+        del _trace_lines[:-TRACE_MAX_LINES]
+        import userkeys
+
+        userkeys.set("\n".join(_trace_lines), TRACE_KEY)
+    except BaseException:
+        pass
+
+
+try:
+    import userkeys as _uk
+
+    _prev = ""
+    try:
+        _prev = _uk.get(TRACE_KEY) or ""
+    except BaseException:
+        _prev = ""
+    # 保留上一次最後 15 行，用 ==== 分隔，咁就睇到「上一輪死喺邊」。
+    _trace_lines.extend(_prev.splitlines()[-15:])
+    _trace_lines.append("==== 新一輪 launcher " + time.strftime("%H:%M:%S"))
+except BaseException:
+    pass
+_crumb(f"1 module 開始 v{LAUNCHER_VERSION}")
 
 
 # ==========================================================================
@@ -109,6 +149,7 @@ def _patch_color_dynamic():
 
 
 _patch_color_dynamic()
+_crumb("2 patch_color_dynamic 完")
 
 
 def _dyn(light, dark):
@@ -174,6 +215,7 @@ def _cache_dir():
 
 
 CACHE_DIR = _cache_dir()
+_crumb(f"3 cache_dir={CACHE_DIR}")
 CACHED_PY = os.path.join(CACHE_DIR, "i_widget.cached.py")
 CACHED_FP = os.path.join(CACHE_DIR, "i_widget.cached.fingerprint")
 CACHED_CHECKED = os.path.join(CACHE_DIR, "i_widget.last_checked")
@@ -426,7 +468,13 @@ def _fetch(url):
 
 
 def fingerprint_of(code):
-    """同 make_fingerprint.py 一樣嘅算法。"""
+    """同 make_fingerprint.py 一樣嘅算法。
+
+    hashlib 喺函式入面先 import：module level 一旦 import 失敗，成個 launcher
+    就死喺 show_widget() 之前（綠色）。真機從來未量度過 hashlib 係咪可用。
+    """
+    import hashlib
+
     return hashlib.sha256(code.encode("utf-8")).hexdigest()[:FINGERPRINT_LENGTH]
 
 
@@ -456,7 +504,9 @@ def _try_update():
     if not _should_check():
         return False
 
+    _crumb("4a 問 GitHub 指紋")
     remote_fp = _fetch(FINGERPRINT)
+    _crumb(f"4b 指紋回應 {'失敗' if remote_fp is None else remote_fp.strip()}")
     if remote_fp is None:
         return False
 
@@ -476,7 +526,9 @@ def _try_update():
         return False
 
     _log(f"發現新版 {remote_fp}，落載中")
+    _crumb("4c 落載 i_widget.py")
     code = _fetch(WIDGET_PY)
+    _crumb(f"4d 落載完 {'失敗' if not code else str(len(code)) + ' bytes'}")
     if not code or len(code) < 200:
         _log("程式碼下載失敗或太短，維持舊快取")
         touch_checked(time.time())
@@ -499,21 +551,28 @@ def _try_update():
         touch_checked(time.time())
         return False
 
+    _crumb("4e 寫入快取")
     save(code, remote_fp, time.time())
+    _crumb("4f 寫入完")
     _log("已更新到本地快取")
     return True
 
 
 def _load_code():
     """決定今次行邊份程式碼。永遠唔會回傳 None 除非真係咩都冇。"""
+    _crumb("4 開始 _try_update")
     try:
         _try_update()
     except Exception as error:
         _log(f"更新過程出錯，繼續用快取：{error}")
+        _crumb(f"4x _try_update 爆 {type(error).__name__}: {error}")
+    _crumb("5 _try_update 完，讀快取")
 
     code = load_code()
     if code:
+        _crumb(f"6 用快取 {len(code)} bytes")
         return code, "cache"
+    _crumb("6 冇可用快取，直接下載")
 
     # 連快取都冇（例如第一次執行）→ 直接拉一次，順手寫入快取。
     code = _fetch(WIDGET_PY)
@@ -590,6 +649,7 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
             _try(lambda: layout.add_vertical_spacer(), None)
 
         _try(lambda: wd.schedule_next_reload(timedelta(minutes=30)), None)
+        _crumb(f"9 離線畫面 show_widget：{reason}")
         wd.show_widget(widget)
         _log(f"已顯示離線 widget：{reason}")
     except Exception as error:
@@ -648,13 +708,16 @@ def main():
         return
 
     _log(f"執行中（來源：{origin}）")
+    _crumb(f"7 即將 exec（來源 {origin}）")
     # ⚠️ `__file__` 喺 Pyto Run Script 可能冇定義。
     #    直接喺呢度寫 `__file__` 會喺 exec 前就 NameError。
     #    用 globals().get() 兜底；widget 本身唔會靠 __file__ 運作。
     _widget_globals = {"__name__": "__main__", "__file__": CACHED_PY}
     try:
         exec(compiled, _widget_globals)
+        _crumb("8 exec 完，無例外")
     except BaseException as error:
+        _crumb(f"8x exec 爆 {type(error).__name__}: {error}")
         # BaseException：連 SystemExit / KeyboardInterrupt 都捉埋，
         # 因為呢度寧願畫錯都唔好畫唔到。
         # 以前 widget 程式一爆錯，home screen 就一片空白，完全睇唔到原因。
