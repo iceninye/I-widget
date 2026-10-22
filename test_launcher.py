@@ -1,13 +1,8 @@
 """測試 i_widget_launcher.py 的更新邏輯。
 
-用本地 HTTP server 模擬 GitHub raw，跑齊四種情境：
-  A. 有新版 → 下載、寫快取、執行新版
-  B. 冇新版（指紋相同）→ 跳過網絡、用快取
-  C. 新版語法錯 → 拒絕、繼續行舊快取（唔會炸 widget）
-  D. 網絡死 / 404 → 用快取
-  E. 全新安裝（冇快取）+ 網絡死 → 顯示離線 widget
+用本地 HTTP server 模擬 GitHub raw，跑齊 A–P 情境（每個情境見下面標題）。
 
-widgets 用 mock（照抄 Pyto 真實 API 簽名）。
+widgets／userkeys 用 mock_pyto.py（照抄 Pyto 真實 API 簽名）。
 """
 import http.server
 import os
@@ -16,108 +11,13 @@ import socketserver
 import sys
 import tempfile
 import threading
-import types
+import hashlib
 from datetime import datetime, timedelta
 
-# ---------------------------------------------------------------- mock widgets
-class __PyColor__:
-    @staticmethod
-    def colorWithRed(r, green=0, blue=0, alpha=1): return ("rgb", r, green, blue, alpha)
-    @staticmethod
-    def colorWithLight(light, dark=None): return ("dyn", light, dark)
-
-def check(_object, name, types_):
-    for _type in types_:
-        if isinstance(_object, _type): return
-    raise TypeError("Invalid value type")
-
-class Color:
-    def __init__(self, c): self.__py_color__ = c
-    @classmethod
-    def rgb(cls, red, green, blue, alpha=1):
-        for v in (red, green, blue):
-            assert isinstance(v, float) and 0 <= v <= 1, f"rgb 要 0-1 float，收到 {v!r}"
-        return cls(__PyColor__.colorWithRed(red, green, green, blue, alpha))
-    @classmethod
-    def dynamic(cls, light, dark):   # Pyto 19.0 有 bug 的寫法
-        check(light, "light", Color)
-        return cls(__PyColor__.colorWithLight(light.__py_color__, dark=dark.__py_color__))
-    def __repr__(self): return f"Color({self.__py_color__[0]})"
-
-DATE_STYLE_DATE, DATE_STYLE_OFFSET, DATE_STYLE_RELATIVE, DATE_STYLE_TIME, DATE_STYLE_TIMER = 0,1,2,3,4
-
-class Font:
-    def __init__(self, name, size): self.name, self.size = name, size
-    @classmethod
-    def system_font_of_size(cls, size): return cls("sys", size)
-    @classmethod
-    def bold_system_font_of_size(cls, size): return cls("bold", size)
-
-class Padding:
-    def __init__(self, top=0, bottom=0, left=0, right=0): pass
-
-class Component:
-    def __init__(self, *pos, **kw): self.__args, self.__kw = pos, kw
-    def __repr__(self): return type(self).__name__
-
-class Text(Component): pass
-class DynamicDate(Component): pass
-class SystemSymbol(Component): pass
-class Spacer: pass
-
-class WidgetLayout:
-    def __init__(self): self.rows = []
-    def add_row(self, row): self.rows.append(row)
-    def add_vertical_spacer(self): self.rows.append("<v>")
-    def add_vertical_divider(self): self.rows.append("|")
-
-class Widget:
-    def __init__(self):
-        self.small_layout = WidgetLayout(); self.medium_layout = WidgetLayout()
-        self.large_layout = WidgetLayout(); self.extra_large_layout = WidgetLayout()
-
-SHOWN = []
-RELOADS = []
-def show_widget(w): SHOWN.append(w)
-def schedule_next_reload(t): RELOADS.append(t)
-
-wd = types.ModuleType("widgets")
-for k, v in list(globals().items()):
-    if k in ("Color","Font","Padding","Text","DynamicDate","SystemSymbol","Spacer","Widget",
-             "WidgetLayout","DATE_STYLE_DATE","DATE_STYLE_OFFSET","DATE_STYLE_RELATIVE",
-             "DATE_STYLE_TIME","DATE_STYLE_TIMER","show_widget","schedule_next_reload"):
-        setattr(wd, k, v)
-for n in ["SECONDARY_LABEL","SYSTEM_GREEN","SYSTEM_ORANGE","SYSTEM_RED","LABEL"]:
-    setattr(wd, f"COLOR_{n}", Color(f"const:{n}"))
-sys.modules["widgets"] = wd
-
-
-# ---------------------------------------------------------------- mock userkeys
-# 官方 userkeys = NSUserDefaults suite "group.pyto"，extension 同主 app 共用。
-# 呢個 mock 用一個全域 dict 模擬「跨執行持久」。
-UK_STORE = {}
-UK_BROKEN = False
-
-def _uk_get(key):
-    if UK_BROKEN:
-        raise RuntimeError("NSUserDefaults unavailable")
-    if key not in UK_STORE:
-        raise KeyError(key)          # 官方 get() 對冇呢個 key 會 raise KeyError
-    return UK_STORE[key]
-
-def _uk_set(value, key):
-    if UK_BROKEN:
-        raise RuntimeError("NSUserDefaults unavailable")
-    UK_STORE[key] = value
-
-def _uk_delete(key):
-    if key not in UK_STORE:
-        raise KeyError(key)
-    del UK_STORE[key]
-
-uk = types.ModuleType("userkeys")
-uk.get, uk.set, uk.delete = _uk_get, _uk_set, _uk_delete
-sys.modules["userkeys"] = uk
+# ---------------------------------------------------------------- mock Pyto
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from mock_pyto import RELOADS, SHOWN, UK_STATE, UK_STORE, text_of as _text_of  # noqa: E402
 
 # ---------------------------------------------------------------- fake GitHub
 SERVE = {}          # {"fp": "v1", "py": "<code>"}
@@ -166,7 +66,7 @@ _serve(httpd)
 BASE = f"http://127.0.0.1:{PORT}"
 
 # ---------------------------------------------------------------- 被測程式
-LAUNCHER = "/home/wsluser/I-widget/i_widget_launcher.py"
+LAUNCHER = os.path.join(HERE, "i_widget_launcher.py")
 launcher_src = open(LAUNCHER).read()
 GOOD_V1 = '''import widgets as wd
 VERSION = "v1"
@@ -185,11 +85,12 @@ BROKEN = (
 )
 
 
-def _text_of(component):
-    """Text 的文字可能在位置參數或 kwargs，兩邊都試。"""
-    args = getattr(component, "_Component__args", ())
-    kw = getattr(component, "_Component__kw", {})
-    return args[0] if args else kw.get("text")
+def fp_of(code):
+    """同 make_fingerprint.py 一樣：SHA256 前 16 字元，再加 GitHub 上面嗰個換行。"""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:16] + "\n"
+
+
+FP_V1, FP_V2, FP_BROKEN = fp_of(GOOD_V1), fp_of(GOOD_V2), fp_of(BROKEN)
 
 def run_launcher(workdir, reset_userkeys=True, base=None):
     """喺指定目錄跑 launcher，回傳 (顯示咗咩, 執行咗咩版本)。"""
@@ -228,7 +129,7 @@ def check(name, cond, detail=""):
 
 # ================================================================ 情境 A
 print("\n【A】全新安裝 + 遠端有 v1")
-SERVE.update(fp="v1", py=GOOD_V1); HITS.clear()
+SERVE.update(fp=FP_V1, py=GOOD_V1); HITS.clear()
 d = fresh()
 UK_STORE.clear()
 w, ver, err = run_launcher(d)
@@ -246,19 +147,19 @@ check("B2 完全冇打網絡", len(HITS) == 0, f"HITS={HITS}")
 
 # ================================================================ 情境 C
 print("\n【C】推咗個壞版本去 main → 必須拒絕，繼續行 v1")
-SERVE.update(fp="v2-broken", py=BROKEN); HITS.clear()
+SERVE.update(fp=FP_BROKEN, py=BROKEN); HITS.clear()
 # 過咗節流窗口，迫佢再查
 UK_STORE["i_widget.last_checked"] = 1.0  # 極舊 → 過咗節流窗口
 w, ver, err = run_launcher(d)
 check("C1 拒絕壞版本，仍行 v1", ver == "version v1", f"ver={ver} err={err}")
 check("C2 快取冇被污染", "v1" in open(os.path.join(d, "i_widget.cached.py")).read())
 check("C3 指紋冇被更新（下次會再試）",
-      UK_STORE.get("i_widget.cached_fingerprint") == "v1"
-      and open(os.path.join(d, "i_widget.cached.fingerprint")).read().strip() == "v1")
+      UK_STORE.get("i_widget.cached_fingerprint") == FP_V1.strip()
+      and open(os.path.join(d, "i_widget.cached.fingerprint")).read().strip() == FP_V1.strip())
 
 # ================================================================ 情境 D
 print("\n【D】好更新：v2")
-SERVE.update(fp="v2", py=GOOD_V2); HITS.clear()
+SERVE.update(fp=FP_V2, py=GOOD_V2); HITS.clear()
 UK_STORE["i_widget.last_checked"] = 1.0  # 極舊 → 過咗節流窗口
 w, ver, err = run_launcher(d)
 check("D1 執行咗 v2", ver == "version v2", f"ver={ver} err={err}")
@@ -316,13 +217,13 @@ BASE2 = f"http://127.0.0.1:{PORT2}"
 print("\n【H】userkeys 持久化：extension 每次 reload 係全新 sandbox")
 # 關鍵：每次 reload Pyto 會複製 script 去新路徑，所以工作目錄唔同、
 # 檔案快取會唔見。userkeys（NSUserDefaults suite）先可以跨 reload 保住。
-SERVE.update(fp="v1", py=GOOD_V1); HITS.clear()
+SERVE.update(fp=FP_V1, py=GOOD_V1); HITS.clear()
 UK_STORE.clear()
 d_first = fresh()
 w, ver, err = run_launcher(d_first, base=BASE2)
 check("H1 第一次執行 v1", ver == "version v1", f"ver={ver}")
 check("H2 userkeys 有存程式碼", bool(UK_STORE.get("i_widget.cached_code")))
-check("H3 userkeys 有存指紋", UK_STORE.get("i_widget.cached_fingerprint") == "v1")
+check("H3 userkeys 有存指紋", UK_STORE.get("i_widget.cached_fingerprint") == FP_V1.strip())
 
 # 模擬下一次 reload：全新目錄（檔案快取冇），但 userkeys 應該仲喺度
 HITS.clear()
@@ -334,10 +235,10 @@ check("H6 完全冇打網絡", len(HITS) == 0, f"HITS={HITS}")
 
 # ================================================================ 情境 I
 print("\n【I】userkeys 壞咗 → 自動 fallback 檔案")
-SERVE.update(fp="v1", py=GOOD_V1)   # G 情境 set 咗 None，要重新擺返內容
+SERVE.update(fp=FP_V1, py=GOOD_V1)   # G 情境 set 咗 None，要重新擺返內容
 HITS.clear()
 UK_STORE.clear()
-UK_BROKEN = True
+UK_STATE["broken"] = True
 try:
     d3b = fresh()
     w, ver, err = run_launcher(d3b, base=BASE2)
@@ -351,7 +252,7 @@ try:
     check("I3 靠檔案 mtime 節流，零網絡", len(HITS) == 0, f"HITS={HITS}")
     check("I4 仍然係 v1", ver == "version v1", f"ver={ver}")
 finally:
-    UK_BROKEN = False
+    UK_STATE["broken"] = False
 
 
 # ================================================================ 情境 J
@@ -360,7 +261,7 @@ import re as _re
 
 # J1/J2: i_widget.py 嘅 reload 間隔要喺 WidgetKit 每日預算內
 # Apple: 40–70 reloads per 24h。15 分鐘 = 96 次 = 超標。
-widget_src = open("/home/wsluser/I-widget/i_widget.py").read()
+widget_src = open(os.path.join(HERE, "i_widget.py")).read()
 m = _re.search(r"RELOAD_INTERVAL\s*=\s*timedelta\(minutes=(\d+)\)", widget_src)
 minutes = int(m.group(1)) if m else 0
 per_day = int(24 * 60 / minutes) if minutes else 999
@@ -382,6 +283,102 @@ check("J5 save() 寫入之後有 yield", "_yield_after_write()" in save_body)
 
 # J6: 離線 widget 都用同一個間隔，唔會離線時問得更密
 check("J6 離線 widget 用 30 分鐘", "timedelta(minutes=30)" in launcher_src)
+
+
+# ================================================================ 情境 K
+print("\n【K】userkeys 壞咗 + 指紋冇變 → 唔應該重新落載程式碼（換行 bug 回歸測試）")
+# GitHub 上面嘅指紋檔有結尾換行，檔案快取讀返嚟係 strip 咗嘅。
+# 以前兩邊直接比較 → 永遠唔相等 → 每次都重新落載完整程式碼。
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+UK_STORE.clear()
+UK_STATE["broken"] = True
+try:
+    dk = fresh()
+    run_launcher(dk, base=BASE2)
+    open(os.path.join(dk, "i_widget.last_checked"), "w").write("1.0")  # 過咗節流窗口
+    HITS.clear()
+    w, ver, err = run_launcher(dk, base=BASE2)
+    check("K1 仍然係 v1", ver == "version v1", f"ver={ver} err={err}")
+    check("K2 淨係問咗指紋，冇重新落載", HITS == ["/i_widget.fingerprint"], f"HITS={HITS}")
+finally:
+    UK_STATE["broken"] = False
+
+# ================================================================ 情境 L
+print("\n【L】指紋同程式碼對唔上（CDN 快取未同步／下載唔完整）→ 拒絕")
+dl = fresh()
+UK_STORE.clear()
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+run_launcher(dl, base=BASE2)
+SERVE.update(fp=FP_V2, py=GOOD_V1.replace("v1", "vX"))   # 新指紋，但內容唔係嗰個版本
+UK_STORE["i_widget.last_checked"] = 1.0
+w, ver, err = run_launcher(dl, base=BASE2)
+check("L1 拒絕對唔上嘅程式碼，仍行 v1", ver == "version v1", f"ver={ver} err={err}")
+check("L2 指紋冇更新（下次再試）", UK_STORE.get("i_widget.cached_fingerprint") == FP_V1.strip())
+check("L3 冇蓋節流時間（下次 reload 即刻再試）", UK_STORE.get("i_widget.last_checked") == 1.0,
+      f"{UK_STORE.get('i_widget.last_checked')}")
+SERVE.update(fp=FP_V2, py=GOOD_V2)                        # CDN 追返上
+w, ver, err = run_launcher(dl, base=BASE2)
+check("L4 CDN 同步後自動攞到 v2", ver == "version v2", f"ver={ver}")
+
+# ================================================================ 情境 M
+print("\n【M】超大回應 → 唔讀入記憶體")
+dm = fresh()
+UK_STORE.clear()
+huge = "# " + "x" * (600 * 1024) + "\n" + GOOD_V1
+SERVE.update(fp=fp_of(huge), py=huge)
+w, ver, err = run_launcher(dm, base=BASE2)
+check("M1 冇執行超大檔案", ver != "version v1", f"ver={ver}")
+check("M2 冇 crash，出咗離線 widget", w is not None and err is None, f"err={err}")
+
+# ================================================================ 情境 N
+print("\n【N】節流窗口有容差：reload 準時 30 分鐘都要檢查")
+dn = fresh()
+UK_STORE.clear()
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+run_launcher(dn, base=BASE2)
+import time as _time
+UK_STORE["i_widget.last_checked"] = _time.time() - 30 * 60 + 5   # 差 5 秒先夠 30 分鐘
+HITS.clear()
+run_launcher(dn, base=BASE2)
+check("N1 iOS 早少少 reload 都照樣檢查", "/i_widget.fingerprint" in HITS, f"HITS={HITS}")
+UK_STORE["i_widget.last_checked"] = _time.time() - 5 * 60
+HITS.clear()
+run_launcher(dn, base=BASE2)
+check("N2 5 分鐘前查過 → 唔打網絡", HITS == [], f"HITS={HITS}")
+
+# ================================================================ 情境 O
+print("\n【O】首次安裝、指紋檔攞唔到但程式碼攞到 → 存真指紋，唔係 'unverified'")
+do = fresh()
+UK_STORE.clear()
+SERVE.update(fp=None, py=GOOD_V1)
+w, ver, err = run_launcher(do, base=BASE2)
+check("O1 執行咗 v1", ver == "version v1", f"ver={ver} err={err}")
+check("O2 存咗程式碼本身嘅指紋", UK_STORE.get("i_widget.cached_fingerprint") == FP_V1.strip(),
+      f"{UK_STORE.get('i_widget.cached_fingerprint')}")
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+UK_STORE["i_widget.last_checked"] = 1.0
+HITS.clear()
+run_launcher(do, base=BASE2)
+check("O3 之後指紋一樣 → 唔重新落載", HITS == ["/i_widget.fingerprint"], f"HITS={HITS}")
+
+# ================================================================ 情境 P
+print("\n【P】端到端：真嘅 i_widget.py + make_fingerprint.py 產生嘅指紋")
+import pathlib  # noqa: E402
+
+import make_fingerprint  # noqa: E402
+
+real_py = open(os.path.join(HERE, "i_widget.py"), encoding="utf-8").read()
+# 用 make_fingerprint.py 本身嘅函數，唔讀 i_widget.fingerprint 檔：
+# push 去 main 之後、Action 補指紋之前，個檔係會過時一陣嘅。
+real_fp = make_fingerprint.fingerprint(pathlib.Path(HERE) / "i_widget.py") + "\n"
+SERVE.update(fp=real_fp, py=real_py)
+dp = fresh()
+UK_STORE.clear()
+w, ver, err = run_launcher(dp, base=BASE2)
+check("P1 指紋同內容對得上（兩邊算法一致）", real_fp.strip() == fp_of(real_py).strip(),
+      f"{real_fp.strip()} != {fp_of(real_py).strip()}")
+check("P2 落載並執行真 widget", w is not None and err is None, f"err={err}")
+check("P3 已寫入快取", UK_STORE.get("i_widget.cached_code") == real_py)
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")

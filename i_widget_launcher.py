@@ -10,13 +10,17 @@
 * **最新嘅程式碼可能有 bug**。所以先下載、再做語法檢查（compile），
   通過才覆寫快取並執行；語法錯就繼續行舊快取。呢個令「推壞咗去 main」
   唔會即刻炸你個 home screen。
+* **下載嘅內容要同指紋對得上**。GitHub raw 有 CDN 快取，指紋同程式碼
+  可能唔同步；下載亦可能唔完整。SHA256 對唔上就唔用，下次再試。
 * **時間預算**：WidgetKit 每次 reload 給嘅時間有限，所以所有網絡請求
   都設短 timeout，抓唔到就當冇更新。
 
 用法：呢個檔案就係 widget 指向嘅 script（取代直接指向 i_widget.py）。
 """
 
+import hashlib
 import os
+import re
 import time
 from datetime import timedelta
 
@@ -29,13 +33,26 @@ FINGERPRINT = SOURCE + "/i_widget.fingerprint"
 WIDGET_PY = SOURCE + "/i_widget.py"
 
 # Extension 記憶體緊，timeout 要短。抓唔到就當今次冇更新。
-TIMEOUT = 8
+# 最差情況要連續拉兩個檔（指紋 + 程式碼），所以每個唔可以太長。
+TIMEOUT = 5
+
+# 下載上限。i_widget.py 正常只有十幾 KB，超過呢個數就當異常，
+# 唔好俾一個異常回應食晒 extension 嘅記憶體。
+MAX_DOWNLOAD_BYTES = 256 * 1024
+
+# 指紋格式（make_fingerprint.py：SHA256 前 16 個 hex 字元）。
+FINGERPRINT_LENGTH = 16
+FINGERPRINT_PATTERN = re.compile(r"[0-9a-f]{%d}" % FINGERPRINT_LENGTH)
 
 # 最低檢查間隔。防低電／多次 reload 撞埋一齊打 GitHub。
 #
 # 配合 widget 本身 30 分鐘一次嘅 reload，呢個窗口唔應該細過 reload 間隔 ——
 # 否則每個新 sandbox 都會問一次 GitHub，等於完全冇節流作用。
 CHECK_INTERVAL = 30 * 60
+
+# iOS 嘅 reload 時間唔準，可能早幾秒；而檢查時間係喺網絡請求之後先記錄。
+# 冇容差的話「準時 30 分鐘」嘅 reload 會差少少唔夠鐘，變成一個鐘先查一次。
+CHECK_GRACE = 60
 
 # 快取 key（存喺 Pyto 官方 userkeys = NSUserDefaults suite "group.pyto"，
 # extension 同主 app 共用，唔會被 iOS 清理）。
@@ -95,7 +112,7 @@ def load_code():
 def load_fingerprint():
     value = _keys_get(KEY_FINGERPRINT)
     if value:
-        return value
+        return str(value).strip()
     return _read(CACHED_FP)
 
 
@@ -126,6 +143,14 @@ def save(code, fingerprint, checked):
             if len(code.encode("utf-8")) <= MAX_USERKEYS_BYTES:
                 keys.set(code, KEY_CODE)
                 keys.set(fingerprint, KEY_FINGERPRINT)
+            else:
+                # 太大放唔落 userkeys：清走舊版本，否則 load_code() 會
+                # 讀返 userkeys 入面嘅舊程式碼，同檔案嘅新指紋夾硬配對。
+                for key in (KEY_CODE, KEY_FINGERPRINT):
+                    try:
+                        keys.delete(key)
+                    except KeyError:
+                        pass
             keys.set(checked, KEY_CHECKED)
             stored = True
         except Exception as error:
@@ -216,15 +241,26 @@ def _write(path, text):
 
 
 def _fetch(url):
-    """下載一段文字。失敗回傳 None（唔會 raise）。"""
+    """下載一段文字。失敗或超過 MAX_DOWNLOAD_BYTES 回傳 None（唔會 raise）。"""
     try:
-        from urllib.request import urlopen
+        from urllib.request import Request, urlopen
 
-        with urlopen(url, timeout=TIMEOUT) as response:
-            return response.read().decode("utf-8")
+        # no-cache：叫 CDN 盡量俾最新版，減少指紋同程式碼唔同步。
+        request = Request(url, headers={"Cache-Control": "no-cache"})
+        with urlopen(request, timeout=TIMEOUT) as response:
+            data = response.read(MAX_DOWNLOAD_BYTES + 1)
+        if len(data) > MAX_DOWNLOAD_BYTES:
+            _log(f"{url} 超過 {MAX_DOWNLOAD_BYTES} bytes，唔用")
+            return None
+        return data.decode("utf-8")
     except Exception as error:
         _log(f"取唔到 {url}：{error}")
         return None
+
+
+def fingerprint_of(code):
+    """同 make_fingerprint.py 一樣嘅算法。"""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:FINGERPRINT_LENGTH]
 
 
 def _should_check():
@@ -232,7 +268,7 @@ def _should_check():
     checked = load_checked()
     if not checked:
         return True  # 冇記錄 = 即刻查一次
-    return (time.time() - checked) > CHECK_INTERVAL
+    return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
 
 
 # --- 更新邏輯 -----------------------------------------------------------
@@ -246,7 +282,14 @@ def _try_update():
     if remote_fp is None:
         return False
 
-    if remote_fp == load_fingerprint():
+    # GitHub 上面嘅指紋檔有結尾換行；唔 strip 就永遠同快取對唔上。
+    remote_fp = remote_fp.strip()
+    if not FINGERPRINT_PATTERN.fullmatch(remote_fp):
+        _log("指紋格式唔啱，當今次冇更新")
+        touch_checked(time.time())
+        return False
+
+    if remote_fp == load_fingerprint() and load_code():
         _log("已經係最新版")
         touch_checked(time.time())  # 問過咗，唔使十秒後再問
         return False
@@ -256,6 +299,13 @@ def _try_update():
     if not code or len(code) < 200:
         _log("程式碼下載失敗或太短，維持舊快取")
         touch_checked(time.time())
+        return False
+
+    # 完整性檢查：內容一定要同指紋對得上。
+    # 對唔上通常係 CDN 未同步（指紋新、程式碼舊）或者下載唔完整，
+    # 所以唔記錄檢查時間 → 下次 reload 即刻再試。
+    if fingerprint_of(code) != remote_fp:
+        _log("程式碼同指紋對唔上（CDN 未同步？），維持舊快取")
         return False
 
     # 語法檢查：壞咗的 commit 唔好污染快取。
@@ -291,7 +341,8 @@ def _load_code():
             compile(code, WIDGET_PY, "exec")
         except SyntaxError:
             return None, None
-        save(code, "unverified", time.time())
+        # 存程式碼本身嘅指紋，下次遠端指紋一樣就唔使再落載。
+        save(code, fingerprint_of(code), time.time())
         return code, "remote"
 
     return None, None
