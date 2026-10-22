@@ -37,6 +37,7 @@ iPhone Home Screen 嘅「時間／系統狀態」widget，用 **Pyto**（iOS 上
 
 ## 已知限制
 
+- **`wd.Color.dynamic()` 需要繞過 Pyto 嘅 bug**。Pyto 19.0（`widgets.py`）入面 `Color.dynamic()` 會叫 `check(light, "light", Color)`，但 `check()` 係 `for _type in types:` —— 傳入一個 type 而唔係 tuple，所以一定爆 `TypeError: 'type' object is not iterable`。呢個係官方 bug，唔係用法錯。程式頂部嘅 `_patch_color_dynamic()` 會先試一次，正常就唔理；爆 `TypeError` 就換用 `colorWithLight()` 直接砌返同樣效果。日後 Pyto 官方修咗，呢個 patch 會自動讓路唔會阻手。
 - **電量有可能顯示 `—`**。widget 擴展（extension）嘅記憶體同權限都收得好緊，`UIDevice` 喺擴展入面經常讀唔到電量；程式已經自動退回用 IOKit 讀，若兩者都失敗就會顯示 `—`。想穩定讀到電量，可以開 Pyto 嘅 **「Start Handling Widgets In App」** 捷徑（Pyto 14+），令 widget script 改由 Pyto 主 app 執行，RAM 限制同權限都鬆好多；建議喺「捷徑」加自動化，每日行一次確保 Pyto 喺背景。
 - **開機時間** 來自 `NSProcessInfo.systemUptime`，包含睡眠時間。
 - **儲存空間** 用 `os.statvfs("/")`，數字同「設定 → 一般 → iPhone 儲存空間」未必完全一致。

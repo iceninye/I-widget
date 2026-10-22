@@ -10,6 +10,33 @@ from datetime import datetime, timedelta
 
 import widgets as wd
 
+
+def _patch_color_dynamic():
+    """繞過 Pyto 19.0 嘅一個 bug。
+
+    ``Color.dynamic()`` 內部叫 ``check(light, "light", Color)``，但 ``check()``
+    會做 ``for _type in types:`` —— 傳入一個 type（而非 tuple）就一定爆
+    ``TypeError: 'type' object is not iterable``。
+
+    呢個修好只係換返正確嘅 ``(Color,)``，行為同原意一樣。
+    如果將來 Pyto 官方修咗呢個 bug，呢個 patch 會自動讓路。
+    """
+    try:
+        wd.Color.dynamic(light=wd.Color.rgb(0.0, 0.0, 0.0), dark=wd.Color.rgb(1.0, 1.0, 1.0))
+        return  # 冇 bug，唔使 patch
+    except TypeError:
+        pass
+
+    from widgets import Color, __PyColor__
+
+    def _dynamic(light, dark):
+        return Color(__PyColor__.colorWithLight(light.__py_color__, dark=dark.__py_color__))
+
+    Color.dynamic = staticmethod(_dynamic)
+
+
+_patch_color_dynamic()
+
 # 時間由系統自動跳動（DynamicDate），其餘系統資訊每次 reload 重新讀取。
 RELOAD_INTERVAL = timedelta(minutes=15)
 
