@@ -56,7 +56,7 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.2.1"
+LAUNCHER_VERSION = "1.3.0"
 REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
 
 

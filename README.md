@@ -33,6 +33,18 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 設計理由同驗證見 [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md)。
 
+## 疑難雜症
+
+**Home screen 只有綠色 default template，一個字都冇？**
+
+綠色 = `wd.show_widget()` 從來冇被叫過 = 腳本中途死。
+呢個問題嘅完整診斷過程（三層 module-level 失敗）、走過嘅弯路、
+同設計原則見 [docs/DEBUGGING.md](docs/DEBUGGING.md)。
+
+快速二分法：`i_widget_safe.py` 係保證出到畫面嘅最小版本。
+如果佢正常但 `i_widget.py` 綠色，就係 `i_widget.py` 用緊某個失效嘅 iOS API。
+`diagnose.py` 可以列出真機實際有咩 `COLOR_*` 同 API。
+
 ## 安裝
 
 **用自動更新（建議）**

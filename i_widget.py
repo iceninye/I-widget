@@ -3,11 +3,11 @@
 用 Pyto 內置嘅 widgets API 寫成，唔需要 Mac 或 Xcode。
 安裝步驟見 README.md。
 
-版本 1.2.0 · commit 11d6688
+版本 1.3.0
 """
 
-VERSION = "1.2.0"
-COMMIT = "11d6688"
+VERSION = "1.3.0"
+COMMIT = "32d4cdc"
 
 import os
 import re
@@ -26,19 +26,46 @@ def _patch_color_dynamic():
 
     呢個修好只係換返正確嘅 ``(Color,)``，行為同原意一樣。
     如果將來 Pyto 官方修咗呢個 bug，呢個 patch 會自動讓路。
+
+    ⚠️ 呢個函式喺 **module level** 執行。任何未捕捉嘅例外都會令成個
+    widget import 失敗 → ``show_widget()`` 永遠唔會被叫 → iOS 顯示
+    綠色 default template。所以呢度每一層都要自己企穩。
     """
+    # 安全色：萬一連 dynamic 都搞唔掂，呢兩個係最後底線。
     try:
-        wd.Color.dynamic(light=wd.Color.rgb(0.0, 0.0, 0.0), dark=wd.Color.rgb(1.0, 1.0, 1.0))
+        _white = wd.Color.rgb(1.0, 1.0, 1.0)
+        _black = wd.Color.rgb(0.0, 0.0, 0.0)
+    except BaseException:
+        return
+
+    try:
+        wd.Color.dynamic(light=_white, dark=_black)
         return  # 冇 bug，唔使 patch
-    except TypeError:
+    except BaseException:
+        # 原本淨係捉 TypeError。但 `Color.dynamic` 缺失、權限問題、
+        # 或者任何其他內部錯誤都會穿出去炸成個 module。
+        # 呢度擴闊到 BaseException：patch 失敗唔應該令 widget 死。
         pass
 
-    from widgets import Color, __PyColor__
+    try:
+        from widgets import Color, __PyColor__
 
-    def _dynamic(light, dark):
-        return Color(__PyColor__.colorWithLight(light.__py_color__, dark=dark.__py_color__))
+        def _dynamic(light, dark):
+            return Color(__PyColor__.colorWithLight(light.__py_color__, dark=dark.__py_color__))
 
-    Color.dynamic = staticmethod(_dynamic)
+        Color.dynamic = staticmethod(_dynamic)
+    except BaseException:
+        # `__PyColor__` 唔存在就由得佢。之後 BACKGROUND / PRIMARY 嘅
+        # `Color.dynamic(...)` 會再 throw，但嗰陣已經喺 _dyn() 保護之下。
+        pass
+
+
+def _dyn(light, dark):
+    """``Color.dynamic`` 嘅安全版：搞唔掂就退返深色色。
+
+    真機實測背景：呢個 wrapper 係「綠色 default」嘅頭號防線。
+    """
+    return _safe(lambda: wd.Color.dynamic(light=light, dark=dark), dark)
 
 
 _patch_color_dynamic()
@@ -56,6 +83,18 @@ _patch_color_dynamic()
 RELOAD_INTERVAL = timedelta(minutes=30)
 
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+
+
+def _safe(fn, fallback=None):
+    """行 ``fn()``；任何例外都唔會向上傳，回傳 ``fallback``。
+
+    成個 widget 都係「寧願少一樣，都唔好畫唔到」嘅設計：
+    每個資料源、每個 widget family 都獨立包住。
+    """
+    try:
+        return fn()
+    except BaseException:
+        return fallback
 
 
 def _system_color(name, fallback):
@@ -76,16 +115,16 @@ def _rgb(r, g, b):
 
 # 配色跟 iOS 27 系統 widget：標準白／深灰底，文字同強調色用系統語意色，
 # 咁喺 Liquid Glass 嘅 tinted／clear 模式下，系統先可以正確重新上色。
-BACKGROUND = wd.Color.dynamic(
-    light=wd.Color.rgb(1.0, 1.0, 1.0),
-    dark=wd.Color.rgb(0.11, 0.11, 0.118),
+BACKGROUND = _dyn(
+    wd.Color.rgb(1.0, 1.0, 1.0),
+    wd.Color.rgb(0.11, 0.11, 0.118),
 )
 # 主文字色刻意唔用 COLOR_LABEL：extension 入面系統語意色係按 Pyto 主 app 嘅
 # 外觀解析，同 widget 自己嘅淺／深色可能唔同步，會出現白底白字。
 # 自訂 dynamic 色同背景一齊解析，一定對得上。
-PRIMARY = wd.Color.dynamic(
-    light=wd.Color.rgb(0.0, 0.0, 0.0),
-    dark=wd.Color.rgb(1.0, 1.0, 1.0),
+PRIMARY = _dyn(
+    wd.Color.rgb(0.0, 0.0, 0.0),
+    wd.Color.rgb(1.0, 1.0, 1.0),
 )
 SECONDARY = _system_color("SECONDARY_LABEL", PRIMARY)
 TERTIARY = _system_color("TERTIARY_LABEL", SECONDARY)
@@ -467,18 +506,65 @@ def build_large(layout, now, level, charging, free, total, system):
 
 def main():
     now = datetime.now()
-    level, charging = read_battery()
-    free, total = read_storage()
-    system = read_system()
 
-    widget = wd.Widget()
-    build_small(widget.small_layout, now, level, charging)
-    build_medium(widget.medium_layout, now, level, charging, free, total, system)
-    build_large(widget.large_layout, now, level, charging, free, total, system)
-    build_large(widget.extra_large_layout, now, level, charging, free, total, system)
+    # 每個資料源都獨立保護。
+    # 背景：真機 home screen 長期顯示綠色 default template，即係
+    # wd.show_widget() 從來冇被叫過 —— main() 中途死咗。
+    # 呢啲讀取全部依賴 iOS 專有 API（_objc_class / os.statvfs），
+    # 任何一個喺某個 Pyto 版本或某次 reload 失敗就會令整個 widget 死。
+    # 寧願少一項資料，都唔好成個唔見。
+    level, charging = _safe(lambda: read_battery(), (None, False))
+    free, total = _safe(lambda: read_storage(), (None, None))
+    system = _safe(read_system, {})
 
-    wd.schedule_next_reload(RELOAD_INTERVAL)
+    widget = _safe(wd.Widget)
+    if widget is None:
+        return
+
+    # 每個 family 獨立保護：small 壞唔影響 large。
+    for name, builder in (
+        ("small_layout", lambda L: build_small(L, now, level, charging)),
+        ("medium_layout", lambda L: build_medium(L, now, level, charging, free, total, system)),
+        ("large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
+        ("extra_large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
+    ):
+        layout = _safe(lambda n=name: getattr(widget, n))
+        if layout is None:
+            continue
+        try:
+            builder(layout)
+        except BaseException as error:
+            # 呢個 family 壞咗就補最基本內容，好過由 iOS 顯示綠色 template。
+            _minimal_layout(layout, f"{name} 出錯", error, now)
+
+    _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
     wd.show_widget(widget)
 
 
-main()
+def _minimal_layout(layout, title, error, now):
+    """最後防線：出錯嘅 family 都至少要有時間，唔可以空。"""
+    for call, args in (
+        (layout.add_row, [_safe(lambda: clock(now, 42))]),
+        (layout.add_row, [_safe(lambda: date_label(now))]),
+    ):
+        _safe(lambda c=call, a=args: c([x for x in a if x is not None]))
+
+    _safe(layout.add_vertical_spacer)
+    for line in (title, f"{type(error).__name__}: {error}"[:110]):
+        _safe(lambda s=line: layout.add_row([_safe(lambda t=s: wd.Text(t))]))
+    _safe(lambda: layout.set_background_color(BACKGROUND))
+
+
+# 連 main() 本身都爆（例如 datetime 唔存在），都要出到畫面。
+try:
+    main()
+except BaseException as _fatal:
+    try:
+        from datetime import datetime as _dt
+
+        _w = wd.Widget()
+        _minimal_layout(_w.small_layout, "main() 失敗", _fatal, _dt.now())
+        _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
+        wd.show_widget(_w)
+    except BaseException:
+        pass
