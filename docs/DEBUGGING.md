@@ -310,3 +310,94 @@ except BaseException as _fatal:
 - `i_widget_launcher.py` — 自動更新 launcher
 - `diagnose.py` — 診斷工具，列出真機有咩 `COLOR_*` / API
 - `test_launcher.py` — 53 斷言
+## ✅ 已確認真因：Pyto 官方 `Color.dynamic()` bug（2026-10-22 真機 probe 證實）
+
+`i_widget_probe.py` 真機實測結果（一次過測 9 項，只叫一次 `show_widget`）：
+
+| 步驟 | 結果 |
+| --- | --- |
+| 1 datetime | OK |
+| 2 widgets API | 140 符號，`+SECONDARY_LABEL +GREEN +RED +Spacer +SystemSymbol` **全部存在** |
+| **3 Color/Font/Text/dynamic** | **ERR TypeError: 'type' object is not iterable** |
+| 4 Widget layout | 四個 family 全部 `+` |
+| 5 userkeys | （probe 語法寫錯，真機 API 係 `.get()`/`.set()`，**冇問題**）|
+| 6 `__file__` | **有** |
+| 7 網絡 GitHub | OK，指紋 `3c5d06fecb2c` |
+| 8 記憶體 | 可查 |
+| 9 `exec` 字串 | OK |
+
+只有第 3 項真係壞。查 Pyto 官方源碼（`ColdGrub1384/Pyto` → `Lib/widgets.py`）：
+
+```python
+@classmethod
+def dynamic(cls, light: Color, dark: Color) -> Color:
+    check(light, "light", Color)      # ← 傳 class，唔係 [class]
+    check(dark,  "dark",  Color)
+    return cls(__PyColor__.colorWithLight(
+        light.__py_color__, dark=dark.__py_color__))
+```
+
+`from __check_type__ import check`，而 `check()` 內部做 `for t in expected:`。
+傳入 `Color`（type object）就會：
+
+```
+TypeError: 'type' object is not iterable
+```
+
+**呢個係 Pyto 自己嘅 bug，唔係我哋代碼嘅問題。** 任何叫 `Color.dynamic()` 嘅代碼都會中招。
+
+### 修法
+
+繞過壞掉嘅 `check()`，自己實作：
+
+```python
+def _patch_color_dynamic():
+    try:
+        white = wd.Color.rgb(1.0, 1.0, 1.0)
+        black = wd.Color.rgb(0.0, 0.0, 0.0)
+    except BaseException:
+        return
+    try:
+        wd.Color.dynamic(light=white, dark=black)
+        return                      # 呢個 Pyto 版本冇 bug
+    except BaseException:
+        pass
+    try:
+        from widgets import Color, __PyColor__
+
+        def _dynamic(light, dark):
+            return Color(__PyColor__.colorWithLight(
+                light.__py_color__, dark=dark.__py_color__))
+
+        Color.dynamic = staticmethod(_dynamic)
+    except BaseException:
+        pass
+
+
+def _dyn(light, dark):
+    """安全版：patch 都唔成功就退返深色色。"""
+    try:
+        return wd.Color.dynamic(light=light, dark=dark)
+    except BaseException:
+        return dark
+```
+
+用 `verify_patch.py`（照抄 Pyto 官方 `check()` 行為）驗證：
+
+```
+未 patch：❌ TypeError: 'type' object is not iterable
+patch 後：✅ 成功，light/dark 適應保留
+```
+
+**launcher 之前完全冇呢個 patch**（`i_widget.py` 有），所以每次離線都綠色。
+
+## 診斷方法論教訓
+
+1. **`show_widget()` 一個 script run 只理第一次** — 逐步更新畫面嘅診斷工具無效。
+   必須收集齊結果，最後只叫一次。
+2. **Mock 唔能夠重現真機 bug** — 用官方真實源碼重現先有效。
+3. **推論係靠不住的** — 我連續猜錯 3 次（`COLOR_SECONDARY_LABEL` 唔存在、
+   `__file__` 冇定義、`hashlib` C extension），全部被 probe 數據推翻。
+   官方源碼 + 真機 probe 先係可靠證據。
+4. **唔好淨係防禦，要搵官方 bug** — 見到 `TypeError: 'type' object is not iterable`
+   就應該去搵邊個庫出錯，而唔係繼續加 try/except。

@@ -56,8 +56,67 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.4.0"
+LAUNCHER_VERSION = "1.5.0"
 REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
+
+
+# ==========================================================================
+# Pyto 官方 bug 修補：Color.dynamic() 一定會擲 TypeError
+# ==========================================================================
+#
+# Pyto 原始碼（Lib/widgets.py）：
+#
+#     @classmethod
+#     def dynamic(cls, light: Color, dark: Color) -> Color:
+#         check(light, "light", Color)      # ← 傳 class，唔係 list
+#         check(dark,  "dark",  Color)
+#         return cls(__PyColor__.colorWithLight(
+#             light.__py_color__, dark=dark.__py_color__))
+#
+# 而 `check` 內部做 `for t in expected:`。傳入 class（type object）會：
+#
+#     TypeError: 'type' object is not iterable
+#
+# 呢個係 **Pyto 自己嘅 bug**，2026-10-22 真機 probe 實測確認：
+#
+#     3 建構 Color/Font/Text → ERR TypeError: 'type' object is not iterable
+#
+# 影響範圍：**任何** 叫 `Color.dynamic()` 嘅代碼。Widget 冇 dynamic 色
+# 就冇 light/dark 適應，但至少唔會死。
+#
+# 修法：自己實作 dynamic，繞過壞掉嘅 check()。
+def _patch_color_dynamic():
+    try:
+        white = wd.Color.rgb(1.0, 1.0, 1.0)
+        black = wd.Color.rgb(0.0, 0.0, 0.0)
+    except BaseException:
+        return
+    try:
+        wd.Color.dynamic(light=white, dark=black)
+        return                      # 呢個 Pyto 版本冇 bug
+    except BaseException:
+        pass                        # 有 bug，繼續 patch
+    try:
+        from widgets import Color, __PyColor__
+
+        def _dynamic(light, dark):
+            return Color(__PyColor__.colorWithLight(
+                light.__py_color__, dark=dark.__py_color__))
+
+        Color.dynamic = staticmethod(_dynamic)
+    except BaseException:
+        pass
+
+
+_patch_color_dynamic()
+
+
+def _dyn(light, dark):
+    """``Color.dynamic`` 安全版：patch 都唔成功就退返深色色。"""
+    try:
+        return wd.Color.dynamic(light=light, dark=dark)
+    except BaseException:
+        return dark
 
 
 def _try(fn, fallback=None):
@@ -416,13 +475,15 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
     """
     try:
         # --- 防禦性取色：任何一個常數缺失都唔會炸 ---------------------
-        bg = _try(lambda: wd.Color.dynamic(
-            light=wd.Color.rgb(1.0, 1.0, 1.0),
-            dark=wd.Color.rgb(0.11, 0.11, 0.118),
+        # 用 _dyn() 而唔係直接 Color.dynamic：後者喺呢個 Pyto 版本
+        # 必定擲 TypeError（見上面 _patch_color_dynamic 註解）。
+        bg = _try(lambda: _dyn(
+            wd.Color.rgb(1.0, 1.0, 1.0),
+            wd.Color.rgb(0.11, 0.11, 0.118),
         ), None)
-        fg = _try(lambda: wd.Color.dynamic(
-            light=wd.Color.rgb(0.0, 0.0, 0.0),
-            dark=wd.Color.rgb(1.0, 1.0, 1.0),
+        fg = _try(lambda: _dyn(
+            wd.Color.rgb(0.0, 0.0, 0.0),
+            wd.Color.rgb(1.0, 1.0, 1.0),
         ), None)
         muted = _try(lambda: getattr(wd, "COLOR_SECONDARY_LABEL"), fg)
 
