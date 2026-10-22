@@ -6,6 +6,7 @@
 
 import os
 import re
+import time
 from datetime import datetime, timedelta
 
 import widgets as wd
@@ -51,19 +52,35 @@ RELOAD_INTERVAL = timedelta(minutes=30)
 
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
+
+def _system_color(name, fallback):
+    """用 iOS 系統語意色（自動跟淺／深色、tinted、clear 模式），舊版 Pyto 冇就用後備。"""
+    return getattr(wd, f"COLOR_{name}", fallback)
+
+
+# 配色跟 iOS 27 系統 widget：標準白／深灰底，文字同強調色用系統語意色，
+# 咁喺 Liquid Glass 嘅 tinted／clear 模式下，系統先可以正確重新上色。
 BACKGROUND = wd.Color.dynamic(
-    light=wd.Color.rgb(0.97, 0.97, 1.00),
-    dark=wd.Color.rgb(0.07, 0.08, 0.11),
+    light=wd.Color.rgb(1.0, 1.0, 1.0),
+    dark=wd.Color.rgb(0.11, 0.11, 0.118),
 )
-PRIMARY = wd.Color.dynamic(
-    light=wd.Color.rgb(0.07, 0.08, 0.11),
-    dark=wd.Color.rgb(0.96, 0.96, 1.00),
+PRIMARY = _system_color(
+    "LABEL",
+    wd.Color.dynamic(light=wd.Color.rgb(0.0, 0.0, 0.0), dark=wd.Color.rgb(1.0, 1.0, 1.0)),
 )
 SECONDARY = wd.COLOR_SECONDARY_LABEL
+TERTIARY = _system_color("TERTIARY_LABEL", SECONDARY)
+ACCENT = wd.COLOR_SYSTEM_RED  # 同系統「日曆」widget 一樣，用紅色標示星期
 GREEN = wd.COLOR_SYSTEM_GREEN
 ORANGE = wd.COLOR_SYSTEM_ORANGE
 RED = wd.COLOR_SYSTEM_RED
+BLUE = _system_color("SYSTEM_BLUE", SECONDARY)
+INDIGO = _system_color("SYSTEM_INDIGO", SECONDARY)
+GRAY = _system_color("SYSTEM_GRAY", SECONDARY)
 MISSING = "—"
+
+# 儲存空間剩低過呢個比例就轉紅，同 iOS「iPhone 儲存空間」警告差唔多。
+LOW_STORAGE_RATIO = 0.1
 
 
 # --------------------------------------------------------------------------
@@ -77,8 +94,24 @@ def _objc_class(name):
     return ObjCClass(name)
 
 
+def _py(value):
+    """NSNumber／NSString → Python 值。
+
+    rubicon 唔會自動轉換 ``objectForKey_`` 回傳嘅 NSNumber；直接 ``bool()``
+    一個 ObjC 物件永遠係 True（例如 ``@NO`` 都當咗「充電中」）。
+    """
+    if value is None:
+        return None
+    try:
+        from rubicon.objc import py_from_ns
+
+        return py_from_ns(value)
+    except Exception:
+        return value
+
+
 def read_battery():
-    """回傳 (電量 0-1 或 None, 是否充電中)。"""
+    """回傳 (電量 0-1 或 None, 是否接住電源)。"""
     level, charging = _battery_via_uidevice()
     if level is None:
         level, charging = _battery_via_iokit()
@@ -92,7 +125,7 @@ def _battery_via_uidevice():
         level = float(device.batteryLevel)
         state = int(device.batteryState)
         if 0 <= level <= 1:
-            return level, state in (2, 3)
+            return level, state in (2, 3)  # 2 = 充電中，3 = 已充滿（仍接住電）
     except Exception:
         pass
     return None, False
@@ -125,13 +158,13 @@ def _battery_via_iokit():
             if description is None:
                 continue
 
-            current = description.objectForKey_("Current Capacity")
-            maximum = description.objectForKey_("Max Capacity")
+            current = _py(description.objectForKey_("Current Capacity"))
+            maximum = _py(description.objectForKey_("Max Capacity"))
             if current is None or not maximum:
                 continue
 
-            level = float(current) / float(maximum)
-            charging = bool(description.objectForKey_("Is Charging"))
+            level = min(max(float(current) / float(maximum), 0.0), 1.0)
+            charging = _py(description.objectForKey_("Is Charging")) is True
             return level, charging
     except Exception:
         pass
@@ -139,12 +172,45 @@ def _battery_via_iokit():
 
 
 def read_storage():
-    """回傳 (可用位元組, 總位元組)。"""
+    """回傳 (可用位元組, 總位元組)。讀唔到就 (None, None)。"""
+    free, total = _storage_via_foundation()
+    if total:
+        return free, total
+    return _storage_via_statvfs()
+
+
+def _storage_via_foundation():
+    """同「設定 → 一般 → iPhone 儲存空間」一樣嘅數字（包括可清除空間）。"""
     try:
-        stats = os.statvfs("/")
-        return stats.f_bavail * stats.f_frsize, stats.f_blocks * stats.f_frsize
+        home = _objc_class("NSURL").fileURLWithPath_(os.path.expanduser("~"))
+        values = home.resourceValuesForKeys_error_(
+            [
+                "NSURLVolumeAvailableCapacityForImportantUsageKey",
+                "NSURLVolumeTotalCapacityKey",
+            ],
+            None,
+        )
+        free = _py(values.objectForKey_("NSURLVolumeAvailableCapacityForImportantUsageKey"))
+        total = _py(values.objectForKey_("NSURLVolumeTotalCapacityKey"))
+        if total:
+            return int(free), int(total)
     except Exception:
-        return None, None
+        pass
+    return None, None
+
+
+def _storage_via_statvfs():
+    # iOS 嘅 "/" 係唯讀系統卷（sealed system volume），可用空間永遠係嗰個卷，
+    # 唔係用家資料。所以先讀 home（資料卷），讀唔到先退返 "/"。
+    for path in (os.path.expanduser("~"), "/"):
+        try:
+            stats = os.statvfs(path)
+            total = stats.f_blocks * stats.f_frsize
+            if total:
+                return stats.f_bavail * stats.f_frsize, total
+        except Exception:
+            continue
+    return None, None
 
 
 def read_system():
@@ -152,12 +218,36 @@ def read_system():
     info = {}
     try:
         process = _objc_class("NSProcessInfo").processInfo
-        info["uptime"] = float(process.systemUptime)
         info["version"] = _short_version(str(process.operatingSystemVersionString))
         info["low_power"] = bool(process.isLowPowerModeEnabled)
+        # systemUptime 唔計睡眠時間，所以只係後備。
+        info["uptime"] = float(process.systemUptime)
     except Exception:
         pass
+
+    boot_uptime = _uptime_since_boot()
+    if boot_uptime is not None:
+        info["uptime"] = boot_uptime
     return info
+
+
+def _uptime_since_boot():
+    """由 ``kern.boottime`` 計真正開機至今嘅時間（包括睡眠）。"""
+    try:
+        import ctypes
+
+        class _Timeval(ctypes.Structure):
+            _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+
+        libc = ctypes.CDLL(None)
+        boot = _Timeval()
+        size = ctypes.c_size_t(ctypes.sizeof(boot))
+        if libc.sysctlbyname(b"kern.boottime", ctypes.byref(boot), ctypes.byref(size), None, 0):
+            return None
+        uptime = time.time() - boot.tv_sec
+        return uptime if uptime > 0 else None
+    except Exception:
+        return None
 
 
 def _short_version(raw):
@@ -167,14 +257,15 @@ def _short_version(raw):
 
 
 def format_bytes(value):
+    """用十進制單位（1 GB = 1000³），同 iOS 設定入面顯示嘅一致。"""
     if value is None:
         return MISSING
     size = float(value)
     for unit in ("B", "KB", "MB"):
-        if size < 1024:
+        if size < 1000:
             return f"{size:.0f} {unit}"
-        size /= 1024
-    return f"{size:.1f} GB" if size < 1024 else f"{size / 1024:.1f} TB"
+        size /= 1000
+    return f"{size:.1f} GB" if size < 1000 else f"{size / 1000:.2f} TB"
 
 
 def format_uptime(seconds):
@@ -188,6 +279,10 @@ def format_uptime(seconds):
     if hours:
         return f"{hours} 小時 {minutes} 分"
     return f"{minutes} 分"
+
+
+def format_battery(level):
+    return MISSING if level is None else f"{round(level * 100)}%"
 
 
 # --------------------------------------------------------------------------
@@ -204,36 +299,42 @@ def label(text, size=13, color=SECONDARY, bold=False):
     return wd.Text(text, font=font, color=color)
 
 
-def status_icon(name, color=SECONDARY):
-    padding = wd.Padding(top=3, bottom=3, right=5)
-    return wd.SystemSymbol(name, color=color, font_size=13, padding=padding)
+def icon(name, color=SECONDARY, size=13):
+    padding = wd.Padding(top=3, bottom=3, right=6)
+    return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
 
 
-def status_text(text, color=PRIMARY, bold=False):
-    return label(text, size=14, color=color, bold=bold)
-
-
-def status_row(title, value, symbol, value_color=PRIMARY):
+def status_row(title, value, symbol, tint, value_color=PRIMARY):
+    """仿「設定」App：彩色圖示 + 灰色標題 …… 粗體數值。"""
     return [
-        status_icon(symbol),
-        status_text(title, color=SECONDARY),
+        icon(symbol, color=tint, size=14),
+        label(title, size=14, color=SECONDARY),
         wd.Spacer(),
-        status_text(value, color=value_color, bold=True),
+        label(value, size=14, color=value_color, bold=True),
     ]
 
 
-def clock(size):
+def clock(now, size):
     # style=DATE_STYLE_TIME 交畀系統自動更新，唔需要靠 reload 跳秒。
     return wd.DynamicDate(
-        datetime.now(),
+        now,
         style=wd.DATE_STYLE_TIME,
         font=wd.Font.bold_system_font_of_size(size),
         color=PRIMARY,
     )
 
 
-def date_label(now):
-    return label(f"{now.month}月{now.day}日 {WEEKDAYS[now.weekday()]}")
+def weekday_label(now, size=13):
+    return label(WEEKDAYS[now.weekday()], size=size, color=ACCENT, bold=True)
+
+
+def date_label(now, size=13):
+    return label(f"{now.month}月{now.day}日", size=size, color=SECONDARY)
+
+
+def header_row(now, trailing=()):
+    """星期（紅）＋日期（灰），右邊可以擺狀態。"""
+    return [weekday_label(now), date_label(now), wd.Spacer(), *trailing]
 
 
 def battery_color(level, charging):
@@ -243,7 +344,33 @@ def battery_color(level, charging):
         return SECONDARY
     if level <= 0.2:
         return RED
-    return ORANGE if level <= 0.4 else PRIMARY
+    return ORANGE if level <= 0.4 else GREEN
+
+
+def battery_symbol(level, charging):
+    """跟住電量揀 SF Symbol，同狀態列嘅電池圖示一致。"""
+    if charging:
+        return "battery.100percent.bolt"
+    if level is None:
+        return "battery.0percent"
+    for threshold, name in ((0.88, "100"), (0.63, "75"), (0.38, "50"), (0.13, "25")):
+        if level >= threshold:
+            return f"battery.{name}percent"
+    return "battery.0percent"
+
+
+def battery_chip(level, charging, size=13):
+    color = battery_color(level, charging)
+    return [
+        icon(battery_symbol(level, charging), color=color, size=size),
+        label(format_battery(level), size=size, color=color, bold=True),
+    ]
+
+
+def storage_color(free, total):
+    if free is not None and total and free / total < LOW_STORAGE_RATIO:
+        return RED
+    return PRIMARY
 
 
 # --------------------------------------------------------------------------
@@ -251,61 +378,70 @@ def battery_color(level, charging):
 # --------------------------------------------------------------------------
 
 
-def build_small(layout, now):
+def build_small(layout, now, level, charging):
+    layout.add_row([weekday_label(now, size=14), wd.Spacer()])
+    layout.add_row([date_label(now), wd.Spacer()])
     layout.add_vertical_spacer()
-    layout.add_row([clock(44)])
-    layout.add_row([date_label(now)])
+    layout.add_row([clock(now, 42)])
     layout.add_vertical_spacer()
+    layout.add_row([*battery_chip(level, charging), wd.Spacer()])
     layout.set_background_color(BACKGROUND)
 
 
-def build_medium(layout, now, level, charging, free):
-    battery_text = MISSING if level is None else f"{round(level * 100)}%"
-    symbol = "battery.100.bolt" if charging else "minus.plus.batteryblock"
+def build_medium(layout, now, level, charging, free, total, system):
+    layout.add_row(header_row(now, battery_chip(level, charging)))
+    layout.add_vertical_spacer()
+    layout.add_row([clock(now, 58)])
+    layout.add_vertical_spacer()
 
-    layout.add_row([date_label(now)])
-    layout.add_vertical_spacer()
-    layout.add_row([clock(58)])
-    layout.add_vertical_spacer()
-    layout.add_row(
-        [
-            status_icon(symbol, color=battery_color(level, charging)),
-            status_text(battery_text, color=battery_color(level, charging), bold=True),
-            wd.Spacer(),
-            status_text(format_bytes(free), color=SECONDARY),
-        ]
-    )
+    footer = [
+        icon("internaldrive.fill", color=BLUE),
+        label(f"{format_bytes(free)} 可用", color=storage_color(free, total)),
+        wd.Spacer(),
+    ]
+    if system.get("low_power"):
+        footer += [icon("leaf.fill", color=ORANGE), label("低耗電", color=ORANGE)]
+    layout.add_row(footer)
     layout.set_background_color(BACKGROUND)
 
 
 def build_large(layout, now, level, charging, free, total, system):
-    battery_text = MISSING if level is None else f"{round(level * 100)}%"
-    if charging:
-        battery_text += "（充電中）"
-    symbol = "battery.100.bolt" if charging else "minus.plus.batteryblock"
-
-    layout.add_row([date_label(now)])
-    layout.add_vertical_spacer()
-    layout.add_row([clock(64)])
-    layout.add_vertical_spacer()
-    layout.add_vertical_divider()
+    battery_text = format_battery(level)
+    if charging and level is not None:
+        battery_text += " · 已充滿" if level >= 0.995 else " · 充電中"
 
     storage_text = format_bytes(free)
     if total:
         storage_text += f" / {format_bytes(total)}"
 
+    layout.add_row(header_row(now))
+    layout.add_vertical_spacer()
+    layout.add_row([clock(now, 64)])
+    layout.add_vertical_spacer()
+    layout.add_vertical_divider()
+
     layout.add_row(
-        status_row("電量", battery_text, symbol, battery_color(level, charging))
+        status_row(
+            "電量",
+            battery_text,
+            battery_symbol(level, charging),
+            battery_color(level, charging),
+            battery_color(level, charging),
+        )
     )
-    layout.add_row(status_row("儲存空間", storage_text, "internaldrive"))
     layout.add_row(
-        status_row("開機時間", format_uptime(system.get("uptime")), "clock")
+        status_row(
+            "儲存空間", storage_text, "internaldrive.fill", BLUE, storage_color(free, total)
+        )
     )
     layout.add_row(
-        status_row("系統版本", system.get("version", MISSING), "gear")
+        status_row("開機時間", format_uptime(system.get("uptime")), "clock.fill", INDIGO)
+    )
+    layout.add_row(
+        status_row("系統版本", system.get("version", MISSING), "iphone.gen3", GRAY)
     )
     if system.get("low_power"):
-        layout.add_row(status_row("低耗電模式", "已開啟", "bolt", ORANGE))
+        layout.add_row(status_row("低耗電模式", "已開啟", "leaf.fill", ORANGE, ORANGE))
 
     layout.set_background_color(BACKGROUND)
 
@@ -317,8 +453,8 @@ def main():
     system = read_system()
 
     widget = wd.Widget()
-    build_small(widget.small_layout, now)
-    build_medium(widget.medium_layout, now, level, charging, free)
+    build_small(widget.small_layout, now, level, charging)
+    build_medium(widget.medium_layout, now, level, charging, free, total, system)
     build_large(widget.large_layout, now, level, charging, free, total, system)
     build_large(widget.extra_large_layout, now, level, charging, free, total, system)
 
