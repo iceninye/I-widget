@@ -56,7 +56,7 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.3.0"
+LAUNCHER_VERSION = "1.4.0"
 REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
 
 
@@ -89,7 +89,32 @@ KEY_CHECKED = "i_widget.last_checked"
 
 # 後備儲存：檔案。擺喺 launcher 同一層，方便人手檢查／刪除。
 # 冇 userkeys（例如舊版 Pyto）或者寫入被拒，就 fallback 呢度。
-CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
+#
+# ⚠️ `__file__` 喺 Pyto Run Script **可能完全冇定義**。
+#    如果喺 module level 直接用 `__file__`，會拋 NameError
+#    → 成個 module import 失敗 → show_widget() 永遠唔會被叫
+#    → home screen 顯示綠色 default template。
+#    呢個正係 2026-10-22 真機實測遇到嘅 bug。
+#
+# 所以呢度全部用 getattr 兜底，並且提供多個 fallback 目錄。
+def _cache_dir():
+    # 1. __file__ 存在 → 同一層
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        pass
+    # 2. Pyto 常用暫存目錄
+    for path in ("/tmp", os.path.expanduser("~"), os.getcwd()):
+        try:
+            if os.path.isdir(path):
+                return path
+        except BaseException:
+            continue
+    # 3. 最後：相對 "." （寫入會失敗，但至少 import 唔會死）
+    return "."
+
+
+CACHE_DIR = _cache_dir()
 CACHED_PY = os.path.join(CACHE_DIR, "i_widget.cached.py")
 CACHED_FP = os.path.join(CACHE_DIR, "i_widget.cached.fingerprint")
 CACHED_CHECKED = os.path.join(CACHE_DIR, "i_widget.last_checked")
@@ -476,8 +501,12 @@ def main():
         return
 
     _log(f"執行中（來源：{origin}）")
+    # ⚠️ `__file__` 喺 Pyto Run Script 可能冇定義。
+    #    直接喺呢度寫 `__file__` 會喺 exec 前就 NameError。
+    #    用 globals().get() 兜底；widget 本身唔會靠 __file__ 運作。
+    _widget_globals = {"__name__": "__main__", "__file__": CACHED_PY}
     try:
-        exec(compiled, {"__name__": "__main__", "__file__": __file__})
+        exec(compiled, _widget_globals)
     except BaseException as error:
         # BaseException：連 SystemExit / KeyboardInterrupt 都捉埋，
         # 因為呢度寧願畫錯都唔好畫唔到。

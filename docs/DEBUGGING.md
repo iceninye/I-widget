@@ -31,7 +31,85 @@ def main():
 > 教訓：空白畫面零資訊量。冇錯誤畫面、冇版本標記嗰陣，排查完全靠盲猜。
 > 呢個係後面加「版本標記」嘅直接原因。
 
-## 真因：三層 module-level 未保護嘅失敗
+## 真因：`__file__` 喺 Pyto Run Script 唔存在（module level NameError）
+
+呢個係**最終真因**，喺 2026-10-22 經 `i_widget_safe.py` 二分定位先搵到。
+
+```python
+# i_widget_launcher.py（原本）
+CACHE_DIR = os.path.dirname(os.path.abspath(__file__))   # ← module level
+```
+
+Pyto 嘅 **Run Script** widget 環境**唔定義 `__file__`**。所以：
+
+```
+module level  NameError: name '__file__' is not defined
+     ↓
+成個 module import 失敗
+     ↓
+main() 永遠冇執行 → show_widget() 從來冇被叫
+     ↓
+iOS 顯示綠色 default template
+```
+
+**點解之前搵唔到**：測試框架 `test_launcher.py` 自己都會傳 `"__file__": path`，
+所以 53 個斷言全部通過，但真機一樣失敗 — **測試環境同真實環境唔同**。
+
+### 實測證據
+
+用 `no_file=True` 模擬真機環境，逐個情境測：
+
+| 情境 | 修補前 | 修補後 |
+| --- | --- | --- |
+| A 有 `__file__` + 冇 userkeys | ✓ | ✓ |
+| B **冇 `__file__`** | **✗ 綠色** | ✓ |
+| C **冇 `__file__` + 有 userkeys** | **✗ 綠色** | ✓ |
+| D 有 `__file__` + userkeys | ✓ | ✓ |
+
+修補前 B/C 報 `NameError: name '__file__' is not defined`。
+
+### 點解 `i_widget.py` 安全版冇事
+
+`i_widget_safe.py` 完全冇用 `__file__`、冇上網、冇 userkeys — 所以跑得通。
+**呢個正係二分法嘅價值**：safe 版成功就證明 `widgets` module 正常，
+問題必然喺 launcher 專屬代碼。
+
+### 修法
+
+```python
+def _cache_dir():
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        pass
+    for path in ("/tmp", os.path.expanduser("~"), os.getcwd()):
+        try:
+            if os.path.isdir(path):
+                return path
+        except BaseException:
+            continue
+    return "."
+```
+
+另一處 `exec(compiled, {"__file__": __file__})` 改用 `CACHED_PY`（已算出嘅路徑）。
+
+### 測試盲區（重要）
+
+`test_launcher.py` 嘅 `run_launcher()` 以前硬寫 `"__file__": path`，
+**等於幫自己掩蓋咗真機嘅環境差異**。
+
+修法：加 `no_file=True` 參數，模擬 Pyto Run Script。新增兩個情境：
+
+- **【R】** 冇 `__file__` → 唔可以 NameError、唔可以綠色、layout 要有內容
+- **【S】** 冇 `__file__` + 離線 + 快取已存在 → 仍然有畫面、零網絡請求
+
+---
+
+## 前置死因（`i_widget.py`，同一個症狀）
+
+即使修好 `__file__`，`i_widget.py` 本身有三層 module-level 失敗風險，
+修法詳見下面「解決方法」。兩者都會導致同一症狀（綠色），
+所以排查時要同時考慮。
 
 ### 第 1 層：`_patch_color_dynamic()` 喺 module level 執行
 
@@ -190,11 +268,24 @@ except BaseException as _fatal:
 
 具體規則：
 
-1. 每個資料源獨立 `try` — 一個失敗唔影響其他
-2. 每個 widget family 獨立 `try` — small 壞唔影響 large
-3. 每個可能不存在嘅 API 用 `getattr` 包住 + fallback
-4. `module level` 嘅 code 必須自己企穩（佢一死就全死）
-5. 最外層 `try` 一定 `show_widget()`，除非真係冇嘢可畫
+1. **module level 唔准用 `__file__`** — Pyto Run Script 唔定義，NameError = 全死
+2. **module level 唔准直接讀 `wd.COLOR_*`** — 用 `getattr` + fallback
+3. 每個資料源獨立 `try` — 一個失敗唔影響其他
+4. 每個 widget family 獨立 `try` — small 壞唔影響 large
+5. 每個可能不存在嘅 API 用 `getattr` 包住 + fallback
+6. `module level` 嘅 code 必須自己企穩（佢一死就全死）
+7. 最外層 `try` 一定 `show_widget()`，除非真係冇嘢可畫
+
+## 測試環境必須模擬真機
+
+`__file__` 呢個 bug 之所以躲咗咁耐，就係因為測試框架幫自己傳咗 `__file__`。
+
+**規則：凡係真機同測試環境有差異嘅假設，都要喺測試加一個情境去驗證。**
+
+`test_launcher.py` 現時有：
+- `no_file=True` — 模擬 Pyto Run Script 冇 `__file__`
+- 殘缺 mock — `wd.Spacer` / `wd.SystemSymbol` / `set_background_color` /
+  `add_vertical_divider` / `__PyColor__` 全部缺失
 
 ## 驗證
 
@@ -210,7 +301,7 @@ except BaseException as _fatal:
   extra_large_layout   4 行
 ```
 
-`test_launcher.py` 53/53 通過。
+`test_launcher.py` 58/58 通過（含新增嘅 R/S 兩個情境）。
 
 ## 相關檔案
 

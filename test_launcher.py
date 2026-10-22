@@ -92,8 +92,13 @@ def fp_of(code):
 
 FP_V1, FP_V2, FP_BROKEN = fp_of(GOOD_V1), fp_of(GOOD_V2), fp_of(BROKEN)
 
-def run_launcher(workdir, reset_userkeys=True, base=None):
-    """喺指定目錄跑 launcher，回傳 (顯示咗咩, 執行咗咩版本)。"""
+def run_launcher(workdir, reset_userkeys=True, base=None, no_file=False):
+    """喺指定目錄跑 launcher，回傳 (顯示咗咩, 執行咗咗咩版本)。
+
+    ``no_file=True`` 模擬 Pyto Run Script：完全唔定義 ``__file__``。
+    2026-10-22 真機實測就係咁 —— module level 用 __file__ 會 NameError，
+    成個 module import 失敗 → 綠色 default template。
+    """
     shutil.copy(LAUNCHER, os.path.join(workdir, "i_widget_launcher.py"))
     src = open(os.path.join(workdir, "i_widget_launcher.py")).read()
     src = src.replace('SOURCE = "https://raw.githubusercontent.com/iceninye/I-widget/main"',
@@ -102,7 +107,9 @@ def run_launcher(workdir, reset_userkeys=True, base=None):
     open(path, "w").write(src)
 
     SHOWN.clear(); RELOADS.clear(); HITS.clear()
-    g = {"__name__": "__main__", "__file__": path}
+    g = {"__name__": "__main__"}
+    if not no_file:
+        g["__file__"] = path
     try:
         exec(compile(src, path, "exec"), g)
         err = None
@@ -393,6 +400,35 @@ if w:
     shown = [_text_of(c) for r in w.small_layout.rows
              if isinstance(r, list) for c in r if hasattr(c, "_Component__args")]
     check("Q3 顯示咗錯誤訊息", any("boom" in (t or "") for t in shown), f"{shown}")
+
+print("\n【R】Pyto Run Script 冇 __file__ → 唔可以 NameError，唔可以綠色")
+# 真機 bug：module level 直接用 __file__ → NameError → import 失敗 → 綠色。
+# 呢個情境用 no_file=True 模擬，測試框架以前自己都有 __file__，所以捉唔到。
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+dr = fresh()
+UK_STORE.clear()
+w, ver, err = run_launcher(dr, base=BASE2, no_file=True)
+check("R1 冇向外拋錯", err is None, f"err={type(err).__name__ if err else ''}: {err}")
+check("R2 有顯示 widget（唔係綠色）", w is not None)
+# 真 widget 有內容 = 真係行咗（唔係 offline 版）。
+rows_r = w.small_layout.rows if w else []
+check("R3 layout 有內容（真 widget，非錯誤畫面）", len(rows_r) >= 3, f"rows={len(rows_r)}")
+
+print("\n【S】冇 __file__ + 快取已存在 → 用快取，唔使上網")
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+dr2 = fresh()
+UK_STORE.clear()
+w1, v1a, e1 = run_launcher(dr2, base=BASE2, no_file=True)          # 第一次：落載
+SERVE["offline"] = True                                              # 之後 GitHub 死
+UK_STORE.clear()
+SHOWN.clear(); RELOADS.clear(); HITS.clear()
+src2 = open(LAUNCHER, encoding="utf-8").read().replace(
+    'SOURCE = "https://raw.githubusercontent.com/iceninye/I-widget/main"', f'SOURCE = "{BASE2}"')
+g2 = {"__name__": "__main__"}                                        # 冇 __file__
+exec(compile(src2, "l.py", "exec"), g2)
+check("S1 離線 + 冇 __file__ 仍然有畫面", len(SHOWN) > 0)
+check("S2 零網絡請求", len(HITS) == 0, f"HITS={len(HITS)}")
+SERVE.pop("offline", None)
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
