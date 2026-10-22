@@ -9,6 +9,10 @@
 VERSION = "1.3.0"
 COMMIT = "32d4cdc"
 
+# 快取世代標記：launcher 要求快取必須含有呢個 marker，
+# 否則當作舊版本丟棄並重新落載（避免 outdated cache 鎖死 widget）。
+I_WIDGET_API_2 = True
+
 import os
 import re
 import time

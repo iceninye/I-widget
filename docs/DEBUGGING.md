@@ -401,3 +401,124 @@ patch 後：✅ 成功，light/dark 適應保留
    官方源碼 + 真機 probe 先係可靠證據。
 4. **唔好淨係防禦，要搵官方 bug** — 見到 `TypeError: 'type' object is not iterable`
    就應該去搵邊個庫出錯，而唔係繼續加 try/except。
+
+## ✅ 已確認真因（2026-10-22 slowdiag-2.0 真機 15 步）
+
+`i_widget_slowdiag.py` 真機逐步寫入 userkeys（硬崩潰都捉得到），結果：
+
+| 步驟 | 真機結果 |
+| --- | --- |
+| A | `Color.dynamic 唔使 patch` ← **Pyto 冇 bug，之前診斷錯** |
+| B–D | `datetime` / `os` / `os.statvfs` 全部 OK（free=5GB） |
+| **E–F** | **`_objc_class` → `NameError`（唔存在）**，`battery` 同樣死 |
+| G–H | `wd.Spacer` / `wd.SystemSymbol` OK |
+| I | layout 全部方法 OK |
+| J–K | 下載 17043 bytes、`compile` OK |
+| **L** | **`exec 跑完，show_widget 叫咗 1 次`** ← 🎯 |
+| M | （我攔截咗 `show_widget`，查唔到） |
+
+**L 行證明 `i_widget.py` 本身完全正常** —— 成功執行、成功調用 `show_widget()`。
+所以死因一定喺 launcher 自己嘅流程。
+
+## 設計缺陷：`load_code()` 完全冇驗證 + 30 分鐘節流
+
+```python
+# 舊版
+def load_code():
+    code = _keys_get(KEY_CODE)
+    if code:                     # ← 讀到乜就返乜，零驗證
+        return code
+    return _read(CACHED_PY)
+
+def _should_check():
+    checked = load_checked()
+    if not checked:
+        return True
+    return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
+```
+
+兩個缺陷疊加，造成**永久鎖死**：
+
+1. `load_code()` 唔驗證語法、唔檢查架構 → 一個舊壞版本就一直被攞返嚟 exec。
+2. `_should_check()` 淨係睇時間 → 就算壞快取擺喺度，30 分鐘內都唔會去 GitHub。
+   如果壞版本已經 `touch_checked()` 過 → **永遠唔會再檢查**。
+
+結果：即使 `i_widget.py` 已經修好推上 GitHub，device 上面仍然行緊
+`userkeys` 裡面嗰個舊版本 → 綠色 default template。
+
+## 修法
+
+### 1. 快取世代標記 `CACHE_MARKER`
+
+```python
+CACHE_MARKER = "I_WIDGET_API_2"
+
+def _code_is_usable(code, source):
+    """三重檢查：夠長 + 語法過 + 有 marker。"""
+    try:
+        if not code or len(code) < 200:
+            return False
+        compile(code, WIDGET_PY, "exec")
+        if CACHE_MARKER not in code:      # ← 舊架構 → 丟棄
+            _log(f"{source} 快取冇 {CACHE_MARKER} marker（舊版本），丟棄並重新落載")
+            return False
+        return True
+    except SyntaxError:
+        return False
+    except Exception:
+        return False
+```
+
+`i_widget.py` 加一行 `I_WIDGET_API_2 = True`。
+**每次改 widget 結構就 bump marker → 所有舊快取自動失效，唔使用戶手動刪 widget。**
+
+### 2. 快取不可信就一定要查
+
+```python
+def _should_check():
+    if load_code() is None:
+        return True          # 冇可信快取 → 必須即刻去攞，唔理時間
+    checked = load_checked()
+    ...
+```
+
+**節流只對「可信快取」生效。** 壞快取唔再有任何豁免權。
+
+### 3. `_show_offline_widget` 死亡螺旋
+
+```python
+# 舊版：裸讀 4 個 layout，任何一個缺失就 AttributeError
+for layout in (widget.small_layout, widget.medium_layout,
+               widget.large_layout, widget.extra_large_layout):
+```
+
+跌入 `except` 之後**再裸讀** `small_layout` / `large_layout` → 再死 → 綠色。
+即係「防禦層自己製造咗死鎖」。
+
+改成 `getattr(..., None)` + 每個 `add_row` 都 `_try()` 包住；
+`except` 分支重新起一個 `wd.Widget()`（原本嗰個未必綁定到）
+並逐個 layout 試，成功就 `return`。
+
+## 測試：T / U / V / W 四個情境（66/66 通過）
+
+| 情境 | 鎖死嘅要求 |
+| --- | --- |
+| **T** | userkeys 冇 marker 嘅舊版本 → 必須丟棄並重新落載 |
+| **U** | 檔案快取語法錯 → 必須丟棄並重新落載 |
+| **V** | **節流窗口內** + 舊快取 → 照樣即刻重新落載（唔受 30 分鐘阻擋） |
+| **W** | 有效快取 + 節流中 → 零網絡請求（防止反向 bug） |
+
+V 同 W 係對照組：一個證明壞快取唔會被節流豁免，一個證明好快取唔會被
+無謂打網絡。
+
+### 測試本身嘅三個陷阱（我自己撞過）
+
+1. **快取目錄係 launcher 檔案所在目錄**（`_cache_dir()` 行 159），
+   唔係 `cache/` 子目錄。寫錯位置測試根本測唔到嘢（U 一開始就係咁）。
+2. **`save()` 會將 `last_checked` 寫入 userkeys**，而 `load_checked()`
+   讀 userkeys 優先於檔案 → 淨係改檔案唔會生效，兩邊都要改。
+3. **唔可以再跑多一次 `run_launcher` 去「還原」快取** —— 嗰次會順手
+   `touch_checked(now)`，節流窗口即刻失效（W 試咗幾次先發現）。
+
+另外 `run_launcher()` 有 `reset_userkeys=True` 參數但**從來冇用過**，
+所以「清 userkeys」要測試自己手動做。

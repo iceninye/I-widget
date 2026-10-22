@@ -56,7 +56,7 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.5.0"
+LAUNCHER_VERSION = "1.6.0"
 REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
 
 
@@ -213,11 +213,67 @@ def _keys_get(key):
 
 
 def load_code():
-    """讀快取程式碼。userkeys → 檔案 → None。"""
+    """讀快取程式碼。userkeys → 檔案 → None。
+
+    ⚠️ 一定要經 `_code_is_usable()` 驗證先可以攞返去做。
+    呢個係 2026-10-22 真機事故嘅直接教訓：
+
+        舊版 `load_code()` 讀到乜就返乜，冇任何驗證。
+        配合 `_should_check()` 嘅 30 分鐘節流 →
+        **一次壞快取可以永久鎖死個 widget**（永遠唔會去 GitHub 攞新版）。
+
+        真機證實：`i_widget.py` 本身完全正常（exec 跑完、show_widget
+        叫咗 1 次），但 launcher 行嘅係 userkeys 入面嘅舊壞版本 →
+        home screen 永遠綠色 default template。
+
+    所以：任何快取都必須通過語法 + sanity check，唔過就當冇記錄。
+    """
     code = _keys_get(KEY_CODE)
-    if code:
+    if code and _code_is_usable(code, "userkeys"):
         return code
-    return _read(CACHED_PY)
+
+    code = _read(CACHED_PY)
+    if code and _code_is_usable(code, "檔案"):
+        return code
+
+    return None
+
+
+# 快取必須包含嘅 sanity marker。冇咗就係舊／壞版本，丟掉重下載。
+#
+# 點解唔淨係靠 compile()？因為 syntax 完全合法嘅舊版本（例如裸讀
+# `wd.COLOR_SECONDARY_LABEL` 嘅早期版）一樣會令 widget 死，但 compile 過得到。
+# 每次改動 i_widget.py 嘅結構時，要同步 bump 呢個數字，令所有舊快取
+# 自動失效 —— 唔使再靠用戶手動刪 widget。
+CACHE_MARKER = "I_WIDGET_API_2"
+
+
+def _code_is_usable(code, source):
+    """快取程式碼係咪可信。
+
+    三重檢查，任何一項唔過就當冇快取（下次 reload 會重新落載）：
+      1. 內容夠長（唔係被截斷嘅回應）
+      2. 語法通過 `compile()`
+      3. 含有 `CACHE_MARKER`（即係新架構嘅版本，唔係舊殘留）
+    """
+    try:
+        if not code or len(code) < 200:
+            _log(f"{source} 快取太短，丟棄")
+            return False
+
+        compile(code, WIDGET_PY, "exec")
+
+        if CACHE_MARKER not in code:
+            _log(f"{source} 快取冇 {CACHE_MARKER} marker（舊版本），丟棄並重新落載")
+            return False
+
+        return True
+    except SyntaxError as error:
+        _log(f"{source} 快取語法錯（{error}），丟棄")
+        return False
+    except Exception as error:
+        _log(f"{source} 快取驗證失敗（{type(error).__name__}），丟棄")
+        return False
 
 
 def load_fingerprint():
@@ -375,10 +431,21 @@ def fingerprint_of(code):
 
 
 def _should_check():
-    """上次檢查過就唔好即刻再打網絡。"""
+    """上次檢查過就唔好即刻再打網絡。
+
+    ⚠️ 但有一個例外，而且係最重要嗰個：**快取唔可信就一定要查**。
+
+    原本呢度淨係睇時間，導致：userkeys 入面有壞快取 → 30 分鐘內唔查
+    → 就算壞版本擺喺度，launcher 都唔會去 GitHub 攞新版。
+    如果壞快取已經 `touch_checked()` 過，更加係永久鎖死。
+
+    而家先問「快取可唔可信」，唔可信就即刻查，唔理時間。
+    """
+    if load_code() is None:
+        return True          # 冇可信快取 → 必須即刻去攞
     checked = load_checked()
     if not checked:
-        return True  # 冇記錄 = 即刻查一次
+        return True          # 冇記錄 = 即刻查一次
     return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
 
 
@@ -475,8 +542,8 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
     """
     try:
         # --- 防禦性取色：任何一個常數缺失都唔會炸 ---------------------
-        # 用 _dyn() 而唔係直接 Color.dynamic：後者喺呢個 Pyto 版本
-        # 必定擲 TypeError（見上面 _patch_color_dynamic 註解）。
+        # 用 _dyn() 而唔係直接 Color.dynamic：喺部分 Pyto 版本
+        # 會擲 TypeError（見上面 _patch_color_dynamic 註解）。
         bg = _try(lambda: _dyn(
             wd.Color.rgb(1.0, 1.0, 1.0),
             wd.Color.rgb(0.11, 0.11, 0.118),
@@ -492,25 +559,35 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
             name = "bold_system_font_of_size" if bold else "system_font_of_size"
             return _try(lambda: getattr(wd.Font, name)(size), None)
 
+        # ⚠️ 呢行一定要喺 try 入面最前面：如果 `wd.Widget()` 本身就擲錯，
+        # except 分支會用到未綁定嘅 `widget` → NameError → 綠色。
         widget = wd.Widget()
         if bg is not None:
             _try(lambda: setattr(widget, "background_color", bg), None)
 
         for layout in (
-            widget.small_layout,
-            widget.medium_layout,
-            widget.large_layout,
-            widget.extra_large_layout,
+            getattr(widget, "small_layout", None),
+            getattr(widget, "medium_layout", None),
+            getattr(widget, "large_layout", None),
+            getattr(widget, "extra_large_layout", None),
         ):
-            layout.add_vertical_spacer()
+            # ⚠️ 唔可以裸讀任何 layout：2026-10-22 真機教訓。
+            # 原本 `widget.extra_large_layout` 一旦缺失就 AttributeError，
+            # 跌入 except 之後再裸讀 small_layout / large_layout →
+            # **再死一次** → 綠色 default template（死亡螺旋）。
+            # 兩個 layout 都缺，先算真係冇出路。
+            if layout is None:
+                continue
+            _try(lambda: layout.add_vertical_spacer(), None)
             # 版本標記：空白畫面零資訊量，一定要令用戶一眼睇到行緊邊個版本。
-            layout.add_row([_text("i-widget", font=_font(20, bold=True), color=fg)])
-            layout.add_row([_text(f"{LAUNCHER_VERSION} · {REMOTE_FP or '?'}",
-                                  font=_font(11), color=muted)])
-            layout.add_row([_text(title, font=_font(13), color=muted)])
+            _try(lambda: layout.add_row([_text("i-widget",
+                                              font=_font(20, bold=True), color=fg)]), None)
+            _try(lambda: layout.add_row([_text(f"{LAUNCHER_VERSION} · {REMOTE_FP or '?'}",
+                                              font=_font(11), color=muted)]), None)
+            _try(lambda: layout.add_row([_text(title, font=_font(13), color=muted)]), None)
             if detail:
-                layout.add_row([_text(detail, font=_font(10), color=muted)])
-            layout.add_vertical_spacer()
+                _try(lambda: layout.add_row([_text(detail, font=_font(10), color=muted)]), None)
+            _try(lambda: layout.add_vertical_spacer(), None)
 
         _try(lambda: wd.schedule_next_reload(timedelta(minutes=30)), None)
         wd.show_widget(widget)
@@ -518,16 +595,25 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
     except Exception as error:
         _log(f"連離線 widget 都顯示唔到：{type(error).__name__}: {error}")
         # 最後一搏：極簡畫面，淨係用最低風險嘅 API。
+        # ⚠️ 重新起一個 `wd.Widget()`（上面 try 嗰個未必成功綁定）。
+        # 同樣唔可以裸讀 layout：逐個試，就算得一個都照畫。
         try:
             widget = wd.Widget()
-            for layout in (widget.small_layout, widget.large_layout):
+        except Exception:
+            return
+        for name in ("small_layout", "medium_layout", "large_layout"):
+            try:
+                layout = getattr(widget, name, None)
+                if layout is None:
+                    continue
                 layout.add_vertical_spacer()
                 layout.add_row([wd.Text("i-widget 執行失敗")])
                 layout.add_row([wd.Text(f"{LAUNCHER_VERSION} · {reason}")])
                 layout.add_vertical_spacer()
-            wd.show_widget(widget)
-        except Exception:
-            pass
+                wd.show_widget(widget)
+                return                      # 成功就收工，唔好再試
+            except Exception:
+                continue
 
 
 # --- 入口 ---------------------------------------------------------------

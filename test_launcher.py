@@ -70,6 +70,7 @@ LAUNCHER = os.path.join(HERE, "i_widget_launcher.py")
 launcher_src = open(LAUNCHER).read()
 GOOD_V1 = '''import widgets as wd
 VERSION = "v1"
+I_WIDGET_API_2 = True
 widget = wd.Widget()
 for L in (widget.small_layout, widget.medium_layout, widget.large_layout, widget.extra_large_layout):
     L.add_row([wd.Text("version v1")])
@@ -410,9 +411,14 @@ UK_STORE.clear()
 w, ver, err = run_launcher(dr, base=BASE2, no_file=True)
 check("R1 冇向外拋錯", err is None, f"err={type(err).__name__ if err else ''}: {err}")
 check("R2 有顯示 widget（唔係綠色）", w is not None)
-# 真 widget 有內容 = 真係行咗（唔係 offline 版）。
-rows_r = w.small_layout.rows if w else []
-check("R3 layout 有內容（真 widget，非錯誤畫面）", len(rows_r) >= 3, f"rows={len(rows_r)}")
+# 確認係真 widget（執行咗 i_widget.py）而唔係 offline 錯誤畫面。
+# GOOD_V1 每個 layout 只加 1 行 "version v1"；offline 版會有 3-5 行同
+# 不同文字。所以睇文字內容，唔係行數。
+_rows_r = w.small_layout.rows if w else []
+_txt_r = [_text_of(c) for r in _rows_r
+          if isinstance(r, list) for c in r if hasattr(c, "_Component__args")]
+check("R3 顯示嘅係真 widget（version v1），非錯誤畫面",
+      any("version v1" in (t or "") for t in _txt_r), f"texts={_txt_r}")
 
 print("\n【S】冇 __file__ + 快取已存在 → 用快取，唔使上網")
 SERVE.update(fp=FP_V1, py=GOOD_V1)
@@ -429,6 +435,86 @@ exec(compile(src2, "l.py", "exec"), g2)
 check("S1 離線 + 冇 __file__ 仍然有畫面", len(SHOWN) > 0)
 check("S2 零網絡請求", len(HITS) == 0, f"HITS={len(HITS)}")
 SERVE.pop("offline", None)
+
+
+# ==========================================================================
+# 【T】2026-10-22 真機事故：outdated userkeys cache 鎖死 widget
+# ==========================================================================
+# 真機證實 i_widget.py 本身完全正常（exec 跑完、show_widget 叫咗 1 次），
+# 但 home screen 永遠綠色。根因：userkeys 住緊一個舊壞版本，而舊版
+# load_code() 唔驗證、_should_check() 又用 30 分鐘節流 → 壞快取永久鎖死。
+#
+# 呢組測試鎖死「唔准再用過期快取」呢個設計要求。
+
+STALE = GOOD_V1.replace("I_WIDGET_API_2 = True\n", "")      # 語法合法，但係舊架構
+
+print("\n【T】userkeys 住緊舊架構版本（冇 CACHE_MARKER）→ 必須丟棄並重新落載")
+SERVE.update(fp=FP_V2, py=GOOD_V2)
+dt = fresh()
+w_t, ver_t, err_t = run_launcher(dt, base=BASE2)
+check("T1 舊快取被丟棄，執行咗新版 v2", ver_t == "version v2", f"ver={ver_t} err={err_t}")
+_t_cached = None
+for _root, _dirs, _files in os.walk(dt):
+    if "i_widget.cached.py" in _files:
+        _t_cached = open(os.path.join(_root, "i_widget.cached.py")).read()
+        break
+check("T2 快取檔已更新做新架構",
+      _t_cached is not None and "I_WIDGET_API_2" in _t_cached)
+
+print("\n【U】檔案快取語法錯 → 必須丟棄並重新落載")
+du = fresh()
+# ⚠️ 快取目錄 = launcher 檔案所在目錄（`_cache_dir()` 行 159），
+#    唔係 cache/ 子目錄。寫錯位置嘅話測試根本冇測到嘢。
+SERVE.update(fp=FP_V2, py=GOOD_V2)
+w_u, ver_u, err_u = run_launcher(du, base=BASE2)
+# 第一次行完（快取係新嘅），而家手動塞一個語法錯版本落去
+open(os.path.join(du, "i_widget.cached.py"), "w").write(
+    "def broken(:\n" + "# padding " * 60)
+UK_STORE.clear(); SHOWN.clear(); HITS.clear()
+w_u2, ver_u2, err_u2 = run_launcher(du, base=BASE2)
+check("U1 語法錯快取被丟棄，重新落載咗 v2", ver_u2 == "version v2",
+      f"ver={ver_u2} err={err_u2} HITS={len(HITS)}")
+check("U2 確實重新打過網絡", len(HITS) > 0, f"HITS={len(HITS)}")
+
+print("\n【V】即使 5 分鐘前查過（節流中），舊快取仍然要即刻重新落載")
+dv = fresh()
+SERVE.update(fp=FP_V2, py=GOOD_V2)
+run_launcher(dv, base=BASE2)                     # 先建立正常快取（FP_V2 / GOOD_V2）
+# 塞入舊架構快取 + 假裝「5 分鐘前查過」（節流窗口內）
+open(os.path.join(dv, "i_widget.cached.py"), "w").write(STALE)
+open(os.path.join(dv, "i_widget.cached.fingerprint"), "w").write(FP_V2)
+open(os.path.join(dv, "i_widget.last_checked"), "w").write(
+    str(__import__("time").time() - 5 * 60))       # 5 分鐘前 → 節流中
+SERVE.update(fp=FP_V2, py=GOOD_V2.replace("version v2", "version vNEW"))
+UK_STORE.clear(); SHOWN.clear(); HITS.clear()
+w_v, ver_v, err_v = run_launcher(dv, base=BASE2)
+check("V1 節流中但舊快取照樣被換掉", ver_v == "version vNEW", f"ver={ver_v} HITS={len(HITS)}")
+check("V2 有重新打網絡（證明唔受 30 分鐘節流阻擋）", len(HITS) > 0, f"HITS={len(HITS)}")
+
+print("\n【W】有效快取 + 節流中 → 唔應該打網絡（防止反向 bug）")
+dw = fresh()                                     # 全新目錄：唔會繼承 V 嘅快取
+SERVE.update(fp=FP_V2, py=GOOD_V2)
+run_launcher(dw, base=BASE2)                     # 先建立有效快取
+# ⚠️ 兩個陷阱（我自己撞過，記低）：
+#   1. `save()` 會把 last_checked 寫入 userkeys，而 `load_checked()` 讀
+#      userkeys 優先於檔案 → 淨係改檔案唔會生效，userkeys 都要一齊改。
+#   2. 唔可以再跑多一次 run_launcher 去「還原」快取 ——
+#      嗰次會順手 touch_checked(now)，節流窗口即刻失效。
+# 所以：先跑一次，然後直接改兩個地方，唔好再碰 launcher。
+_five_min_ago = __import__("time").time() - 5 * 60
+open(os.path.join(dw, "i_widget.last_checked"), "w").write(str(_five_min_ago))
+UK_STORE.clear(); SHOWN.clear(); HITS.clear()
+UK_STORE["i_widget.last_checked"] = _five_min_ago
+# 檔案快取要同 userkeys 一齊擺，否則 load_code() 讀唔到有效版本
+_open_cache = open(os.path.join(dw, "i_widget.cached.py"), "w")
+_open_cache.write(GOOD_V2)
+_open_cache.close()
+_open_fp = open(os.path.join(dw, "i_widget.cached.fingerprint"), "w")
+_open_fp.write(FP_V2)
+_open_fp.close()
+w_w, ver_w, err_w = run_launcher(dw, base=BASE2)
+check("W1 有效快取照常用", ver_w == "version v2", f"ver={ver_w}")
+check("W2 節流生效：零網絡請求", len(HITS) == 0, f"HITS={len(HITS)}")
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
