@@ -48,6 +48,21 @@ Launcher 每次 reload 嘅流程：
 6. 行快取
 ```
 
+## 儲存層：userkeys 優先
+
+快取唔係單靠檔案。Pyto 每次 reload widget 都係一個**全新嘅 extension sandbox**，
+同目錄檔案未必留得住。所以主儲存用 Pyto 官方 `userkeys`
+（底層係 `NSUserDefaults` suite `group.pyto`，docstring 明講
+「shared between the Today Widget and the main app」），
+檔案只係後備。
+
+| 後端 | 優點 | 缺點 |
+|---|---|---|
+| `userkeys`（優先） | 官方、跨 reload、extension 同 app 共用、唔會被 iOS 清 | JSON 字典，唔適合大檔案（>100 KB 自動跳過） |
+| 檔案（後備） | 人手可檢查／刪除、冇大小限制 | 可能被清、寫入可能被拒 |
+
+兩者都讀唔到就當冇快取 —— 寧願每次重新落載，都唔好令 widget 死掉。
+
 三層回退，確保**任何情況下 widget 都唔會空白或崩潰**：
 
 | 情況 | 結果 |
@@ -130,9 +145,20 @@ Widget 要指向 **`i_widget_launcher.py`**，唔再係 `i_widget.py`。
 
 ## 驗證
 
-`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 7 種情境共 18 項
-斷言，全部通過——包括「推壞版本被拒絕」「網絡死仍出畫面」「404 唔 crash」
-「首次安裝離線顯示提示」。
+`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 **9 種情境共 28 項斷言**，
+全部通過：
+
+| 情境 | 測咩 |
+|---|---|
+| A | 全新安裝：落載、寫快取、排程 reload |
+| B | 遠端冇變：完全零網絡請求 |
+| C | 推壗 syntax error：拒絕、行舊快取、指紋唔更新 |
+| D | 好更新：執行新版、快取已更新 |
+| E | 網絡死（有快取）：仍然出畫面、用返快取 |
+| F | 全新 + 完全冇網絡：顯示「更新失敗」、已排程自動再試 |
+| G | 404：唔 crash、顯示離線 widget |
+| H | **userkeys 持久化**：全新 sandbox 都讀到快取、零網絡 |
+| I | **userkeys 壞咗**：自動 fallback 檔案、照樣更新到 v2 |
 
 ```bash
 python3 test_launcher.py
@@ -150,8 +176,10 @@ python3 test_launcher.py
 - **指紋更新靠 Action。** 如果 Actions 被停用或者 repo 設定唔到，
   fingerprint 唔會更新，launcher 會永遠行第一次落載嘅版本。
   改壞咗就手動跑 `make_fingerprint.py`。
-- **每次 reload 都係本機讀檔。** 快取存在 `i_widget_launcher.py` 同一個目錄。
-  如果 iOS 清理 Pyto 嘅 temp 空間，快取會冇，launcher 下次重新落載（正常）。
+- **快取可能會冇。** 主儲存 `userkeys` 通常穩定，但如果 iOS 清理咗 userkeys 同檔案，
+  launcher 下次會重新落載（正常行為，唔會壞）。
+- **檔案係後備，唔係保證。** 測試 H 證明咗跨 sandbox 靠 userkeys 先成立；
+  檔案路徑只喺 Pyto 主 app 模式下先穩定。
 - **安全性**：呢個做法會執行網絡上下載嚟嘅 code。等同「你信任嗰個 repo」。
   repo 係你自己嘅所以冇問題，但如果將來 fork 咗或者用別人嘅 raw URL，
   要諗清楚。

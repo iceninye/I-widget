@@ -91,6 +91,34 @@ for n in ["SECONDARY_LABEL","SYSTEM_GREEN","SYSTEM_ORANGE","SYSTEM_RED","LABEL"]
     setattr(wd, f"COLOR_{n}", Color(f"const:{n}"))
 sys.modules["widgets"] = wd
 
+
+# ---------------------------------------------------------------- mock userkeys
+# 官方 userkeys = NSUserDefaults suite "group.pyto"，extension 同主 app 共用。
+# 呢個 mock 用一個全域 dict 模擬「跨執行持久」。
+UK_STORE = {}
+UK_BROKEN = False
+
+def _uk_get(key):
+    if UK_BROKEN:
+        raise RuntimeError("NSUserDefaults unavailable")
+    if key not in UK_STORE:
+        raise KeyError(key)          # 官方 get() 對冇呢個 key 會 raise KeyError
+    return UK_STORE[key]
+
+def _uk_set(value, key):
+    if UK_BROKEN:
+        raise RuntimeError("NSUserDefaults unavailable")
+    UK_STORE[key] = value
+
+def _uk_delete(key):
+    if key not in UK_STORE:
+        raise KeyError(key)
+    del UK_STORE[key]
+
+uk = types.ModuleType("userkeys")
+uk.get, uk.set, uk.delete = _uk_get, _uk_set, _uk_delete
+sys.modules["userkeys"] = uk
+
 # ---------------------------------------------------------------- fake GitHub
 SERVE = {}          # {"fp": "v1", "py": "<code>"}
 HITS = []
@@ -111,13 +139,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
     def log_message(self, *a): pass
 
-httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+class _Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+httpd = _Server(("127.0.0.1", 0), Handler)
 PORT = httpd.server_address[1]
-threading.Thread(target=httpd.serve_forever, daemon=True).start()
+SERVERS = []
+
+
+def _serve(server):
+    """起一個背景 thread 跑 server，並保留引用避免被 GC。"""
+    SERVERS.append(server)          # 保住 server 對象
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    SERVERS.append(thread)
+    return server
+
+
+_serve(httpd)
 BASE = f"http://127.0.0.1:{PORT}"
 
 # ---------------------------------------------------------------- 被測程式
@@ -145,12 +190,12 @@ def _text_of(component):
     kw = getattr(component, "_Component__kw", {})
     return args[0] if args else kw.get("text")
 
-def run_launcher(workdir):
+def run_launcher(workdir, reset_userkeys=True, base=None):
     """喺指定目錄跑 launcher，回傳 (顯示咗咩, 執行咗咩版本)。"""
     shutil.copy(LAUNCHER, os.path.join(workdir, "i_widget_launcher.py"))
     src = open(os.path.join(workdir, "i_widget_launcher.py")).read()
     src = src.replace('SOURCE = "https://raw.githubusercontent.com/iceninye/I-widget/main"',
-                      f'SOURCE = "{BASE}"')
+                      f'SOURCE = "{base or BASE}"')
     path = os.path.join(workdir, "i_widget_launcher.py")
     open(path, "w").write(src)
 
@@ -184,6 +229,7 @@ def check(name, cond, detail=""):
 print("\n【A】全新安裝 + 遠端有 v1")
 SERVE.update(fp="v1", py=GOOD_V1); HITS.clear()
 d = fresh()
+UK_STORE.clear()
 w, ver, err = run_launcher(d)
 check("A1 顯示咗 widget", w is not None, f"err={err}")
 check("A2 執行 v1", ver == "version v1", f"ver={ver}")
@@ -200,18 +246,19 @@ check("B2 完全冇打網絡", len(HITS) == 0, f"HITS={HITS}")
 # ================================================================ 情境 C
 print("\n【C】推咗個壞版本去 main → 必須拒絕，繼續行 v1")
 SERVE.update(fp="v2-broken", py=BROKEN); HITS.clear()
-# 清 mtime 令佢覺得夠鐘要查
-os.utime(os.path.join(d, "i_widget.cached.fingerprint"), (0, 0))
+# 過咗節流窗口，迫佢再查
+UK_STORE["i_widget.last_checked"] = 1.0  # 極舊 → 過咗節流窗口
 w, ver, err = run_launcher(d)
 check("C1 拒絕壞版本，仍行 v1", ver == "version v1", f"ver={ver} err={err}")
 check("C2 快取冇被污染", "v1" in open(os.path.join(d, "i_widget.cached.py")).read())
 check("C3 指紋冇被更新（下次會再試）",
-      open(os.path.join(d, "i_widget.cached.fingerprint")).read().strip() == "v1")
+      UK_STORE.get("i_widget.cached_fingerprint") == "v1"
+      and open(os.path.join(d, "i_widget.cached.fingerprint")).read().strip() == "v1")
 
 # ================================================================ 情境 D
 print("\n【D】好更新：v2")
 SERVE.update(fp="v2", py=GOOD_V2); HITS.clear()
-os.utime(os.path.join(d, "i_widget.cached.fingerprint"), (0, 0))
+UK_STORE["i_widget.last_checked"] = 1.0  # 極舊 → 過咗節流窗口
 w, ver, err = run_launcher(d)
 check("D1 執行咗 v2", ver == "version v2", f"ver={ver} err={err}")
 check("D2 快取已更新", "v2" in open(os.path.join(d, "i_widget.cached.py")).read())
@@ -226,6 +273,7 @@ check("E2 用返快取 v2", ver == "version v2", f"ver={ver}")
 # ================================================================ 情境 F
 print("\n【F】全新安裝 + 完全冇網絡 → 顯示離線 widget（唔會空白）")
 d2 = fresh()
+UK_STORE.clear()
 w, ver, err = run_launcher(d2)
 check("F1 顯示咗離線 widget", w is not None, f"err={err}")
 if w:
@@ -238,10 +286,11 @@ check("F3 reload 已排程（會自動再試）", len(RELOADS) == 1, f"{RELOADS}
 print("\n【G】404（遠端刪咗檔案）→ 唔會 crash")
 SERVE.update(fp=None, py=None)
 # 重開 server
-httpd2 = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+httpd2 = _Server(("127.0.0.1", 0), Handler)
 PORT2 = httpd2.server_address[1]
-threading.Thread(target=httpd2.serve_forever, daemon=True).start()
+_serve(httpd2)
 d3 = fresh()
+UK_STORE.clear()
 src = open(LAUNCHER).read().replace(
     'SOURCE = "https://raw.githubusercontent.com/iceninye/I-widget/main"',
     f'SOURCE = "http://127.0.0.1:{PORT2}"')
@@ -254,6 +303,54 @@ except Exception as e:
     err = e
 check("G1 冇 crash", err is None, f"err={type(err).__name__}: {err}")
 check("G2 顯示咗離線 widget", len(SHOWN) == 1)
+
+
+# ================================================================ 情境 H
+# 情境 E 關咗 server，H/I 需要服務器 → 用同一個 Handler 開返一個新 port
+httpd2 = _Server(("127.0.0.1", 0), Handler)
+PORT2 = httpd2.server_address[1]
+_serve(httpd2)
+BASE2 = f"http://127.0.0.1:{PORT2}"
+
+print("\n【H】userkeys 持久化：extension 每次 reload 係全新 sandbox")
+# 關鍵：每次 reload Pyto 會複製 script 去新路徑，所以工作目錄唔同、
+# 檔案快取會唔見。userkeys（NSUserDefaults suite）先可以跨 reload 保住。
+SERVE.update(fp="v1", py=GOOD_V1); HITS.clear()
+UK_STORE.clear()
+d_first = fresh()
+w, ver, err = run_launcher(d_first, base=BASE2)
+check("H1 第一次執行 v1", ver == "version v1", f"ver={ver}")
+check("H2 userkeys 有存程式碼", bool(UK_STORE.get("i_widget.cached_code")))
+check("H3 userkeys 有存指紋", UK_STORE.get("i_widget.cached_fingerprint") == "v1")
+
+# 模擬下一次 reload：全新目錄（檔案快取冇），但 userkeys 應該仲喺度
+HITS.clear()
+d_second = fresh()
+check("H4 新目錄冇檔案快取", not os.path.exists(os.path.join(d_second, "i_widget.cached.py")))
+w, ver, err = run_launcher(d_second, reset_userkeys=False, base=BASE2)
+check("H5 靠 userkeys 讀到 v1（冇重新落載）", ver == "version v1", f"ver={ver}")
+check("H6 完全冇打網絡", len(HITS) == 0, f"HITS={HITS}")
+
+# ================================================================ 情境 I
+print("\n【I】userkeys 壞咗 → 自動 fallback 檔案")
+SERVE.update(fp="v1", py=GOOD_V1)   # G 情境 set 咗 None，要重新擺返內容
+HITS.clear()
+UK_STORE.clear()
+UK_BROKEN = True
+try:
+    d3b = fresh()
+    w, ver, err = run_launcher(d3b, base=BASE2)
+    check("I1 userkeys 壞咗仍執行到 v1", ver == "version v1", f"ver={ver} err={err}")
+    check("I2 已改用檔案快取", os.path.exists(os.path.join(d3b, "i_widget.cached.py")))
+
+    # 節流：userkeys 壞咗，應該靠檔案 CACHED_CHECKED 判斷
+    # （touch_checked 兩邊都會寫，檔案嗰個剛寫過 → 應該唔打網絡）
+    HITS.clear()
+    w, ver, err = run_launcher(d3b, base=BASE2)
+    check("I3 靠檔案 mtime 節流，零網絡", len(HITS) == 0, f"HITS={HITS}")
+    check("I4 仍然係 v1", ver == "version v1", f"ver={ver}")
+finally:
+    UK_BROKEN = False
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")

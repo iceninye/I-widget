@@ -31,13 +31,137 @@ WIDGET_PY = SOURCE + "/i_widget.py"
 # Extension 記憶體緊，timeout 要短。抓唔到就當今次冇更新。
 TIMEOUT = 8
 
-# 快取放喺 Pyto 自己嘅目錄（同 widget script 同一層），唔會被 iOS 清理。
+# 最低檢查間隔。防低電／多次 reload 撞埋一齊打 GitHub。
+CHECK_INTERVAL = 10 * 60
+
+# 快取 key（存喺 Pyto 官方 userkeys = NSUserDefaults suite "group.pyto"，
+# extension 同主 app 共用，唔會被 iOS 清理）。
+KEY_CODE = "i_widget.cached_code"
+KEY_FINGERPRINT = "i_widget.cached_fingerprint"
+KEY_CHECKED = "i_widget.last_checked"
+
+# 後備儲存：檔案。擺喺 launcher 同一層，方便人手檢查／刪除。
+# 冇 userkeys（例如舊版 Pyto）或者寫入被拒，就 fallback 呢度。
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHED_PY = os.path.join(CACHE_DIR, "i_widget.cached.py")
 CACHED_FP = os.path.join(CACHE_DIR, "i_widget.cached.fingerprint")
+CACHED_CHECKED = os.path.join(CACHE_DIR, "i_widget.last_checked")
 
-# 最低檢查間隔。防低電／多次 reload 撞埋一齊打 GitHub。
-CHECK_INTERVAL = 10 * 60
+# userkeys 係 JSON 字典，太大會唔穩陣。超過呢個大小就淨係用檔案。
+MAX_USERKEYS_BYTES = 100 * 1024
+
+
+# --- 儲存層 -------------------------------------------------------------
+# 兩種儲存，userkeys 優先（官方、extension 同 app 共用、唔會被清理），
+# 檔案後備。兩者都失敗都唔會 crash —— 寧願每次重新落載。
+
+
+def _userkeys():
+    try:
+        import userkeys
+
+        return userkeys
+    except Exception:
+        return None
+
+
+def _keys_get(key):
+    """讀 userkeys。回傳 None 代表「冇記錄或者讀唔到」。
+
+    只在真係冇記錄時先返回 None；成功讀到 0 或者空字串都照樣返回。
+    我們只會存 str / float，所以 None 唔會同有效值撞。
+    """
+    keys = _userkeys()
+    if keys is None:
+        return None
+    try:
+        return keys.get(key)
+    except Exception:
+        # KeyError = 冇呢個 key；其他 = userkeys 壞咗。都當冇記錄。
+        return None
+
+
+def load_code():
+    """讀快取程式碼。userkeys → 檔案 → None。"""
+    code = _keys_get(KEY_CODE)
+    if code:
+        return code
+    return _read(CACHED_PY)
+
+
+def load_fingerprint():
+    value = _keys_get(KEY_FINGERPRINT)
+    if value:
+        return value
+    return _read(CACHED_FP)
+
+
+def load_checked():
+    """上次檢查更新嘅時間（unix timestamp）。"""
+    value = _keys_get(KEY_CHECKED)
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        return float(_read(CACHED_CHECKED) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def save(code, fingerprint, checked):
+    """一次過寫晒三樣。返回 True 代表至少有一個後端成功。
+
+    兩者都失敗唔會 raise —— 寧願下次重新落載，都唔好令 widget 死掉。
+    """
+    stored = False
+
+    keys = _userkeys()
+    if keys is not None:
+        try:
+            if len(code.encode("utf-8")) <= MAX_USERKEYS_BYTES:
+                keys.set(code, KEY_CODE)
+                keys.set(fingerprint, KEY_FINGERPRINT)
+            keys.set(checked, KEY_CHECKED)
+            stored = True
+        except Exception as error:
+            _log(f"userkeys 寫入失敗，改用檔案：{error}")
+
+    if _write(CACHED_PY, code):
+        _write(CACHED_FP, fingerprint)
+        _write(CACHED_CHECKED, str(checked))
+        stored = True
+
+    if not stored:
+        _log("警告：userkeys 同檔案都寫唔到，下次會重新落載")
+    return stored
+
+
+def touch_checked(checked):
+    """淨係更新檢查時間（例如：遠端冇新版本，但仍然問過）。"""
+    keys = _userkeys()
+    if keys is not None:
+        try:
+            keys.set(checked, KEY_CHECKED)
+        except Exception:
+            pass
+    _write(CACHED_CHECKED, str(checked))
+
+
+def clear_cache():
+    keys = _userkeys()
+    if keys is not None:
+        for key in (KEY_CODE, KEY_FINGERPRINT, KEY_CHECKED):
+            try:
+                keys.delete(key)
+            except Exception:
+                pass
+    for path in (CACHED_PY, CACHED_FP, CACHED_CHECKED):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # --- 工具 ---------------------------------------------------------------
@@ -80,12 +204,11 @@ def _fetch(url):
 
 
 def _should_check():
-    """用快取指紋檔的 mtime 做節流，避免每次 reload 都打網絡。"""
-    try:
-        age = time.time() - os.path.getmtime(CACHED_FP)
-        return age > CHECK_INTERVAL
-    except Exception:
-        return True  # 冇快取 = 即刻查一次
+    """上次檢查過就唔好即刻再打網絡。"""
+    checked = load_checked()
+    if not checked:
+        return True  # 冇記錄 = 即刻查一次
+    return (time.time() - checked) > CHECK_INTERVAL
 
 
 # --- 更新邏輯 -----------------------------------------------------------
@@ -99,17 +222,16 @@ def _try_update():
     if remote_fp is None:
         return False
 
-    local_fp = _read(CACHED_FP)
-    if local_fp == remote_fp:
+    if remote_fp == load_fingerprint():
         _log("已經係最新版")
-        # 節流：順手 refresh mtime
-        _write(CACHED_FP, remote_fp)
+        touch_checked(time.time())  # 問過咗，唔使十秒後再問
         return False
 
     _log(f"發現新版 {remote_fp}，落載中")
     code = _fetch(WIDGET_PY)
     if not code or len(code) < 200:
         _log("程式碼下載失敗或太短，維持舊快取")
+        touch_checked(time.time())
         return False
 
     # 語法檢查：壞咗的 commit 唔好污染快取。
@@ -117,11 +239,12 @@ def _try_update():
         compile(code, WIDGET_PY, "exec")
     except SyntaxError as error:
         _log(f"新版本語法錯（{error}），維持舊快取")
+        # 指紋刻意唔更新 → 等你修好再 push，下次 reload 會自動再試。
+        # 但要更新檢查時間，否則每次 reload 都撲去 GitHub 撞同一個壞版本。
+        touch_checked(time.time())
         return False
 
-    if not _write(CACHED_PY, code):
-        return False
-    _write(CACHED_FP, remote_fp)
+    save(code, remote_fp, time.time())
     _log("已更新到本地快取")
     return True
 
@@ -133,18 +256,21 @@ def _load_code():
     except Exception as error:
         _log(f"更新過程出錯，繼續用快取：{error}")
 
-    code = _read(CACHED_PY)
+    code = load_code()
     if code:
         return code, "cache"
 
-    # 連快取都冇（例如第一次執行）→ 直接拉一次，唔寫檔。
+    # 連快取都冇（例如第一次執行）→ 直接拉一次，順手寫入快取。
     code = _fetch(WIDGET_PY)
     if code and len(code) >= 200:
         try:
             compile(code, WIDGET_PY, "exec")
         except SyntaxError:
-            code = None
-    return code, "remote"
+            return None, None
+        save(code, "unverified", time.time())
+        return code, "remote"
+
+    return None, None
 
 
 # --- 萬一連程式碼都攞唔到 -----------------------------------------------
