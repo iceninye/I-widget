@@ -37,7 +37,7 @@ except Exception as e:  # pragma: no cover - 失敗會喺下面報
     err = e
 check("W1 冇 crash", err is None, f"{type(err).__name__}: {err}" if err else "")
 check("W2 show_widget 叫咗一次", len(SHOWN) == 1, f"{SHOWN}")
-check("W3 reload 30 分鐘", RELOADS == [timedelta(minutes=30)], f"{RELOADS}")
+check("W3 reload 唔超過 30 分鐘", len(RELOADS) == 1 and timedelta(0) < RELOADS[0] <= timedelta(minutes=30), f"{RELOADS}")
 
 if SHOWN:
     w = SHOWN[0]
@@ -106,48 +106,48 @@ def fresh_store(**keys):
     UK_STORE.update({f"i_widget.{k}": v for k, v in keys.items()})
 
 
-def font_less(w):
-    return all("font" not in c_kw(c) for r in w.small_layout.rows
-               if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate")
+def all_time_style(w):
+    nodes = [c for r in w.small_layout.rows if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"]
+    return bool(nodes) and all(c_kw(c).get("style") == 3 for c in nodes)   # DATE_STYLE_TIME
 
 
 # 第一次死：只記一筆，唔停用（可能係多個 process 同時死造成嘅誤判）
-fresh_store(inflight=f"clock_font|{_time.time() - 60}")
+fresh_store(inflight=f"clock_timer|{_time.time() - 60}")
 g["_recover_from_crash"]()
 check("R2a 偵測後只記 1 次，未停用",
-      UK_STORE.get("i_widget.strikes") == "clock_font:1" and not UK_STORE.get("i_widget.banned"),
+      UK_STORE.get("i_widget.strikes") == "clock_timer:1" and not UK_STORE.get("i_widget.banned"),
       f"{UK_STORE.get('i_widget.strikes')!r} / {UK_STORE.get('i_widget.banned')!r}")
-fresh_store(inflight=f"clock_font|{_time.time() - 60}")
+fresh_store(inflight=f"clock_timer|{_time.time() - 60}")
 w = run_widget()
 check("R1 照樣 show_widget", w is not None)
-check("R2 死一次唔停用", "clock_font" not in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
+check("R2 死一次唔停用", "clock_timer" not in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
 check("R5 順利砌完後標記已清", UK_STORE.get("i_widget.inflight") == "")
 check("R5b 成功一次就清零 strikes", UK_STORE.get("i_widget.strikes") == "")
 
 # 連續死兩次：停用，自動換下一個寫法
-fresh_store(inflight=f"clock_font|{_time.time() - 60}", strikes="clock_font:1")
+fresh_store(inflight=f"clock_timer|{_time.time() - 60}", strikes="clock_timer:1")
 w = run_widget()
-check("R3 連續死兩次 → 停用", "clock_font" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
+check("R3 連續死兩次 → 停用", "clock_timer" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
 check("R3b 自動換下一個寫法（仍然用 DynamicDate）", "DynamicDate" in kinds(w.small_layout), f"{kinds(w.small_layout)}")
-check("R3c 唔再帶 font 參數", font_less(w))
+check("R3c 停用計時器後改用 TIME 樣式", all_time_style(w))
 w = run_widget()
-check("R6 之後每輪都繼續跳過 clock_font", font_less(w))
+check("R6 之後每輪都繼續跳過 clock_timer", all_time_style(w))
 
 # 全部 DynamicDate 寫法都死過 → 靜態文字，仍然有時間
-fresh_store(banned="clock_font,clock_color,clock_plain")
+fresh_store(banned="clock_timer,clock_font,clock_color,clock_plain")
 w = run_widget()
 check("R6b 全部停用 → 唔用 DynamicDate", "DynamicDate" not in kinds(w.small_layout), f"{kinds(w.small_layout)}")
 check("R6c 靜態時間照出", any(":" in (text_of(c) or "") for r in w.small_layout.rows
       if isinstance(r, list) for c in r if isinstance(c, Text)))
 
 # 標記好新鮮 = 另一個 process 同時跑緊，唔係崩潰
-fresh_store(inflight=f"clock_font|{_time.time()}", strikes="clock_font:1")
+fresh_store(inflight=f"clock_timer|{_time.time()}", strikes="clock_timer:1")
 w = run_widget()
-check("R7 新鮮標記唔會誤殺", "clock_font" not in UK_STORE.get("i_widget.banned", ""))
+check("R7 新鮮標記唔會誤殺", "clock_timer" not in UK_STORE.get("i_widget.banned", ""))
 check("R8 DynamicDate 照用", "DynamicDate" in kinds(w.small_layout))
 
 # 所有有風險元件都停用，widget 仍然要有內容
-fresh_store(banned="clock_font,clock_color,clock_plain,icon,spacer,divider,background")
+fresh_store(banned="clock_timer,clock_font,clock_color,clock_plain,icon,spacer,divider,background")
 w = run_widget()
 big = [text_of(c) for r in w.large_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
 check("R9 全部停用都出到大尺寸內容", w is not None and "電量" in big and "儲存空間" in big, f"{big}")
@@ -222,8 +222,8 @@ class Probe(mock_pyto.WidgetLayout):
         seen.append(UK_STORE.get("i_widget.inflight", ""))
         return super().add_row(row, **kw)
 pl = Probe()
-g["place_clock"](pl, datetime.now(), 44, [g["spacer"]()])
-check("N3 add_row 時標記指向 clock_font", seen and seen[0].startswith("clock_font|"), f"{seen}")
+g["place_clock"](pl, datetime(2026, 10, 23, 14, 5, 30), 44, [g["spacer"]()])
+check("N3 add_row 時標記指向 clock_timer", seen and seen[0].startswith("clock_timer|"), f"{seen}")
 check("N4 add_row 後標記已清", UK_STORE.get("i_widget.inflight") == "")
 
 # DynamicDate 一加入就擲例外（Python 層面）→ 三種寫法逐個試，最後用靜態文字，例外唔會穿出去
@@ -234,15 +234,52 @@ class RejectsDynamicDate(mock_pyto.WidgetLayout):
         return super().add_row(row, **kw)
 UK_STORE.clear(); UK_STORE["i_widget.ban_epoch"] = EPOCH
 rl = RejectsDynamicDate()
-g["place_clock"](rl, datetime.now(), 44, [g["spacer"]()])
+g["place_clock"](rl, datetime(2026, 10, 23, 14, 5, 30), 44, [g["spacer"]()])
 trace2 = UK_STORE.get("i_widget.trace2", "")
-check("N5 三種 DynamicDate 寫法都試過", all(f"{n} 爆" in trace2 for n in ("clock_font", "clock_color", "clock_plain")), trace2)
+check("N5 四種 DynamicDate 寫法都試過", all(f"{n} 爆" in trace2 for n in ("clock_timer", "clock_font", "clock_color", "clock_plain")), trace2)
 check("N6 最後用靜態時間，行有內容", len(rl.rows) == 1 and any(":" in (text_of(c) or "") for c in rl.rows[0] if isinstance(c, Text)),
       f"{rl.rows}")
 check("N6b 標記已清", UK_STORE.get("i_widget.inflight") == "")
 
 check("N7 iPhone 唔砌 extra large", g["family_names"](False) == ("small_layout", "medium_layout", "large_layout"))
 check("N8 iPad 砌 extra large", "extra_large_layout" in g["family_names"](True))
+
+print("\n【T】即時時鐘（計時器寫法）")
+from mock_pyto import DATE_STYLE_TIMER, DATE_STYLE_TIME  # noqa: E402
+
+
+def clock_nodes(layout):
+    return [c for r in layout.rows if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"]
+
+
+noon = datetime(2026, 10, 23, 14, 5, 30)
+fresh_store()
+g["_BANNED_NOW"].clear()
+tl = mock_pyto.WidgetLayout()
+g["place_clock"](tl, noon, 44, [g["spacer"]()], timer_size=30)
+node = clock_nodes(tl)[0]
+kw = c_kw(node)
+check("T1 日間用 TIMER 樣式", kw.get("style") == DATE_STYLE_TIMER, f"{kw}")
+check("T2 由今日 00:00 起數", node._Component__args[0] == datetime(2026, 10, 23, 0, 0, 0), f"{node._Component__args}")
+check("T3 用較細字體（hh:mm:ss 較闊）", kw["font"].size == 30, f"{kw['font'].size}")
+
+night = datetime(2026, 10, 23, 0, 30, 0)
+tl = mock_pyto.WidgetLayout()
+g["place_clock"](tl, night, 44, [], timer_size=30)
+kw = c_kw(clock_nodes(tl)[0])
+check("T4 00:xx 唔用計時器（會顯示成分:秒）", kw.get("style") == DATE_STYLE_TIME, f"{kw}")
+
+g["_BANNED_NOW"].clear(); g["_BANNED_NOW"].add("clock_timer")
+tl = mock_pyto.WidgetLayout()
+g["place_clock"](tl, noon, 44, [], timer_size=30)
+check("T5 計時器死過 → 自動退返 TIME 樣式", c_kw(clock_nodes(tl)[0]).get("style") == DATE_STYLE_TIME)
+g["_BANNED_NOW"].clear()
+
+nd = g["next_reload_delay"]
+check("T6 日間 reload 30 分鐘", nd(datetime(2026, 10, 23, 14, 0, 0)) == timedelta(minutes=30))
+check("T7 23:50 要趕 00:00:20 reload", nd(datetime(2026, 10, 23, 23, 50, 0)) == timedelta(minutes=10, seconds=20), f"{nd(datetime(2026, 10, 23, 23, 50, 0))}")
+check("T8 00:40 要趕 01:00:20 reload", nd(datetime(2026, 10, 23, 0, 40, 0)) == timedelta(minutes=20, seconds=20), f"{nd(datetime(2026, 10, 23, 0, 40, 0))}")
+check("T9 00:00:20 之後唔會出負數", nd(datetime(2026, 10, 23, 0, 0, 20)) > timedelta(0))
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")

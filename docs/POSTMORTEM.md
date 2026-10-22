@@ -76,7 +76,9 @@ Process 死咗，`try/except` 完全冇機會行。所以喺「會碰 native 嘅
 iPhone 唔會用到 extra large，所以只砌 small／medium／large；亦減少咗每個元件一次嘅 userkeys 寫入。
 
 ### 3. 時間元件
-`clock()` 依次試：只帶 font → 只帶 color → 全部預設 → 靜態文字。「font+color」寫法已確認致命，唔再試。
+`DATE_STYLE_TIME` 只顯示傳入日期嘅時間，**唔會自己跳動**（舊文件／註解講錯咗），所以時鐘會停喺上次 reload。
+`place_clock()` 依次試：計時器（`DATE_STYLE_TIMER`，由 00:00 起數，即時跳動，`h:mm:ss`；00:00–00:59 唔用）→ TIME＋font → TIME＋color → TIME → 靜態文字。
+「font+color」寫法已確認致命，唔再試。各寫法有各自停用標記。
 
 ---
 
