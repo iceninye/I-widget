@@ -461,20 +461,29 @@ def status_row(title, value, symbol, tint, value_color=PRIMARY):
 
 
 def clock(now, size):
-    # style=DATE_STYLE_TIME 交畀系統自動更新，唔需要靠 reload 跳秒。
-    node = _risky(
-        "clock",
-        lambda: wd.DynamicDate(
-            now,
-            style=wd.DATE_STYLE_TIME,
-            font=wd.Font.bold_system_font_of_size(size),
-            color=PRIMARY,
-        ),
-    )
-    if node is None:
-        # 後備：靜態時間（要靠 reload 更新，但好過冇）。
-        node = label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
-    return node
+    """大字時間。優先用 DynamicDate（系統自動跳動），死過就換下一種寫法。
+
+    真機足跡（2026-10-22，兩個獨立 process）：「rich」寫法
+    ``DynamicDate(now, style=TIME, font=…, color=…)`` 一建就令 process 被殺。
+    所以只保留較簡單嘅寫法，由豐富到簡單逐個試；每個寫法有自己嘅停用標記，
+    死一次就跳去下一個（見 ``_risky``）。全部死晒就用靜態文字。
+    """
+    font = lambda: wd.Font.bold_system_font_of_size(size)
+    for name, build in (
+        ("clock_font", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, font=font())),
+        ("clock_color", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, color=PRIMARY)),
+        ("clock_plain", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME)),
+    ):
+        try:
+            node = _risky(name, build)
+        except BaseException as error:
+            _crumb(f"{name} 爆 {type(error).__name__}: {error}")
+            continue
+        if node is not None:
+            return node
+    # 後備：靜態時間（要靠 reload 更新，但好過冇）。
+    _crumb("clock 用靜態文字")
+    return label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
 
 
 def weekday_label(now, size=13):

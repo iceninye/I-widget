@@ -89,33 +89,46 @@ def run_widget():
     return SHOWN[0] if SHOWN else None
 
 
+def c_kw(component):
+    return getattr(component, "_Component__kw", {})
+
+
 def kinds(layout):
     return {type(c).__name__ for row in layout.rows if isinstance(row, list) for c in row}
 
 
 # 上次喺 clock 死咗（標記喺 60 秒前）
 UK_STORE.clear()
-UK_STORE["i_widget.inflight"] = f"clock|{_time.time() - 60}"
+UK_STORE["i_widget.inflight"] = f"clock_font|{_time.time() - 60}"
 w = run_widget()
 check("R1 照樣 show_widget", w is not None)
-check("R2 clock 被記入停用", "clock" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
-check("R3 唔再用 DynamicDate", w is not None and "DynamicDate" not in kinds(w.small_layout), f"{kinds(w.small_layout)}")
-check("R4 後備靜態時間照出", w is not None and any(":" in (text_of(c) or "") for r in w.small_layout.rows
-      if isinstance(r, list) for c in r if isinstance(c, Text)))
+check("R2 clock_font 被記入停用", "clock_font" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
+check("R3 自動換下一個寫法（仍然用 DynamicDate）", w is not None and "DynamicDate" in kinds(w.small_layout), f"{kinds(w.small_layout)}")
+check("R3b 唔再帶 font 參數", w is not None and all("font" not in c_kw(c) for r in w.small_layout.rows
+      if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"))
 check("R5 順利砌完後標記已清", UK_STORE.get("i_widget.inflight") == "")
 w = run_widget()
-check("R6 之後每輪都繼續跳過", "DynamicDate" not in kinds(w.small_layout))
+check("R6 之後每輪都繼續跳過 clock_font", all("font" not in c_kw(c) for r in w.small_layout.rows
+      if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"))
+
+# 全部 DynamicDate 寫法都死過 → 靜態文字，仍然有時間
+UK_STORE.clear()
+UK_STORE["i_widget.banned"] = "clock_font,clock_color,clock_plain"
+w = run_widget()
+check("R6b 全部停用 → 唔用 DynamicDate", "DynamicDate" not in kinds(w.small_layout), f"{kinds(w.small_layout)}")
+check("R6c 靜態時間照出", any(":" in (text_of(c) or "") for r in w.small_layout.rows
+      if isinstance(r, list) for c in r if isinstance(c, Text)))
 
 # 標記好新鮮 = 另一個 process 同時跑緊，唔係崩潰
 UK_STORE.clear()
-UK_STORE["i_widget.inflight"] = f"clock|{_time.time()}"
+UK_STORE["i_widget.inflight"] = f"clock_font|{_time.time()}"
 w = run_widget()
-check("R7 新鮮標記唔會誤殺", "clock" not in UK_STORE.get("i_widget.banned", ""))
+check("R7 新鮮標記唔會誤殺", "clock_font" not in UK_STORE.get("i_widget.banned", ""))
 check("R8 DynamicDate 照用", "DynamicDate" in kinds(w.small_layout))
 
 # 所有有風險元件都停用，widget 仍然要有內容
 UK_STORE.clear()
-UK_STORE["i_widget.banned"] = "clock,icon,spacer,divider,background"
+UK_STORE["i_widget.banned"] = "clock_font,clock_color,clock_plain,icon,spacer,divider,background"
 w = run_widget()
 big = [text_of(c) for r in w.large_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
 check("R9 全部停用都出到大尺寸內容", w is not None and "電量" in big and "儲存空間" in big, f"{big}")
