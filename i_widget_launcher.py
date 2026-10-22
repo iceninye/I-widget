@@ -32,7 +32,10 @@ WIDGET_PY = SOURCE + "/i_widget.py"
 TIMEOUT = 8
 
 # 最低檢查間隔。防低電／多次 reload 撞埋一齊打 GitHub。
-CHECK_INTERVAL = 10 * 60
+#
+# 配合 widget 本身 30 分鐘一次嘅 reload，呢個窗口唔應該細過 reload 間隔 ——
+# 否則每個新 sandbox 都會問一次 GitHub，等於完全冇節流作用。
+CHECK_INTERVAL = 30 * 60
 
 # 快取 key（存喺 Pyto 官方 userkeys = NSUserDefaults suite "group.pyto"，
 # extension 同主 app 共用，唔會被 iOS 清理）。
@@ -135,6 +138,8 @@ def save(code, fingerprint, checked):
 
     if not stored:
         _log("警告：userkeys 同檔案都寫唔到，下次會重新落載")
+    else:
+        _yield_after_write()
     return stored
 
 
@@ -147,6 +152,7 @@ def touch_checked(checked):
         except Exception:
             pass
     _write(CACHED_CHECKED, str(checked))
+    _yield_after_write()
 
 
 def clear_cache():
@@ -165,6 +171,24 @@ def clear_cache():
 
 
 # --- 工具 ---------------------------------------------------------------
+
+# iOS 27 會把「寫入之後即刻要求 render」合併成同一次執行，結果 widget 顯示的
+# 係寫入之前嘅狀態。Apple 建議寫入之後 yield 一下，等 file coordinator 發佈。
+# 0.2 秒對一個 30 分鐘 reload 嘅 widget 完唔構成成本。
+COALESCE_DELAY = 0.2
+
+
+def _yield_after_write():
+    """寫入持久層之後叫一次，令系統有機會讀到新值。"""
+    if not COALESCE_DELAY:
+        return
+    try:
+        from time import sleep
+
+        sleep(COALESCE_DELAY)
+    except Exception:
+        pass
+
 
 def _log(message):
     """Extension 入面 print 可能唔見得，寫去 console 都係有的。"""
@@ -292,7 +316,7 @@ def _show_offline_widget(reason):
             ])
             layout.add_vertical_spacer()
 
-        wd.schedule_next_reload(timedelta(minutes=15))
+        wd.schedule_next_reload(timedelta(minutes=30))
         wd.show_widget(widget)
         _log(f"已顯示離線 widget：{reason}")
     except Exception as error:

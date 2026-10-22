@@ -167,6 +167,7 @@ BASE = f"http://127.0.0.1:{PORT}"
 
 # ---------------------------------------------------------------- 被測程式
 LAUNCHER = "/home/wsluser/I-widget/i_widget_launcher.py"
+launcher_src = open(LAUNCHER).read()
 GOOD_V1 = '''import widgets as wd
 VERSION = "v1"
 widget = wd.Widget()
@@ -351,6 +352,36 @@ try:
     check("I4 仍然係 v1", ver == "version v1", f"ver={ver}")
 finally:
     UK_BROKEN = False
+
+
+# ================================================================ 情境 J
+print("\n【J】iOS 27 適應：reload 預算 + coalescing 防護")
+import re as _re
+
+# J1/J2: i_widget.py 嘅 reload 間隔要喺 WidgetKit 每日預算內
+# Apple: 40–70 reloads per 24h。15 分鐘 = 96 次 = 超標。
+widget_src = open("/home/wsluser/I-widget/i_widget.py").read()
+m = _re.search(r"RELOAD_INTERVAL\s*=\s*timedelta\(minutes=(\d+)\)", widget_src)
+minutes = int(m.group(1)) if m else 0
+per_day = int(24 * 60 / minutes) if minutes else 999
+check("J1 reload 間隔有設定", minutes > 0, f"minutes={minutes}")
+check(f"J2 {minutes} 分鐘 = {per_day} 次/日，喺 Apple 40–70 預算內", per_day <= 70, f"per_day={per_day}")
+
+# J3: launcher 嘅 CHECK_INTERVAL 唔應該細過 reload 間隔
+# （細過的話每個新 sandbox 都會問 GitHub，節流失效）
+m2 = _re.search(r"CHECK_INTERVAL\s*=\s*(\d+)\s*\*\s*60", launcher_src)
+check_secs = int(m2.group(1)) * 60 if m2 else 0
+check("J3 CHECK_INTERVAL 唔細過 reload 間隔",
+      check_secs >= minutes * 60, f"CHECK_INTERVAL={check_secs}s, reload={minutes * 60}s")
+
+# J4: coalescing 防護存在，而且會喺寫入之後叫
+check("J4 有 coalescing 防護（_yield_after_write）",
+      "_yield_after_write" in launcher_src)
+save_body = launcher_src[launcher_src.find("def save("):launcher_src.find("def touch_checked")]
+check("J5 save() 寫入之後有 yield", "_yield_after_write()" in save_body)
+
+# J6: 離線 widget 都用同一個間隔，唔會離線時問得更密
+check("J6 離線 widget 用 30 分鐘", "timedelta(minutes=30)" in launcher_src)
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")

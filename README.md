@@ -80,7 +80,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | `i_widget_launcher.py` | 自動更新啟動器，**widget 指向嘅係佢** | 幾乎唔使 |
 | `i_widget.fingerprint` | 版本指紋（SHA256 前綴） | GitHub Action 自動生成 |
 | `make_fingerprint.py` | 手動重算指紋 | 唔使 |
-| `test_launcher.py` | 更新邏輯測試（9 種情境，28 項斷言） | 改 launcher 時 |
+| `test_launcher.py` | 更新邏輯測試（10 種情境，34 項斷言） | 改 launcher 時 |
 | `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
 
@@ -91,7 +91,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 ```bash
 python3 make_fingerprint.py    # 重算指紋（正常唔使，Action 會自動做）
-python3 test_launcher.py       # 28 項斷言，確認更新邏輯冇壞
+python3 test_launcher.py       # 34 項斷言，確認更新邏輯冇壞
 git commit -am "..." && git push
 ```
 

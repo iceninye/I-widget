@@ -145,7 +145,7 @@ Widget 要指向 **`i_widget_launcher.py`**，唔再係 `i_widget.py`。
 
 ## 驗證
 
-`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 **9 種情境共 28 項斷言**，
+`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 **10 種情境共 34 項斷言**，
 全部通過：
 
 | 情境 | 測咩 |
@@ -158,7 +158,8 @@ Widget 要指向 **`i_widget_launcher.py`**，唔再係 `i_widget.py`。
 | F | 全新 + 完全冇網絡：顯示「更新失敗」、已排程自動再試 |
 | G | 404：唔 crash、顯示離線 widget |
 | H | **userkeys 持久化**：全新 sandbox 都讀到快取、零網絡 |
-| I | **userkeys 壞咗**：自動 fallback 檔案、照樣更新到 v2 |
+| I | **userkeys 壞咩**：自動 fallback 檔案、照樣更新到 v2 |
+| J | **iOS 27**：reload 間隔喺 WidgetKit 預算內、CHECK_INTERVAL 唔細過 reload、coalescing 防護存在 |
 
 ```bash
 python3 test_launcher.py
@@ -183,3 +184,41 @@ python3 test_launcher.py
 - **安全性**：呢個做法會執行網絡上下載嚟嘅 code。等同「你信任嗰個 repo」。
   repo 係你自己嘅所以冇問題，但如果將來 fork 咗或者用別人嘅 raw URL，
   要諗清楚。
+## iOS 27 適應
+
+WidgetKit 唔係「我要求幾耐就幾耐」。系統用一個**每日預算**分配 reload，
+Apple 官方講明一般用家每日 40–70 次（大約 15–60 分鐘一次）。
+
+我哋原本設 15 分鐘，等於要求 96 次/日 —— **超咗上限**。
+超標嘅後果唔係更新得快，而係被系統 throttle 同 coalesce，得嚟變更慢。
+iOS 27 更加收緊咗記憶體同電力預算，overshoot 嘅 widget 會被更快 throttle。
+
+### 已改：reload 30 分鐘
+
+| | 改之前 | 改之後 |
+|---|---|---|
+| `RELOAD_INTERVAL` | 15 分鐘 | **30 分鐘** |
+| 每日 reload | 96 次（超標） | **48 次（預算內）** |
+| `CHECK_INTERVAL` | 10 分鐘 | **30 分鐘** |
+
+`CHECK_INTERVAL` 要跟住改，因為每個新 sandbox 都靠 userkeys 睇返上次
+檢查時間 —— 如果窗口細過 reload 間隔，每個新 sandbox 都會問一次
+GitHub，節流等於冇。測試 J3 專門守住呢一點。
+
+實時嘅嘢其實唔依賴 reload：時間交咗畀 `DynamicDate`，由系統自己跳。
+reload 只需攞電量、儲存空間、記憶體呢類慢變資料，半個鐘一次綽綽有餘。
+
+### 已加：coalescing 防護
+
+iOS 27 會將「寫入之後即刻要求 render」合併成同一次執行，結果 widget
+顯示嘅係寫入**之前**嘅狀態。Apple 建議寫入之後 yield 一下，
+等 file coordinator 發佈。
+
+`save()` 同 `touch_checked()` 寫入之後會叫 `_yield_after_write()`
+（預設 0.2 秒）。對一個 30 分鐘 reload 嘅 widget，呢個成本可以忽略。
+
+### 暫時做唔到：`systemExtraLargePortrait`
+
+iOS 27 新增咗呢個 widget family，但 Pyto 而家只支援四種
+（systemSmall / systemMedium / systemLarge / systemExtraLarge），
+冇對應嘅 portrait 變體。要支援的話要改 Pyto 本體，唔喺本 repo 範圍。

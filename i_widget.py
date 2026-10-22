@@ -38,7 +38,16 @@ def _patch_color_dynamic():
 _patch_color_dynamic()
 
 # 時間由系統自動跳動（DynamicDate），其餘系統資訊每次 reload 重新讀取。
-RELOAD_INTERVAL = timedelta(minutes=15)
+#
+# 30 分鐘唔係隨意揀：WidgetKit 用「每日預算」分配 reload，Apple 官方講明
+# 一般用家每日 40–70 次（大約 15–60 分鐘一次）。15 分鐘等於要求 96 次/日，
+# 超咗上限，結果唔係更新得快，而係被系統 throttle／coalesce，得嚟變慢。
+# iOS 27 更加收緊咗記憶體同電力預算，overshoot 嘅 widget 會被更快 throttle。
+#
+# 30 分鐘 = 48 次/日，穩穩喺預算內。以電量／儲存空間呢類資料來講，
+# 半個鐘更新一次已經夠 — 真正要實時嘅係時間，而時間交畀 DynamicDate，
+# 唔使靠 reload。
+RELOAD_INTERVAL = timedelta(minutes=30)
 
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
