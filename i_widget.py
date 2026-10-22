@@ -120,7 +120,7 @@ TRACE_MAX_LINES = 40
 
 # 停用名單嘅版本。改動元件寫法（或者之前有誤判）時 +1，
 # 每部機第一次行新版會自動清走舊名單，用戶唔使手動 userkeys.set。
-BAN_EPOCH = 2
+BAN_EPOCH = 3
 
 _BANNED_NOW = set()
 
@@ -195,12 +195,21 @@ def _recover_from_crash():
 
 
 def _risky(name, build):
-    """建一個有風險嘅元件。被停用就回傳 None（由呼叫者用後備）。"""
+    """執行一個會碰 native 嘅操作（add_row／set_background…）。被停用就回傳 None。
+
+    ⚠️ 標記必須包住「真正碰 native 嘅一刻」，唔係包住元件建構：
+    Pyto 嘅 Text／SystemSymbol／DynamicDate／Spacer 建構時只係純 Python，
+    native 物件係 ``layout.add_row()`` 先砌。標記放錯位會令 process 死喺
+    後面某個 add_row 時，錯怪最近建構嘅元件（spacer 就係咁被誤判停用）。
+    成功就即刻清標記，所以殘留嘅標記一定係死喺呢個操作入面。
+    """
     if name in _BANNED_NOW:
         return None
     _kset(INFLIGHT_KEY, f"{name}|{time.time()}")
-    _crumb(f"建 {name}")
-    return build()
+    try:
+        return build()
+    finally:
+        _kset(INFLIGHT_KEY, "")
 
 
 def _add_row(layout, items):
@@ -209,7 +218,8 @@ def _add_row(layout, items):
 
 
 def spacer():
-    return _risky("spacer", wd.Spacer)
+    # Spacer() 純 Python，冇 native 風險，唔使標記。
+    return None if "spacer" in _BANNED_NOW else wd.Spacer()
 
 
 def _system_color(name, fallback):
@@ -512,11 +522,10 @@ def label(text, size=13, color=SECONDARY, bold=False, padding=None):
 
 
 def icon(name, color=SECONDARY, size=13, top=2, bottom=2, left=0, right=6):
-    def build():
-        padding = wd.Padding(top=top, bottom=bottom, left=left, right=right)
-        return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
-
-    return _risky("icon", build)
+    if "icon" in _BANNED_NOW:
+        return None
+    padding = wd.Padding(top=top, bottom=bottom, left=left, right=right)
+    return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
 
 
 def _add_card(layout, items):
@@ -554,13 +563,11 @@ def stat_card(layout, symbol, tint, title, value, value_color=PRIMARY, bar=None,
     _add_card(layout, cells)
 
 
-def clock(now, size):
-    """大字時間。優先用 DynamicDate（系統自動跳動），死過就換下一種寫法。
+def place_clock(layout, now, size, tail=()):
+    """加一行大字時間。優先用 DynamicDate，死過就換下一種寫法，全部死晒用靜態文字。
 
-    真機足跡（2026-10-22，兩個獨立 process）：「rich」寫法
-    ``DynamicDate(now, style=TIME, font=…, color=…)`` 一建就令 process 被殺。
-    所以只保留較簡單嘅寫法，由豐富到簡單逐個試；每個寫法有自己嘅停用標記，
-    死一次就跳去下一個（見 ``_risky``）。全部死晒就用靜態文字。
+    真機足跡（2026-10-22）：「font+color」寫法令 process 被殺。只保留較簡單嘅寫法，
+    由豐富到簡單逐個試，各自有停用標記。標記包住 ``add_row``（native 真正砌嘅一刻）。
     """
     font = lambda: wd.Font.bold_system_font_of_size(size)
     for name, build in (
@@ -568,16 +575,19 @@ def clock(now, size):
         ("clock_color", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, color=PRIMARY)),
         ("clock_plain", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME)),
     ):
+        if name in _BANNED_NOW:
+            continue
         try:
-            node = _risky(name, build)
+            row = [build(), *[item for item in tail if item is not None]]
+            _risky(name, lambda: layout.add_row(row))
+            return
         except BaseException as error:
             _crumb(f"{name} 爆 {type(error).__name__}: {error}")
-            continue
-        if node is not None:
-            return node
     # 後備：靜態時間（要靠 reload 更新，但好過冇）。
     _crumb("clock 用靜態文字")
-    return label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
+    row = [label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True),
+           *[item for item in tail if item is not None]]
+    layout.add_row(row)
 
 
 def weekday_label(now, size=14, padding=None):
@@ -660,7 +670,7 @@ def build_small(layout, now, level, charging, system):
     _add_row(layout, [weekday_label(now, 14, _pad(top=TOP_INSET, left=INSET)), spacer()])
     _add_row(layout, [date_label(now, 13, _pad(left=INSET)), spacer()])
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 44), spacer()])
+    place_clock(layout, now, 44, [spacer()])
     layout.add_vertical_spacer()
     _add_row(layout, [
         *battery_chip(level, charging, size=14, top=0, right=0),
@@ -676,7 +686,7 @@ def build_medium(layout, now, level, charging, free, total, system):
     chip = battery_chip(level, charging, size=14, top=TOP_INSET, right=INSET)
     _add_row(layout, header_row(now, chip))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 56), spacer()])
+    place_clock(layout, now, 56, [spacer()])
     layout.add_vertical_spacer()
     _add_row(layout, [
         icon("internaldrive.fill", color=BLUE, size=14, left=INSET),
@@ -698,7 +708,7 @@ def build_large(layout, now, level, charging, free, total, system):
 
     _add_row(layout, header_row(now, low_power_chip(system, size=15, top=TOP_INSET, right=INSET), size=15))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 80)])
+    place_clock(layout, now, 80)
     layout.add_vertical_spacer()
 
     color = battery_color(level, charging)
@@ -714,6 +724,19 @@ def build_large(layout, now, level, charging, free, total, system):
     stat_card(layout, "iphone.gen3", GRAY, "系統版本", system.get("version", MISSING))
     _add_gap(layout, BOTTOM_INSET)
     _risky("background", lambda: layout.set_background_color(BACKGROUND))
+
+
+def _is_ipad():
+    """extra large 只喺 iPad 出現。讀唔到就當 iPad（多砌少少，但安全）。"""
+    try:
+        return int(_objc_class("UIDevice").currentDevice.userInterfaceIdiom) == 1
+    except BaseException:
+        return True
+
+
+def family_names(ipad):
+    names = ("small_layout", "medium_layout", "large_layout")
+    return names + ("extra_large_layout",) if ipad else names
 
 
 def main():
@@ -742,12 +765,18 @@ def main():
         return
 
     # 每個 family 獨立保護：small 壞唔影響 large。
+    # iPhone 唔會用到 extra large，唔砌可以慳返四分一工夫同記憶體
+    # （真機足跡：同一份 code 有時跑得完、有時喺砌版面中途被殺，疑似資源問題）。
+    wanted = family_names(_is_ipad())
+    _crumb(f"砌 {len(wanted)} 個 family")
     for name, builder in (
         ("small_layout", lambda L: build_small(L, now, level, charging, system)),
         ("medium_layout", lambda L: build_medium(L, now, level, charging, free, total, system)),
         ("large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
         ("extra_large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
     ):
+        if name not in wanted:
+            continue
         layout = _safe(lambda n=name: getattr(widget, n))
         if layout is None:
             continue

@@ -206,6 +206,44 @@ g["_BANNED_NOW"].clear()
 sb = g["segment_bar"]
 check("L12 進度條 0／50／100%", sb(0) == "▱" * 10 and sb(0.5) == "▰" * 5 + "▱" * 5 and sb(1) == "▰" * 10 and sb(None) == "▱" * 10)
 
+print("\n【N】標記只包 native 操作；iPhone 唔砌 extra large")
+fresh_store()
+lw = Widget()
+g["_BANNED_NOW"].clear()
+g["spacer"]()
+check("N1 建 Spacer 唔會寫標記（純 Python）", UK_STORE.get("i_widget.inflight", "") == "", UK_STORE.get("i_widget.inflight"))
+g["icon"]("battery.50percent")
+check("N2 建 SystemSymbol 唔會寫標記", UK_STORE.get("i_widget.inflight", "") == "")
+
+# 標記只喺 add_row 嗰一刻存在，之後即刻清走
+seen = []
+class Probe(mock_pyto.WidgetLayout):
+    def add_row(self, row, **kw):
+        seen.append(UK_STORE.get("i_widget.inflight", ""))
+        return super().add_row(row, **kw)
+pl = Probe()
+g["place_clock"](pl, datetime.now(), 44, [g["spacer"]()])
+check("N3 add_row 時標記指向 clock_font", seen and seen[0].startswith("clock_font|"), f"{seen}")
+check("N4 add_row 後標記已清", UK_STORE.get("i_widget.inflight") == "")
+
+# DynamicDate 一加入就擲例外（Python 層面）→ 三種寫法逐個試，最後用靜態文字，例外唔會穿出去
+class RejectsDynamicDate(mock_pyto.WidgetLayout):
+    def add_row(self, row, **kw):
+        if any(type(c).__name__ == "DynamicDate" for c in row):
+            raise RuntimeError("DynamicDate 唔得")
+        return super().add_row(row, **kw)
+UK_STORE.clear(); UK_STORE["i_widget.ban_epoch"] = EPOCH
+rl = RejectsDynamicDate()
+g["place_clock"](rl, datetime.now(), 44, [g["spacer"]()])
+trace2 = UK_STORE.get("i_widget.trace2", "")
+check("N5 三種 DynamicDate 寫法都試過", all(f"{n} 爆" in trace2 for n in ("clock_font", "clock_color", "clock_plain")), trace2)
+check("N6 最後用靜態時間，行有內容", len(rl.rows) == 1 and any(":" in (text_of(c) or "") for c in rl.rows[0] if isinstance(c, Text)),
+      f"{rl.rows}")
+check("N6b 標記已清", UK_STORE.get("i_widget.inflight") == "")
+
+check("N7 iPhone 唔砌 extra large", g["family_names"](False) == ("small_layout", "medium_layout", "large_layout"))
+check("N8 iPad 砌 extra large", "extra_large_layout" in g["family_names"](True))
+
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
 if FAIL:
