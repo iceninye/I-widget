@@ -1,299 +1,103 @@
-# Postmortem：i-widget 真機綠色 default template
+# Postmortem：Home screen 長期綠色 default template
 
 **日期**：2026-10-22
-**狀態**：已修好（launcher `1.6.0`，commit `2dc6510`）
-**影響**：iOS home screen widget 長期只顯示綠色 default template，冇任何內容。
+**狀態**：已修好並經真機確認（widget 正常顯示）
+**影響**：放落 home screen 嘅 widget 長期只顯示 Pyto 預設綠色底，冇任何內容。喺 Pyto app 入面行同一隻 script 就正常。
 
 ---
 
-## 摘要（一段話）
+## 一段話
 
-`i_widget_launcher.py` 嘅快取邏輯有兩個缺陷：`load_code()` 讀到任何嘢就照用（零驗證），而 `_should_check()` 只看時間唔看快取質素。兩者疊加，令**一個壞快取可以永久鎖死個 widget**——launcher 永遠唔會再去 GitHub 攞新版，就算新版已經推上去。首個壞版本係 `8f6204d`（裸讀 `wd.COLOR_SECONDARY_LABEL`），之後我推咗 5 個修正版，你部機一次都冇攞到。
+`i_widget.py` 砌版面時叫 `wd.DynamicDate(now, style=TIME, font=…, color=PRIMARY)`，
+喺 widget extension 入面**令 process 被直接殺死**——冇 Python 例外、冇錯誤訊息。
+`show_widget()` 因此從來冇被叫到，iOS 顯示預設綠色。
+`try/except` 對「process 被殺」完全冇用，所以之前加咗幾層防禦都冇效。
 
-診斷過程中我連續猜錯 3 次，全部被真機 probe 推翻。真因係靠 `i_widget_slowdiag.py`（逐步寫入 userkeys）先搵到。
-
----
-
-## 症狀
-
-- Widget 位置顯示**綠色 default template**，冇字、冇圖。
-- `i_widget_safe.py`（4.6 KB，單檔，唔上網、唔用 userkeys）**正常顯示**。
-- `i_widget_launcher.py`（19 KB，自更新 launcher）**長期綠色**。
-- 換任何 launcher 版本都冇用——重貼、改版本、清 widget 都冇用。
+最後係靠**喺真 launcher 入面逐步寫足跡到 userkeys** 先搵到：兩個獨立 process 都停喺同一行 `建 clock`。
+最可能嘅兇手係 `color=PRIMARY`（自訂動態色）；只帶 `font` 嘅寫法 `clock_font` 真機運作正常。
+（`color` 唔係單獨隔離驗證過：第一個寫法成功後，鏈就停咗。）
 
 ---
 
-## 真因
+## 判斷依據（真機數據）
 
-### 缺陷 1：`load_code()` 完全冇驗證
+| 證據 | 結論 |
+| --- | --- |
+| `i_widget_safe.py`（只用 `Text`）正常顯示 | `widgets` 模組、`show_widget`、extension 環境都冇事 |
+| `i_widget_trace.py` 砌出嘅 widget 正常顯示 | 同一個 Pyto 環境入面 `show_widget` 可用 |
+| 足跡：電量 0.5、儲存 32/255 GB、系統資料全部讀到 | ObjC／ctypes 讀取冇問題 |
+| 足跡：`建 spacer`、`建 spacer`、`建 clock` 之後**完**，兩個 process（p982、p985）一樣 | 死喺 `DynamicDate` 附近 |
+| `i_widget.inflight` 殘留 `clock|…` | 標記冇被清走 = process 喺建 clock 期間死 |
+| launcher 無 `8 exec 完` | exec 從來冇返回 = 被殺／卡死，唔係例外 |
+| 改為 `clock_font`（無 `color`）後四個尺寸跑到 `show_widget 已叫` | 修復 |
 
-```python
-# 修正前
-def load_code():
-    """讀快取程式碼。userkeys → 檔案 → None。"""
-    code = _keys_get(KEY_CODE)
-    if code:                     # ← 讀到乜就返乜，零驗證
-        return code
-    return _read(CACHED_PY)
-```
+## 次要問題（真實，但唔係主因）
 
-任何字串——語法錯、架構過時、API 用法已改——都會被當成有效程式碼交去 `exec()`。
+1. **壞快取 + 30 分鐘節流**：`load_code()` 讀到乜就用乜，`_should_check()` 只睇時間，
+   所以一個壞快取可以令 launcher 唔去 GitHub。已修（快取要過 marker 驗證；快取唔可信就一定檢查）。
+   呢個令修正版遲遲落載唔到，**拖長咗診斷時間**，但就算冇呢個問題，`DynamicDate` 一樣會死。
+2. **刪 widget 唔會清 userkeys**：快取同檢查時間都留喺 `group.pyto`，所以「刪咗再加」冇用。
+3. **推理式診斷**：早期報告列咗幾個「真因」（`COLOR_SECONDARY_LABEL` 唔存在、`__file__` 冇定義、
+   `hashlib`、`Color.dynamic` 有 bug），後來全部被真機數據推翻，或者從來冇被量度過。
+   `__file__` 嗰個亦已改為安全寫法，但唔係今次綠色嘅原因。
 
-### 缺陷 2：`_should_check()` 只看時間
+## 點解之前搵唔到
 
-```python
-# 修正前
-def _should_check():
-    checked = load_checked()
-    if not checked:
-        return True
-    return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
-```
-
-`CHECK_INTERVAL = 30 * 60`。壞快取擺喺度，只要 30 分鐘內唔查，就唔會去 GitHub。
-
-### 缺陷 3：`touch_checked()` 令情況永久化
-
-`_try_update()` 遇到「已經係最新版」、「程式碼下載失敗」、「指紋格式唔啱」等情況，都會呼叫 `touch_checked(time.time())`。
-
-**即係話：壞快取可以自己「打卡」話「我啱啱查過」，令自己獲得 30 分鐘豁免，連環續續，永遠唔會被檢查。**
-
-### 三者疊加的效果
-
-```
-t0   push 8f6204d（壞版：裸讀 wd.COLOR_SECONDARY_LABEL）
-     → launcher 落載、寫入 userkeys、touch_checked(now)
-     → 執行 → AttributeError → 綠色
-
-t0+30m  快取被判定「已經係最新版」→ touch_checked(now)
-        （實際上係壞版，但指紋啱，所以判定為最新版）
-
-t0+60m  重複...
-
-我推咗 94551e8 / 32d4cdc / 7216551 / dafeb81 / 350d959 / 2dc6510
-     → device 一次都冇重新落載，因為節流窗口從未失效
-     → 一直行緊 8f6204d
-```
-
-**關鍵**：`8f6204d` 嘅指紋（`i_widget.fingerprint`）同我之後推嘅版本指紋**唔同**。如果 launcher 有正常檢查，`remote_fp == load_fingerprint()` 一定為 False，應該即刻落載新版。但節流令佢連指紋都冇去問。
-
----
+- **`try/except` 捉唔到 process 被殺。** 呢類死亡（native 崩潰、記憶體／時限）冇 Python 層面嘅痕跡。
+- **Mock 測試通過唔代表真機通過。** `test_launcher.py` 嘅 mock 有 `__file__`、冇記憶體上限、
+  `DynamicDate` 永遠成功；所以幾十項斷言全過，真機照死。
+- **診斷工具同真貨唔同。** `slowdiag`／`diag` 版本都係另一隻 script，跑得通唔代表真 launcher 跑得通。
+  最後有效嘅做法，係直接喺**真 launcher 同真 widget** 入面寫足跡。
+- **同時有幾個 process。** iOS 為不同尺寸同時跑多個 process，佢哋共用同一個 userkeys，
+  足跡會互相覆寫，所以單一份足跡斷尾唔等於死咗。
 
 ## 修法
 
-### 1. 快取世代標記（`CACHE_MARKER`）
+### 1. 足跡（`i_widget.trace`、`i_widget.trace2`）
+launcher 同 widget 本體每過一個關卡就寫一行到 userkeys，附 pid，保留最後 40 行。
+用 `i_widget_trace.py` 讀出。
 
-```python
-CACHE_MARKER = "I_WIDGET_API_2"
+### 2. 崩潰自癒（`i_widget.py`）
+建立有風險元件（`DynamicDate`／`SystemSymbol`／`Spacer`／divider／background）之前，
+先寫 `inflight = 名|時間`；建完先清。Process 死咗標記就留低。
+下次 reload 見到超過 10 秒前嘅標記：
 
-def _code_is_usable(code, source):
-    """三重檢查：夠長 + 語法過 + 有 marker。"""
-    try:
-        if not code or len(code) < 200:
-            _log(f"{source} 快取太短，丟棄")
-            return False
+- 記一次 strike；**同一個元件連續死兩次先停用**（多個 process 同時死會互相覆寫標記，單次證據可能係誤判——今次 `spacer` 就係咁被誤停用）。
+- 停用後用後備：時間改試下一種 `DynamicDate` 寫法，全部死晒就用靜態文字；圖示／Spacer 等直接略過。
+- 順利完成一輪就清零 strike，所以只計「連續」。
+- `BAN_EPOCH` 版本號：元件寫法改動或發現誤判時 +1，每部機第一次行新版會自動清走舊停用名單，唔使手動 `userkeys.set`。
 
-        compile(code, WIDGET_PY, "exec")
-
-        if CACHE_MARKER not in code:
-            _log(f"{source} 快取冇 {CACHE_MARKER} marker（舊版本），丟棄並重新落載")
-            return False
-
-        return True
-    except SyntaxError as error:
-        _log(f"{source} 快取語法錯（{error}），丟棄")
-        return False
-    except Exception as error:
-        _log(f"{source} 快取驗證失敗（{type(error).__name__}），丟棄")
-        return False
-```
-
-`load_code()` 兩條路徑（userkeys、檔案）都要經過佢。
-
-`i_widget.py` 加一行：
-
-```python
-# 快取世代標記：launcher 要求快取必須含有呢個 marker，
-# 否則當作舊版本丟棄並重新落載（避免 outdated cache 鎖死 widget）。
-I_WIDGET_API_2 = True
-```
-
-**點解唔淨係靠 `compile()`？**
-
-因為 syntax 完全合法嘅舊版本一樣會令 widget 死。`8f6204d` 就係一個例子——`wd.COLOR_SECONDARY_LABEL` 語法完全合法，只係執行時 `AttributeError`。
-
-**設計意義**：每次改 `i_widget.py` 嘅結構，就 bump marker。所有舊快取自動失效，**唔再需要用戶手動刪除 widget**。呢個係根治——之前每次修 bug 都要叫你「刪 widget → 重新加」，因為舊邏輯冇辦法自己察覺過時。
-
-### 2. 節流只對可信快取生效
-
-```python
-def _should_check():
-    """上次檢查過就唔好即刻再打網絡。
-
-    ⚠️ 但有一個例外，而且係最重要嗰個：**快取唔可信就一定要查**。
-    """
-    if load_code() is None:
-        return True          # 冇可信快取 → 必須即刻去攞，唔理時間
-    checked = load_checked()
-    if not checked:
-        return True          # 冇記錄 = 即刻查一次
-    return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
-```
-
-壞快取冇任何豁免權。節流嘅原意（省電、省流量）完全保留——因為有效快取照樣受 `CHECK_INTERVAL` 保護。
-
-### 3. `_show_offline_widget` 死亡螺旋
-
-呢個係獨立但相關嘅缺陷：**防禦層自己製造咗死鎖**。
-
-```python
-# 修正前
-for layout in (
-    widget.small_layout,
-    widget.medium_layout,
-    widget.large_layout,
-    widget.extra_large_layout,      # ← 如果呢個缺失
-):                                   #    ↓
-    layout.add_vertical_spacer()     # AttributeError
-    ...
-# → except:
-try:
-    widget = wd.Widget()
-    for layout in (widget.small_layout, widget.large_layout):   # ← 再裸讀
-        ...
-except Exception:
-    pass                             # ← 放棄 → 綠色
-```
-
-**最後防線自己會爆。** 修正：
-
-```python
-for layout in (
-    getattr(widget, "small_layout", None),
-    getattr(widget, "medium_layout", None),
-    getattr(widget, "large_layout", None),
-    getattr(widget, "extra_large_layout", None),
-):
-    if layout is None:
-        continue
-    _try(lambda: layout.add_vertical_spacer(), None)
-    _try(lambda: layout.add_row([...]), None)
-    ...
-```
-
-`except` 分支亦要**重新起一個 `wd.Widget()`**（原本嗰個未必綁定到），並逐個 layout 試，成功就 `return`。
+### 3. 時間元件
+`clock()` 依次試：只帶 font → 只帶 color → 全部預設 → 靜態文字。「font+color」寫法已確認致命，唔再試。
 
 ---
 
-## 測試
+## 日後遇到「綠色」點查
 
-新增 **T / U / V / W** 四個情境，總計 **66/66 通過**。
+1. 喺 Pyto 行 `i_widget_trace.py`，睇最後一行：
+   - 去到 `show_widget 已叫` → 畫面內容有問題（睇 `banned`），唔係崩潰。
+   - 停喺某個 `建 X` → X 就係兇手；`inflight` 會寫住佢。連死兩次會自動停用，widget 自己恢復。
+   - 停喺 `7 即將 exec` 之前 → launcher 或快取問題。
+2. 用 `i_widget_safe.py` 二分：safe 正常、正式版綠色 → 正式版某個元件。
+3. `i_widget.banned` 有嘢而你覺得係誤判 → 將 `BAN_EPOCH` +1 push 上去，或者
+   `userkeys.set("", "i_widget.banned")`。
+4. 想即刻落載新版而唔等 30 分鐘：`userkeys.set(1.0, "i_widget.last_checked")`。
 
-| 情境 | 鎖死嘅要求 |
-| --- | --- |
-| **T** | userkeys 住緊冇 marker 嘅舊架構版本 → 必須丟棄並重新落載 |
-| **U** | 檔案快取語法錯 → 必須丟棄並重新落載 |
-| **V** | **節流窗口內** + 舊快取 → 照樣即刻重新落載（唔受 30 分鐘阻擋） |
-| **W** | 有效快取 + 節流中 → 零網絡請求（防止反向 bug） |
+## 教訓
 
-V 同 W 係**對照組**：V 證明壞快取唔會被節流豁免，W 證明好快取唔會被無謂打網絡。缺任何一個都會漏咗一類 bug。
-
-### 測試本身嘅陷阱（記低下次唔好再撞）
-
-1. **快取目錄係 launcher 檔案所在目錄**（`_cache_dir()` 行 159），唔係 `cache/` 子目錄。寫錯位置嘅話測試根本測唔到嘢——U 情境一開始就係咁，全部斷言假通過。
-2. **`save()` 會將 `last_checked` 寫入 userkeys**，而 `load_checked()` 讀 userkeys **優先於**檔案。淨係改檔案唔會生效，兩邊都要改。
-3. **唔可以再跑多一次 `run_launcher` 去「還原」快取**——嗰次會順手 `touch_checked(now)`，節流窗口即刻失效，W 試咗幾次先發現。
-4. `run_launcher()` 有 `reset_userkeys=True` 參數，但**函數內從來冇用過**。所以清 userkeys 要測試自己手動做。
-5. R3 原本用「行數 ≥ 3」判斷係真 widget，但 fixture 每個 layout 只加 1 行。應該**睇文字內容**，唔係行數。
-
----
-
-## 診斷方法論（呢部分最重要）
-
-今次事故我浪費咗你大概 8 輪對話，全部係因為違反咗同一條規則。
-
-### 1. 唔可以靠推論落判斷
-
-我連續猜錯 3 次：
-
-| 猜測 | 結果 | 被咩推翻 |
-| --- | --- | --- |
-| `wd.COLOR_SECONDARY_LABEL` 喺 Pyto 唔存在 | ❌ 錯 | 你舊版可以顯示；probe 實測 140 個 symbol 全部存在 |
-| `__file__` 喺 Run Script 未定義 | ❌ 錯 | 修咗之後真機仍然綠色 |
-| `hashlib` C extension 令 import 失敗 | ❌ 錯 | CPython 自動 fallback 純 Python |
-| Pyto 官方 `Color.dynamic()` 有 bug | ❌ 錯 | slowdiag 真機：「唔使 patch」 |
-
-**每次都係靠推理，冇真機數據。** 我違反咗自己嘅規矩。
-
-### 2. Mock 唔能夠回答真機問題
-
-`test_launcher.py` 53 個斷言全過，真機一樣失敗。原因係 mock 環境同真機差太遠：
-
-- mock 有 `__file__`，真機冇（`run_launcher()` 自己傳咗 `__file__` = 幫自己掩蓋咗差異）
-- mock 嘅 `Color.dynamic` 正常，真機可能唔同
-- mock 無記憶體上限，真機有
-
-**推論**：mock 只能驗證 Python 語法同 cache 分支邏輯，**唔能夠代表 WidgetKit extension 嘅 `show_widget()`、ObjC、sandbox、network 或 hard crash**。
-
-### 3. `show_widget()` 一個 script run 只理第一次
-
-我寫咗個逐步更新畫面嘅診斷工具（`i_widget_diag.py`），結果畫面停喺步驟 1。我一開始誤讀成「第一個 `show_widget()` 之後被忽略」，方向啱，但個工具設計錯——
-
-**正確做法**：收集齊所有結果，最後**只叫一次** `show_widget()`。`i_widget_probe.py` 就係咁做，所以成功顯示 9 個步驟。
-
-### 4. 硬崩潰捉唔到，必須逐步寫狀態
-
-記憶體不足被系統殺、ObjC crash——呢類崩潰 `try/except` 完全捉唔到。一旦發生，連「顯示診斷」嗰段都唔會行。
-
-`i_widget_launcher_diag.py` 就係咁死嘅（而且我仲自己整壞咗：monkeypatch 咗 `wd.Widget` 同 `wd.show_widget`，結果 `render()` 都用 fake 版，畫面完全冇嘢加）。
-
-**正確做法**：**每做完一步就寫入 userkeys**。
-
-```python
-def mark(line):
-    L.append(line)
-    _save(L)                    # 立刻寫入，硬崩潰都唔會損失
-```
-
-而且要分成兩個分支：
-
-```python
-PREVIOUS = _load()
-if PREVIOUS:
-    render(PREVIOUS)            # 淨係顯示，唔再跑危險測試
-else:
-    ... 逐步測試 ...
-```
-
-否則 Reload 兩次都冇用——每次都會再死一次。呢個亦係我 v1 診斷工具嘅致命 flaw。
-
-### 5. 對症狀嘅判斷
-
-| 畫面 | 意思 |
-| --- | --- |
-| 完全冇嘢（純綠） | `show_widget()` 從來冇被叫 → process 死喺佢之前 |
-| 有版本號但冇內容 | `show_widget()` 叫咗，但 layout 建構失敗 |
-| 空白但有邊框 | layout 有，但所有 row 都加唔到 |
-
----
-
-## 之後點做
-
-1. Pyto 刪除舊 widget → 重新加 → 貼 `i_widget_launcher.py` 1.6.0
-2. 第一次 reload 會因為 marker 唔匹配而強制重新落載新版 `i_widget.py`
-3. 之後正常運作
-
-**如果將來再改 `i_widget.py` 嘅結構，記得 bump `I_WIDGET_API_2`。**
-
----
+1. **綠色 = 冇人叫到 `show_widget`，原因可以係例外，亦可以係 process 被殺。** 只有足跡分辨到。
+2. **唔好用推理落判斷。** 呢次報告頭幾個「真因」全部係推理；最後靠真機數據先搵到。
+3. **喺真貨入面量度**，唔好另外寫一隻診斷 script。
+4. **有風險嘅 native 元件要有 in-flight 標記**，死過就自動繞開，唔好靠人手逐個試。
+5. **多 process 共用狀態**，單次觀察唔夠證據：要求連續兩次先作決定。
 
 ## 相關檔案
 
 | 檔案 | 用途 |
 | --- | --- |
-| `i_widget_launcher.py` | 自更新 launcher，`LAUNCHER_VERSION = "1.6.0"` |
-| `i_widget.py` | widget 本體，含 `I_WIDGET_API_2 = True` marker |
-| `i_widget_slowdiag.py` | 逐步寫 userkeys 嘅診斷工具（硬崩潰都捉得到） |
-| `i_widget_probe.py` | 單次 `show_widget()` probe，9 項檢查 |
-| `test_launcher.py` | 66 個斷言，T/U/V/W 鎖死「唔准用過期快取」 |
-| `docs/DEBUGGING.md` | 診斷歷程記錄 |
+| `i_widget.py` | widget 本體，含足跡、崩潰自癒、`BAN_EPOCH` |
+| `i_widget_launcher.py` | 自更新 launcher，含足跡 |
+| `i_widget_trace.py` | 讀出足跡同停用名單（console＋widget） |
+| `i_widget_safe.py` | 保證出到畫面嘅最小版本，二分用 |
+| `test_widget.py` | smoke test＋崩潰自癒情境 R |
+| `test_launcher.py` | 更新邏輯測試 |

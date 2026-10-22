@@ -97,44 +97,72 @@ def kinds(layout):
     return {type(c).__name__ for row in layout.rows if isinstance(row, list) for c in row}
 
 
-# 上次喺 clock 死咗（標記喺 60 秒前）
-UK_STORE.clear()
-UK_STORE["i_widget.inflight"] = f"clock_font|{_time.time() - 60}"
+EPOCH = str(g["BAN_EPOCH"])
+
+
+def fresh_store(**keys):
+    UK_STORE.clear()
+    UK_STORE["i_widget.ban_epoch"] = EPOCH
+    UK_STORE.update({f"i_widget.{k}": v for k, v in keys.items()})
+
+
+def font_less(w):
+    return all("font" not in c_kw(c) for r in w.small_layout.rows
+               if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate")
+
+
+# 第一次死：只記一筆，唔停用（可能係多個 process 同時死造成嘅誤判）
+fresh_store(inflight=f"clock_font|{_time.time() - 60}")
+g["_recover_from_crash"]()
+check("R2a 偵測後只記 1 次，未停用",
+      UK_STORE.get("i_widget.strikes") == "clock_font:1" and not UK_STORE.get("i_widget.banned"),
+      f"{UK_STORE.get('i_widget.strikes')!r} / {UK_STORE.get('i_widget.banned')!r}")
+fresh_store(inflight=f"clock_font|{_time.time() - 60}")
 w = run_widget()
 check("R1 照樣 show_widget", w is not None)
-check("R2 clock_font 被記入停用", "clock_font" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
-check("R3 自動換下一個寫法（仍然用 DynamicDate）", w is not None and "DynamicDate" in kinds(w.small_layout), f"{kinds(w.small_layout)}")
-check("R3b 唔再帶 font 參數", w is not None and all("font" not in c_kw(c) for r in w.small_layout.rows
-      if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"))
+check("R2 死一次唔停用", "clock_font" not in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
 check("R5 順利砌完後標記已清", UK_STORE.get("i_widget.inflight") == "")
+check("R5b 成功一次就清零 strikes", UK_STORE.get("i_widget.strikes") == "")
+
+# 連續死兩次：停用，自動換下一個寫法
+fresh_store(inflight=f"clock_font|{_time.time() - 60}", strikes="clock_font:1")
 w = run_widget()
-check("R6 之後每輪都繼續跳過 clock_font", all("font" not in c_kw(c) for r in w.small_layout.rows
-      if isinstance(r, list) for c in r if type(c).__name__ == "DynamicDate"))
+check("R3 連續死兩次 → 停用", "clock_font" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
+check("R3b 自動換下一個寫法（仍然用 DynamicDate）", "DynamicDate" in kinds(w.small_layout), f"{kinds(w.small_layout)}")
+check("R3c 唔再帶 font 參數", font_less(w))
+w = run_widget()
+check("R6 之後每輪都繼續跳過 clock_font", font_less(w))
 
 # 全部 DynamicDate 寫法都死過 → 靜態文字，仍然有時間
-UK_STORE.clear()
-UK_STORE["i_widget.banned"] = "clock_font,clock_color,clock_plain"
+fresh_store(banned="clock_font,clock_color,clock_plain")
 w = run_widget()
 check("R6b 全部停用 → 唔用 DynamicDate", "DynamicDate" not in kinds(w.small_layout), f"{kinds(w.small_layout)}")
 check("R6c 靜態時間照出", any(":" in (text_of(c) or "") for r in w.small_layout.rows
       if isinstance(r, list) for c in r if isinstance(c, Text)))
 
 # 標記好新鮮 = 另一個 process 同時跑緊，唔係崩潰
-UK_STORE.clear()
-UK_STORE["i_widget.inflight"] = f"clock_font|{_time.time()}"
+fresh_store(inflight=f"clock_font|{_time.time()}", strikes="clock_font:1")
 w = run_widget()
 check("R7 新鮮標記唔會誤殺", "clock_font" not in UK_STORE.get("i_widget.banned", ""))
 check("R8 DynamicDate 照用", "DynamicDate" in kinds(w.small_layout))
 
 # 所有有風險元件都停用，widget 仍然要有內容
-UK_STORE.clear()
-UK_STORE["i_widget.banned"] = "clock_font,clock_color,clock_plain,icon,spacer,divider,background"
+fresh_store(banned="clock_font,clock_color,clock_plain,icon,spacer,divider,background")
 w = run_widget()
 big = [text_of(c) for r in w.large_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
 check("R9 全部停用都出到大尺寸內容", w is not None and "電量" in big and "儲存空間" in big, f"{big}")
 check("R10 冇用到被停用嘅元件",
       not ({"DynamicDate", "SystemSymbol", "Spacer"} & kinds(w.large_layout)), f"{kinds(w.large_layout)}")
 check("R11 有足跡", "show_widget 已叫" in UK_STORE.get("i_widget.trace2", ""))
+
+# 版本變咗（例如舊誤判）→ 自動清走停用名單，用戶唔使手動 userkeys.set
+UK_STORE.clear()
+UK_STORE["i_widget.ban_epoch"] = "1"
+UK_STORE["i_widget.banned"] = "clock,spacer"
+w = run_widget()
+check("R12 舊版本停用名單自動清走", UK_STORE.get("i_widget.banned") == "", UK_STORE.get("i_widget.banned"))
+check("R13 之後版本號更新", UK_STORE.get("i_widget.ban_epoch") == EPOCH)
+check("R14 Spacer 回復使用", "Spacer" in kinds(w.large_layout), f"{kinds(w.large_layout)}")
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")

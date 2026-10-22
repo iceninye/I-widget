@@ -37,16 +37,15 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 **Home screen 只有綠色 default template，一個字都冇？**
 
-綠色 = `wd.show_widget()` 從來冇被叫過 = 腳本中途死。
-呢個問題嘅完整診斷過程（三層 module-level 失敗）、走過嘅弯路、
-同設計原則見 [docs/DEBUGGING.md](docs/DEBUGGING.md)。
+綠色 = `wd.show_widget()` 從來冇被叫到。原因可以係例外，亦可以係 process 被系統殺死
+（`try/except` 捉唔到）。
 
-2026-10-22 真機事故（綠色 default template、outdated cache 永久鎖死 widget）
-嘅完整分析見 [docs/POSTMORTEM.md](docs/POSTMORTEM.md)。
+1. 喺 Pyto 行 **`i_widget_trace.py`**，睇足跡最後一行去到邊、`i_widget.banned` 有冇嘢。
+2. 某個元件令 process 死過，widget 會**自己偵測並繞開**（連續死兩次先停用，下一輪 reload 就恢復），唔使人手處理。
+3. 完整事故分析見 [docs/POSTMORTEM.md](docs/POSTMORTEM.md)（真因：`DynamicDate` 帶 `color` 參數喺 extension 入面令 process 被殺）。
 
 快速二分法：`i_widget_safe.py` 係保證出到畫面嘅最小版本。
-如果佢正常但 `i_widget.py` 綠色，就係 `i_widget.py` 用緊某個失效嘅 iOS API。
-`diagnose.py` 可以列出真機實際有咩 `COLOR_*` 同 API。
+如果佢正常但 `i_widget.py` 綠色，就係 `i_widget.py` 某個元件有問題。
 
 ## 安裝
 
@@ -98,10 +97,13 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | `i_widget_launcher.py` | 自動更新啟動器，**widget 指向嘅係佢** | 幾乎唔使 |
 | `i_widget.fingerprint` | 版本指紋（SHA256 前綴） | GitHub Action 自動生成 |
 | `make_fingerprint.py` | 手動重算指紋 | 唔使 |
-| `test_launcher.py` | 更新邏輯測試（16 種情境，50 項斷言） | 改 launcher 時 |
+| `test_launcher.py` | 更新邏輯測試（72 項斷言） | 改 launcher 時 |
 | `test_widget.py` | widget 本體 smoke test（用 mock Pyto 砌齊四個尺寸） | 改 `i_widget.py` 時 |
 | `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
+| `i_widget_trace.py` | 讀出真機足跡同停用名單 | 除錯時 |
+| `i_widget_safe.py` | 保證出到畫面嘅最小版本（二分用） | 唔使 |
 | `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
+| `docs/POSTMORTEM.md` | 綠色事故分析 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
 
 因為 widget script 會被 Pyto 複製到 `Documents/<id>.py` 再執行，
@@ -112,7 +114,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 ```bash
 python3 make_fingerprint.py    # 重算指紋（正常唔使，Action 會自動做）
 python3 test_widget.py         # widget 本體喺 mock Pyto 行唔行到
-python3 test_launcher.py       # 50 項斷言，確認更新邏輯冇壞
+python3 test_launcher.py       # 72 項斷言，確認更新邏輯冇壞
 git commit -am "..." && git push
 ```
 

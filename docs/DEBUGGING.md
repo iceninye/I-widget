@@ -1,3 +1,8 @@
+> ⚠️ **本文件記錄嘅是診斷過程，當中多個「真因」後來被真機數據推翻。**
+> 正確根因同修法見 [POSTMORTEM.md](POSTMORTEM.md)：`DynamicDate(…, color=…)` 令 process 被殺
+> （冇例外，`try/except` 捉唔到），並非 `__file__`、`Color.dynamic` 或 `COLOR_*` 缺失。
+> 下面嘅內容保留作歷史紀錄，唔好當結論用。
+
 # 真機診斷記錄：home screen 綠色 default template（2026-10-22）
 
 ## 症狀

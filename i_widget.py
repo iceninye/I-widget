@@ -112,8 +112,15 @@ def _safe(fn, fallback=None):
 TRACE_KEY = "i_widget.trace2"      # 足跡（唔同 launcher 嘅 i_widget.trace 撞）
 INFLIGHT_KEY = "i_widget.inflight"
 BANNED_KEY = "i_widget.banned"
+STRIKES_KEY = "i_widget.strikes"   # 「元件:死過幾次」，連續死兩次先停用
+EPOCH_KEY = "i_widget.ban_epoch"
 BAN_AFTER_SECONDS = 10             # 同時跑緊嘅其他 process 嘅標記唔當崩潰
+BAN_AFTER_STRIKES = 2              # 多個 process 同時死會互相覆寫標記，一次唔夠證據
 TRACE_MAX_LINES = 40
+
+# 停用名單嘅版本。改動元件寫法（或者之前有誤判）時 +1，
+# 每部機第一次行新版會自動清走舊名單，用戶唔使手動 userkeys.set。
+BAN_EPOCH = 2
 
 _BANNED_NOW = set()
 
@@ -146,19 +153,42 @@ def _crumb(step):
         pass
 
 
+def _parse_strikes(text):
+    strikes = {}
+    for item in text.split(","):
+        name, _, count = item.partition(":")
+        if name and count.isdigit():
+            strikes[name] = int(count)
+    return strikes
+
+
 def _recover_from_crash():
-    """上次有元件令 process 死咗 → 以後跳過佢。"""
+    """上次有元件令 process 死咗 → 連續死兩次就以後跳過佢。"""
     global _BANNED_NOW
+    if _kget(EPOCH_KEY) != str(BAN_EPOCH):
+        # 版本變咗：舊停用名單可能係誤判，或者元件寫法已經改過。
+        for key in (BANNED_KEY, STRIKES_KEY, INFLIGHT_KEY):
+            _kset(key, "")
+        _kset(EPOCH_KEY, str(BAN_EPOCH))
+        _crumb(f"停用名單版本 → {BAN_EPOCH}，已重置")
+
     banned = {name for name in _kget(BANNED_KEY).split(",") if name}
     marker = _kget(INFLIGHT_KEY)
     if marker:
         try:
             name, started = marker.split("|")
             if time.time() - float(started) > BAN_AFTER_SECONDS:
-                banned.add(name)
-                _kset(BANNED_KEY, ",".join(sorted(banned)))
+                strikes = _parse_strikes(_kget(STRIKES_KEY))
+                strikes[name] = strikes.get(name, 0) + 1
+                if strikes[name] >= BAN_AFTER_STRIKES:
+                    banned.add(name)
+                    del strikes[name]
+                    _kset(BANNED_KEY, ",".join(sorted(banned)))
+                    _crumb(f"「{name}」連續死 {BAN_AFTER_STRIKES} 次，已停用")
+                else:
+                    _crumb(f"上次喺「{name}」死咗（{strikes[name]}/{BAN_AFTER_STRIKES}）")
+                _kset(STRIKES_KEY, ",".join(f"{k}:{v}" for k, v in strikes.items()))
                 _kset(INFLIGHT_KEY, "")
-                _crumb(f"偵測到上次喺「{name}」死咗，已停用")
         except BaseException:
             _kset(INFLIGHT_KEY, "")
     _BANNED_NOW = banned
@@ -654,6 +684,7 @@ def main():
 
     _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
     _kset(INFLIGHT_KEY, "")  # 順利砌完，冇元件令 process 死
+    _kset(STRIKES_KEY, "")   # 要「連續」死先算，成功一次就清零
     _crumb("即將 show_widget")
     wd.show_widget(widget)
     _crumb("show_widget 已叫")
