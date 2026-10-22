@@ -13,11 +13,21 @@ on:
 permissions:
   contents: write
 
+# 連續 push 兩次唔好兩個 job 撞住 push。
+concurrency:
+  group: fingerprint
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 指紋一旦更新，所有裝咗 launcher 嘅手機都會落載呢個版本。
+      # 先確認 widget 喺 mock Pyto 入面行得到，壞咗就唔好發佈。
+      - name: Smoke test widget
+        run: python3 test_widget.py
 
       - name: Update fingerprint
         run: python3 make_fingerprint.py
@@ -32,4 +42,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add i_widget.fingerprint
           git commit -m "Update fingerprint"
+          # 期間有人 push 咗其他嘢都唔好失敗。
+          git pull --rebase origin main
           git push

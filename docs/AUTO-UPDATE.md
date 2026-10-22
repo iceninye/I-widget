@@ -11,8 +11,8 @@
 
 **問題：**
 
-- **每次 reload 都拉一次完整程式碼。** widget 每 15 分鐘 reload，一日 96 次。
-  `i_widget.py` 約 9 KB，一年 96 × 365 × 9 KB ≈ 315 MB，純粹為咗行同一份檔案。
+- **每次 reload 都拉一次完整程式碼。** widget 每 30 分鐘 reload，一日 48 次。
+  `i_widget.py` 約 15 KB，一年 48 × 365 × 15 KB ≈ 263 MB，純粹為咗行同一份檔案。
 - **慢。** WidgetKit 每次 reload 俾嘅時間有限，網絡往返要計入。
 - **完全冇防護。** 網絡一斷就乜都出唔到，home screen 留白。
 - **推壞 commit 即刻炸。** push 咗個 syntax error 落 `main`，
@@ -38,14 +38,16 @@
 Launcher 每次 reload 嘅流程：
 
 ```
-1. 睇下 10 分鐘內有冇查過（用快取檔 mtime 節流）
-2. 冇 → 拉 i_widget.fingerprint（一行，約 40 bytes）
-3. 同本地指紋一樣？ → 完全唔落載，直接行快取
-4. 唔一樣 → 拉完整 i_widget.py
-5. compile() 語法檢查
+1. 睇下 30 分鐘內有冇查過（userkeys／檔案記錄嘅檢查時間，有 60 秒容差）
+2. 冇 → 拉 i_widget.fingerprint（一行，17 bytes）
+3. 同本地指紋一樣（而且有快取）？ → 完全唔落載，直接行快取
+4. 唔一樣 → 拉完整 i_widget.py（上限 256 KB）
+5. SHA256 核對：內容同指紋對唔上（CDN 未同步／下載唔完整）
+     → 棄置，唔記錄檢查時間，下次 reload 即刻再試
+6. compile() 語法檢查
      錯 → 棄置新版本，繼續行舊快取，指紋唔更新（下次再試）
      對 → 寫入快取，更新指紋
-6. 行快取
+7. 行快取
 ```
 
 ## 儲存層：userkeys 優先
@@ -71,6 +73,8 @@ Launcher 每次 reload 嘅流程：
 | 遠端冇變 | 零網絡用量（指紋相同就唔落載） |
 | 網絡斷／GitHub 掛咗／限流 | 靜靜行本地快取，畫面正常 |
 | 推咗個 syntax error 上 main | **拒絕該版本**，繼續行舊快取，下次再試 |
+| CDN 俾咗新指紋但舊程式碼 | SHA256 對唔上 → 拒絕，下次 reload 再試 |
+| 回應異常大（> 256 KB） | 唔讀入記憶體，當今次冇更新 |
 | 404（檔案俾人刪咗） | 行快取；冇快取就顯示「更新失敗」 |
 | 首次安裝 + 網絡斷 | 顯示一個講明「更新失敗」嘅 widget，唔會留白 |
 
@@ -145,7 +149,7 @@ Widget 要指向 **`i_widget_launcher.py`**，唔再係 `i_widget.py`。
 
 ## 驗證
 
-`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 **10 種情境共 34 項斷言**，
+`test_launcher.py` 用本地 HTTP server 扮 GitHub，跑齊 **16 種情境共 50 項斷言**，
 全部通過：
 
 | 情境 | 測咩 |
@@ -160,6 +164,12 @@ Widget 要指向 **`i_widget_launcher.py`**，唔再係 `i_widget.py`。
 | H | **userkeys 持久化**：全新 sandbox 都讀到快取、零網絡 |
 | I | **userkeys 壞咩**：自動 fallback 檔案、照樣更新到 v2 |
 | J | **iOS 27**：reload 間隔喺 WidgetKit 預算內、CHECK_INTERVAL 唔細過 reload、coalescing 防護存在 |
+| K | userkeys 壞咗 + 指紋冇變：唔會因為結尾換行而每次重新落載 |
+| L | 指紋同內容對唔上：拒絕、唔記錄檢查時間、CDN 同步後自動更新 |
+| M | 超大回應：唔讀入、唔 crash |
+| N | 節流容差：iOS 早幾秒 reload 都照樣檢查；5 分鐘內唔打網絡 |
+| O | 首次安裝、指紋檔攞唔到：存程式碼本身嘅指紋，之後唔會重複落載 |
+| P | 端到端：真 `i_widget.py` + `make_fingerprint.py` 算法同 launcher 一致 |
 
 ```bash
 python3 test_launcher.py
@@ -182,8 +192,11 @@ python3 test_launcher.py
 - **檔案係後備，唔係保證。** 測試 H 證明咗跨 sandbox 靠 userkeys 先成立；
   檔案路徑只喺 Pyto 主 app 模式下先穩定。
 - **安全性**：呢個做法會執行網絡上下載嚟嘅 code。等同「你信任嗰個 repo」。
-  repo 係你自己嘅所以冇問題，但如果將來 fork 咗或者用別人嘅 raw URL，
-  要諗清楚。
+  SHA256 核對擋到傳輸損壞同 CDN 唔同步，但指紋同程式碼都嚟自同一個 repo，
+  所以**擋唔到有 push 權限嘅人**。建議：
+  - `main` 開 branch protection（要 PR、要 Tests 通過），唔好直接 push。
+  - 唔好加其他 collaborator 有 write 權限，除非你信任佢哋可以喺你部手機行 code。
+  - 如果將來 fork 咗或者用別人嘅 raw URL，要諗清楚。
 ## iOS 27 適應
 
 WidgetKit 唔係「我要求幾耐就幾耐」。系統用一個**每日預算**分配 reload，
