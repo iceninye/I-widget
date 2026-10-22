@@ -76,6 +76,53 @@ check("Z4 讀唔到電量唔 crash", g["format_battery"](None) == "—")
 free, total = g["read_storage"]()
 check("Z5 讀到儲存空間（statvfs 後備）", bool(total) and 0 <= free <= total, f"{free}/{total}")
 
+
+print("\n【R】崩潰自癒：上次有元件令 process 死咗，今次要跳過佢")
+import time as _time  # noqa: E402
+from mock_pyto import UK_STORE  # noqa: E402
+
+
+def run_widget():
+    SHOWN.clear()
+    g2 = {"__name__": "__main__", "__file__": path}
+    exec(compile(open(path, encoding="utf-8").read(), path, "exec"), g2)
+    return SHOWN[0] if SHOWN else None
+
+
+def kinds(layout):
+    return {type(c).__name__ for row in layout.rows if isinstance(row, list) for c in row}
+
+
+# 上次喺 clock 死咗（標記喺 60 秒前）
+UK_STORE.clear()
+UK_STORE["i_widget.inflight"] = f"clock|{_time.time() - 60}"
+w = run_widget()
+check("R1 照樣 show_widget", w is not None)
+check("R2 clock 被記入停用", "clock" in UK_STORE.get("i_widget.banned", ""), UK_STORE.get("i_widget.banned", ""))
+check("R3 唔再用 DynamicDate", w is not None and "DynamicDate" not in kinds(w.small_layout), f"{kinds(w.small_layout)}")
+check("R4 後備靜態時間照出", w is not None and any(":" in (text_of(c) or "") for r in w.small_layout.rows
+      if isinstance(r, list) for c in r if isinstance(c, Text)))
+check("R5 順利砌完後標記已清", UK_STORE.get("i_widget.inflight") == "")
+w = run_widget()
+check("R6 之後每輪都繼續跳過", "DynamicDate" not in kinds(w.small_layout))
+
+# 標記好新鮮 = 另一個 process 同時跑緊，唔係崩潰
+UK_STORE.clear()
+UK_STORE["i_widget.inflight"] = f"clock|{_time.time()}"
+w = run_widget()
+check("R7 新鮮標記唔會誤殺", "clock" not in UK_STORE.get("i_widget.banned", ""))
+check("R8 DynamicDate 照用", "DynamicDate" in kinds(w.small_layout))
+
+# 所有有風險元件都停用，widget 仍然要有內容
+UK_STORE.clear()
+UK_STORE["i_widget.banned"] = "clock,icon,spacer,divider,background"
+w = run_widget()
+big = [text_of(c) for r in w.large_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
+check("R9 全部停用都出到大尺寸內容", w is not None and "電量" in big and "儲存空間" in big, f"{big}")
+check("R10 冇用到被停用嘅元件",
+      not ({"DynamicDate", "SystemSymbol", "Spacer"} & kinds(w.large_layout)), f"{kinds(w.large_layout)}")
+check("R11 有足跡", "show_widget 已叫" in UK_STORE.get("i_widget.trace2", ""))
+
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
 if FAIL:
