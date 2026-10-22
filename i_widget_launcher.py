@@ -54,6 +54,33 @@ CHECK_INTERVAL = 30 * 60
 # 冇容差的話「準時 30 分鐘」嘅 reload 會差少少唔夠鐘，變成一個鐘先查一次。
 CHECK_GRACE = 60
 
+# 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
+# 唔使再靠估 — 空白畫面本身零資訊量。
+LAUNCHER_VERSION = "1.2.1"
+REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
+
+
+def _try(fn, fallback=None):
+    """執行 ``fn()``；任何例外都唔會向上傳，回傳 ``fallback``。
+
+    只可以用喺「顯示錯誤畫面」嘅路徑 —— 呢個函式存在係為咗
+    保證最後防線自己都唔會爆。
+    """
+    try:
+        return fn()
+    except Exception:
+        return fallback
+
+
+def _text(value, font=None, color=None):
+    """砌一個 `wd.Text`，任何選項出事都退回最基本嘅呼叫。"""
+    kwargs = {}
+    if font is not None:
+        kwargs["font"] = font
+    if color is not None:
+        kwargs["color"] = color
+    return _try(lambda: wd.Text(value, **kwargs), _try(lambda: wd.Text(value), None))
+
 # 快取 key（存喺 Pyto 官方 userkeys = NSUserDefaults suite "group.pyto"，
 # extension 同主 app 共用，唔會被 iOS 清理）。
 KEY_CODE = "i_widget.cached_code"
@@ -289,6 +316,9 @@ def _try_update():
         touch_checked(time.time())
         return False
 
+    global REMOTE_FP
+    REMOTE_FP = remote_fp
+
     if remote_fp == load_fingerprint() and load_code():
         _log("已經係最新版")
         touch_checked(time.time())  # 問過咗，唔使十秒後再問
@@ -354,9 +384,32 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
     """顯示一個講明情況嘅 widget，唔好留空白。
 
     ``detail`` 係額外一行細字（例如錯誤訊息），方便喺 home screen 直接睇到原因。
+
+    ⚠️ 呢個函式係「最後防線」——連佢都爆就一樣得綠色 default template。
+    所以呢度**完全唔准**用 `wd.COLOR_*` 裸讀或者任何可能不存在嘅 API：
+    缺色就 fallback 去 `Color.dynamic`，缺 font 就 fallback 去無 font。
     """
     try:
+        # --- 防禦性取色：任何一個常數缺失都唔會炸 ---------------------
+        bg = _try(lambda: wd.Color.dynamic(
+            light=wd.Color.rgb(1.0, 1.0, 1.0),
+            dark=wd.Color.rgb(0.11, 0.11, 0.118),
+        ), None)
+        fg = _try(lambda: wd.Color.dynamic(
+            light=wd.Color.rgb(0.0, 0.0, 0.0),
+            dark=wd.Color.rgb(1.0, 1.0, 1.0),
+        ), None)
+        muted = _try(lambda: getattr(wd, "COLOR_SECONDARY_LABEL"), fg)
+
+        def _font(size, bold=False):
+            """font API 唔存在就唔傳 font —— 寧願用系統預設字型都要見到字。"""
+            name = "bold_system_font_of_size" if bold else "system_font_of_size"
+            return _try(lambda: getattr(wd.Font, name)(size), None)
+
         widget = wd.Widget()
+        if bg is not None:
+            _try(lambda: setattr(widget, "background_color", bg), None)
+
         for layout in (
             widget.small_layout,
             widget.medium_layout,
@@ -364,21 +417,31 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
             widget.extra_large_layout,
         ):
             layout.add_vertical_spacer()
-            layout.add_row([wd.Text("i-widget", font=wd.Font.bold_system_font_of_size(20))])
-            layout.add_row([
-                wd.Text(title, font=wd.Font.system_font_of_size(13), color=wd.COLOR_SECONDARY_LABEL),
-            ])
+            # 版本標記：空白畫面零資訊量，一定要令用戶一眼睇到行緊邊個版本。
+            layout.add_row([_text("i-widget", font=_font(20, bold=True), color=fg)])
+            layout.add_row([_text(f"{LAUNCHER_VERSION} · {REMOTE_FP or '?'}",
+                                  font=_font(11), color=muted)])
+            layout.add_row([_text(title, font=_font(13), color=muted)])
             if detail:
-                layout.add_row([
-                    wd.Text(detail, font=wd.Font.system_font_of_size(10), color=wd.COLOR_SECONDARY_LABEL),
-                ])
+                layout.add_row([_text(detail, font=_font(10), color=muted)])
             layout.add_vertical_spacer()
 
-        wd.schedule_next_reload(timedelta(minutes=30))
+        _try(lambda: wd.schedule_next_reload(timedelta(minutes=30)), None)
         wd.show_widget(widget)
         _log(f"已顯示離線 widget：{reason}")
     except Exception as error:
-        _log(f"連離線 widget 都顯示唔到：{error}")
+        _log(f"連離線 widget 都顯示唔到：{type(error).__name__}: {error}")
+        # 最後一搏：極簡畫面，淨係用最低風險嘅 API。
+        try:
+            widget = wd.Widget()
+            for layout in (widget.small_layout, widget.large_layout):
+                layout.add_vertical_spacer()
+                layout.add_row([wd.Text("i-widget 執行失敗")])
+                layout.add_row([wd.Text(f"{LAUNCHER_VERSION} · {reason}")])
+                layout.add_vertical_spacer()
+            wd.show_widget(widget)
+        except Exception:
+            pass
 
 
 # --- 入口 ---------------------------------------------------------------

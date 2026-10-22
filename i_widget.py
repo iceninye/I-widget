@@ -2,7 +2,12 @@
 
 用 Pyto 內置嘅 widgets API 寫成，唔需要 Mac 或 Xcode。
 安裝步驟見 README.md。
+
+版本 1.2.0 · commit 11d6688
 """
+
+VERSION = "1.2.0"
+COMMIT = "11d6688"
 
 import os
 import re
@@ -54,8 +59,19 @@ WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "�
 
 
 def _system_color(name, fallback):
-    """用 iOS 系統語意色（自動跟淺／深色、tinted、clear 模式），舊版 Pyto 冇就用後備。"""
+    """用 iOS 系統語意色（自動跟淺／深色、tinted、clear 模式），舊版 Pyto 冇就用後備。
+
+    **絕對唔好用 ``wd.COLOR_XXX`` 裸讀。**
+    ``widgets`` 同 ``pyto_ui`` 係兩個獨立 module，常數集唔一樣；
+    任何一個裸讀 `AttributeError` 都會喺 **import 階段**死掉，
+    然後 iOS 就顯示綠色 default template（`show_widget()` 永遠冇被叫）。
+    """
     return getattr(wd, f"COLOR_{name}", fallback)
+
+
+def _rgb(r, g, b):
+    """後備色：用 `Color.rgb` 砌，唔賴任何 `COLOR_*` 常數。"""
+    return wd.Color.rgb(r, g, b)
 
 
 # 配色跟 iOS 27 系統 widget：標準白／深灰底，文字同強調色用系統語意色，
@@ -71,12 +87,12 @@ PRIMARY = wd.Color.dynamic(
     light=wd.Color.rgb(0.0, 0.0, 0.0),
     dark=wd.Color.rgb(1.0, 1.0, 1.0),
 )
-SECONDARY = wd.COLOR_SECONDARY_LABEL
+SECONDARY = _system_color("SECONDARY_LABEL", PRIMARY)
 TERTIARY = _system_color("TERTIARY_LABEL", SECONDARY)
-ACCENT = wd.COLOR_SYSTEM_RED  # 同系統「日曆」widget 一樣，用紅色標示星期
-GREEN = wd.COLOR_SYSTEM_GREEN
-ORANGE = wd.COLOR_SYSTEM_ORANGE
-RED = wd.COLOR_SYSTEM_RED
+ACCENT = _system_color("SYSTEM_RED", _rgb(1.0, 0.23, 0.19))  # 同系統「日曆」widget 一樣，用紅色標示星期
+GREEN = _system_color("SYSTEM_GREEN", _rgb(0.20, 0.78, 0.35))
+ORANGE = _system_color("SYSTEM_ORANGE", _rgb(1.0, 0.58, 0.0))
+RED = _system_color("SYSTEM_RED", _rgb(1.0, 0.23, 0.19))
 BLUE = _system_color("SYSTEM_BLUE", SECONDARY)
 INDIGO = _system_color("SYSTEM_INDIGO", SECONDARY)
 GRAY = _system_color("SYSTEM_GRAY", SECONDARY)
