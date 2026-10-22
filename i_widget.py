@@ -454,6 +454,17 @@ def format_uptime(seconds):
     return f"{minutes} 分"
 
 
+def format_storage(free, total):
+    """「32.6 / 255.4 GB」：單位相同就只寫一次，行寬慳啲（卡片行好逼）。"""
+    used = format_bytes(free)
+    if not total:
+        return used
+    whole = format_bytes(total)
+    if used != MISSING and used.split()[-1] == whole.split()[-1]:
+        return f"{used.rsplit(' ', 1)[0]} / {whole}"
+    return f"{used} / {whole}"
+
+
 def format_battery(level):
     return MISSING if level is None else f"{round(level * 100)}%"
 
@@ -463,31 +474,84 @@ def format_battery(level):
 # --------------------------------------------------------------------------
 
 
-def label(text, size=13, color=SECONDARY, bold=False):
+# 邊距：Pyto 嘅 widget 預設邊距好細（真機截圖：頂部文字貼近邊框），所以每行
+# 最左／最右嘅元件自己加 padding。卡片行內再縮入多啲，文字先唔會貼住圓角。
+INSET = 8            # 一般行嘅左右邊距
+TOP_INSET = 8        # 最頂一行
+BOTTOM_INSET = 8     # 最底一行
+CARD_INSET = 12      # 卡片行內左右邊距
+CARD_PAD_Y = 9       # 卡片行內上下邊距
+CARD_RADIUS = 12
+BAR_SEGMENTS = 10
+
+# 卡片底色：系統填充色（淺色／深色自動適應，半透明），Pyto 有提供 COLOR_TERTIARY_SYSTEM_FILL。
+# 讀唔到就唔畫卡片，行照出。
+CARD = _system_color("TERTIARY_SYSTEM_FILL", None)
+
+
+def _pad(top=0, bottom=0, left=0, right=0):
+    """自訂 padding；API 有變就回傳 None（元件冇 padding，照出）。"""
+    try:
+        return wd.Padding(top=top, bottom=bottom, left=left, right=right)
+    except BaseException:
+        return None
+
+
+def label(text, size=13, color=SECONDARY, bold=False, padding=None):
     font = (
         wd.Font.bold_system_font_of_size(size)
         if bold
         else wd.Font.system_font_of_size(size)
     )
+    if padding is not None:
+        try:
+            return wd.Text(text, font=font, color=color, padding=padding)
+        except BaseException:
+            pass
     return wd.Text(text, font=font, color=color)
 
 
-def icon(name, color=SECONDARY, size=13):
+def icon(name, color=SECONDARY, size=13, top=2, bottom=2, left=0, right=6):
     def build():
-        padding = wd.Padding(top=3, bottom=3, right=6)
+        padding = wd.Padding(top=top, bottom=bottom, left=left, right=right)
         return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
 
     return _risky("icon", build)
 
 
-def status_row(title, value, symbol, tint, value_color=PRIMARY):
-    """仿「設定」App：彩色圖示 + 灰色標題 …… 粗體數值。"""
-    return [
-        icon(symbol, color=tint, size=14),
-        label(title, size=14, color=SECONDARY),
+def _add_card(layout, items):
+    """加一行「卡片」：圓角半透明底。唔支援（或者死過）就退返普通行。"""
+    row = [item for item in items if item is not None]
+    if CARD is None or "card" in _BANNED_NOW:
+        layout.add_row(row)
+        return
+    _risky("card", lambda: layout.add_row(row, background_color=CARD, corner_radius=CARD_RADIUS))
+
+
+def _add_gap(layout, size=4):
+    """行與行之間嘅細空隙（固定高度，唔似 vertical_spacer 會伸縮）。"""
+    layout.add_row([label(" ", size=size)])
+
+
+def segment_bar(fraction, width=BAR_SEGMENTS):
+    """▰▰▰▰▰▰▱▱▱▱：純文字進度條，唔使額外元件。"""
+    filled = max(0, min(width, round((fraction or 0) * width)))
+    return "▰" * filled + "▱" * (width - filled)
+
+
+def stat_card(layout, symbol, tint, title, value, value_color=PRIMARY, bar=None, bar_color=None):
+    """一張資料卡：彩色圖示 + 標題 …… [進度條] 粗體數值。"""
+    v = CARD_PAD_Y
+    cells = [
+        icon(symbol, color=tint, size=15, top=v, bottom=v, left=CARD_INSET, right=8),
+        label(title, size=14, color=SECONDARY, padding=_pad(top=v, bottom=v)),
         spacer(),
-        label(value, size=14, color=value_color, bold=True),
     ]
+    if bar:
+        cells.append(label(bar, size=11, color=bar_color or tint, padding=_pad(top=v, bottom=v, right=8)))
+    cells.append(label(value, size=14, color=value_color, bold=True,
+                       padding=_pad(top=v, bottom=v, right=CARD_INSET)))
+    _add_card(layout, cells)
 
 
 def clock(now, size):
@@ -516,17 +580,24 @@ def clock(now, size):
     return label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
 
 
-def weekday_label(now, size=13):
-    return label(WEEKDAYS[now.weekday()], size=size, color=ACCENT, bold=True)
+def weekday_label(now, size=14, padding=None):
+    return label(WEEKDAYS[now.weekday()], size=size, color=ACCENT, bold=True, padding=padding)
 
 
-def date_label(now, size=13):
-    return label(f"{now.month}月{now.day}日", size=size, color=SECONDARY)
+def date_label(now, size=14, padding=None):
+    return label(f"{now.month}月{now.day}日", size=size, color=SECONDARY, padding=padding)
 
 
-def header_row(now, trailing=()):
-    """星期（紅）＋日期（灰），右邊可以擺狀態。"""
-    return [weekday_label(now), date_label(now), spacer(), *trailing]
+def header_row(now, trailing=(), size=14):
+    """星期（紅）＋日期（灰）靠左，狀態靠右。"""
+    top = _pad(top=TOP_INSET, left=INSET)
+    mid = _pad(top=TOP_INSET, left=6)
+    return [
+        weekday_label(now, size, top),
+        date_label(now, size, mid),
+        spacer(),
+        *trailing,
+    ]
 
 
 def battery_color(level, charging):
@@ -551,12 +622,20 @@ def battery_symbol(level, charging):
     return "battery.0percent"
 
 
-def battery_chip(level, charging, size=13):
+def battery_chip(level, charging, size=13, top=0, right=0):
     color = battery_color(level, charging)
     return [
-        icon(battery_symbol(level, charging), color=color, size=size),
-        label(format_battery(level), size=size, color=color, bold=True),
+        icon(battery_symbol(level, charging), color=color, size=size, top=top, bottom=0),
+        label(format_battery(level), size=size, color=color, bold=True,
+              padding=_pad(top=top, right=right)),
     ]
+
+
+def low_power_chip(system, size=13, top=0, right=0):
+    """低耗電模式：細細粒葉仔，唔再佔一行。"""
+    if not system.get("low_power"):
+        return []
+    return [icon("leaf.fill", color=ORANGE, size=size, top=top, bottom=0, left=6, right=right)]
 
 
 def storage_color(free, total):
@@ -565,76 +644,75 @@ def storage_color(free, total):
     return PRIMARY
 
 
+def used_fraction(free, total):
+    if free is None or not total:
+        return None
+    return 1 - free / total
+
+
 # --------------------------------------------------------------------------
 # 版面
 # --------------------------------------------------------------------------
 
 
-def build_small(layout, now, level, charging):
-    _add_row(layout, [weekday_label(now, size=14), spacer()])
-    _add_row(layout, [date_label(now), spacer()])
+def build_small(layout, now, level, charging, system):
+    """小：星期／日期靠左、大字時間、電量。"""
+    _add_row(layout, [weekday_label(now, 14, _pad(top=TOP_INSET, left=INSET)), spacer()])
+    _add_row(layout, [date_label(now, 13, _pad(left=INSET)), spacer()])
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 42)])
+    _add_row(layout, [clock(now, 44), spacer()])
     layout.add_vertical_spacer()
-    _add_row(layout, [*battery_chip(level, charging), spacer()])
+    _add_row(layout, [
+        *battery_chip(level, charging, size=14, top=0, right=0),
+        spacer(),
+        *low_power_chip(system, size=14, right=INSET),
+    ])
+    _add_gap(layout, BOTTOM_INSET)
     _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
 def build_medium(layout, now, level, charging, free, total, system):
-    _add_row(layout, header_row(now, battery_chip(level, charging)))
+    """中：頂部星期／日期＋電量；中間大字時間；底部儲存空間。"""
+    chip = battery_chip(level, charging, size=14, top=TOP_INSET, right=INSET)
+    _add_row(layout, header_row(now, chip))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 58)])
+    _add_row(layout, [clock(now, 56), spacer()])
     layout.add_vertical_spacer()
-
-    footer = [
-        icon("internaldrive.fill", color=BLUE),
-        label(f"{format_bytes(free)} 可用", color=storage_color(free, total)),
+    _add_row(layout, [
+        icon("internaldrive.fill", color=BLUE, size=14, left=INSET),
+        label(f"{format_bytes(free)} 可用", size=14, color=storage_color(free, total)),
         spacer(),
-    ]
-    if system.get("low_power"):
-        footer += [icon("leaf.fill", color=ORANGE), label("低耗電", color=ORANGE)]
-    _add_row(layout, footer)
+        *low_power_chip(system, size=14, right=INSET),
+    ])
+    _add_gap(layout, BOTTOM_INSET)
     _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
 def build_large(layout, now, level, charging, free, total, system):
+    """大：頂部星期／日期＋低耗電；大字時間置中；四張資料卡。"""
     battery_text = format_battery(level)
     if charging and level is not None:
         battery_text += " · 已充滿" if level >= 0.995 else " · 充電中"
 
-    storage_text = format_bytes(free)
-    if total:
-        storage_text += f" / {format_bytes(total)}"
+    storage_text = format_storage(free, total)
 
-    _add_row(layout, header_row(now))
+    _add_row(layout, header_row(now, low_power_chip(system, size=15, top=TOP_INSET, right=INSET), size=15))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 64)])
+    _add_row(layout, [clock(now, 80)])
     layout.add_vertical_spacer()
-    _risky("divider", layout.add_vertical_divider)
 
-    _add_row(layout, 
-        status_row(
-            "電量",
-            battery_text,
-            battery_symbol(level, charging),
-            battery_color(level, charging),
-            battery_color(level, charging),
-        )
-    )
-    _add_row(layout, 
-        status_row(
-            "儲存空間", storage_text, "internaldrive.fill", BLUE, storage_color(free, total)
-        )
-    )
-    _add_row(layout, 
-        status_row("開機時間", format_uptime(system.get("uptime")), "clock.fill", INDIGO)
-    )
-    _add_row(layout, 
-        status_row("系統版本", system.get("version", MISSING), "iphone.gen3", GRAY)
-    )
-    if system.get("low_power"):
-        _add_row(layout, status_row("低耗電模式", "已開啟", "leaf.fill", ORANGE, ORANGE))
-
+    color = battery_color(level, charging)
+    stat_card(layout, battery_symbol(level, charging), color, "電量", battery_text, color,
+              bar=segment_bar(level), bar_color=color)
+    _add_gap(layout)
+    used = used_fraction(free, total)
+    stat_card(layout, "internaldrive.fill", BLUE, "儲存空間", storage_text, storage_color(free, total),
+              bar=segment_bar(used), bar_color=RED if storage_color(free, total) is RED else BLUE)
+    _add_gap(layout)
+    stat_card(layout, "clock.fill", INDIGO, "開機時間", format_uptime(system.get("uptime")))
+    _add_gap(layout)
+    stat_card(layout, "iphone.gen3", GRAY, "系統版本", system.get("version", MISSING))
+    _add_gap(layout, BOTTOM_INSET)
     _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
@@ -665,7 +743,7 @@ def main():
 
     # 每個 family 獨立保護：small 壞唔影響 large。
     for name, builder in (
-        ("small_layout", lambda L: build_small(L, now, level, charging)),
+        ("small_layout", lambda L: build_small(L, now, level, charging, system)),
         ("medium_layout", lambda L: build_medium(L, now, level, charging, free, total, system)),
         ("large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
         ("extra_large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
