@@ -1,6 +1,6 @@
 """測試 i_widget_launcher.py 的更新邏輯。
 
-用本地 HTTP server 模擬 GitHub raw，跑齊 A–P 情境（每個情境見下面標題）。
+用本地 HTTP server 模擬 GitHub raw，跑齊 A–Q 情境（每個情境見下面標題）。
 
 widgets／userkeys 用 mock_pyto.py（照抄 Pyto 真實 API 簽名）。
 """
@@ -379,6 +379,20 @@ check("P1 指紋同內容對得上（兩邊算法一致）", real_fp.strip() == 
       f"{real_fp.strip()} != {fp_of(real_py).strip()}")
 check("P2 落載並執行真 widget", w is not None and err is None, f"err={err}")
 check("P3 已寫入快取", UK_STORE.get("i_widget.cached_code") == real_py)
+
+# ================================================================ 情境 Q
+print("\n【Q】widget 程式執行時爆錯 → 顯示錯誤，唔好留空白")
+BOOM = GOOD_V1.replace('VERSION = "v1"', 'VERSION = "v1"\nraise RuntimeError("boom 測試")')
+SERVE.update(fp=fp_of(BOOM), py=BOOM)
+dq = fresh()
+UK_STORE.clear()
+w, ver, err = run_launcher(dq, base=BASE2)
+check("Q1 冇向外拋錯", err is None, f"err={err}")
+check("Q2 有顯示 widget", w is not None)
+if w:
+    shown = [_text_of(c) for r in w.small_layout.rows
+             if isinstance(r, list) for c in r if hasattr(c, "_Component__args")]
+    check("Q3 顯示咗錯誤訊息", any("boom" in (t or "") for t in shown), f"{shown}")
 
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
