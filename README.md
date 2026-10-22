@@ -8,13 +8,15 @@ iPhone Home Screen 嘅「時間／系統狀態」widget，用 **Pyto**（iOS 上
 
 | 尺寸 | 內容 |
 | --- | --- |
-| 小 (2x2) | 大字時間、日期＋星期 |
-| 中 (4x2) | 大字時間、日期＋星期、電量、可用儲存空間 |
+| 小 (2x2) | 星期（紅）＋日期、大字時間、電量 |
+| 中 (4x2) | 星期＋日期＋電量、大字時間、可用儲存空間（低耗電模式時有提示） |
 | 大 (4x4) | 中尺寸全部內容，另加總儲存空間、開機時間、iOS 版本，低耗電模式開啟時多一行提示 |
 
-時間用 `DynamicDate`（`DATE_STYLE_TIME`）交畀 iOS 自己更新，所以時鐘會自動跳動，唔需要頻繁 reload。其餘系統資訊每 15 分鐘重新讀取一次。
+時間用 `DynamicDate`（`DATE_STYLE_TIME`）交畀 iOS 自己更新，所以時鐘會自動跳動，唔需要頻繁 reload。其餘系統資訊每 30 分鐘重新讀取一次（WidgetKit 每日預算內）。
 
-支援淺色／深色模式。
+外觀跟 iOS 27 系統 widget：標準白／深灰底、星期用「日曆」式紅色強調、
+「設定」App 式彩色 SF Symbols、電池圖示跟電量變化，
+文字同強調色用系統語意色，所以淺色／深色、tinted、clear（Liquid Glass）模式都會正確上色。
 
 ## 自動更新
 
@@ -23,7 +25,7 @@ Widget 會**自動跟 GitHub 最新版本**——改完 `i_widget.py` push 上 `
 
 做法係「指紋檢查 + 本地快取 + 三層回退」：
 widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落載完整程式碼；
-下載完做語法檢查先寫入快取。任何一步失敗都繼續行舊快取，
+下載完核對 SHA256 同指紋一致、再做語法檢查，先寫入快取。任何一步失敗都繼續行舊快取，
 所以網絡斷、GitHub 掛、推咗個壞 commit 落 `main`，widget 都唔會空白。
 
 快取存喺 Pyto 官方 `userkeys`（`NSUserDefaults` suite，extension 同主 app 共用，
@@ -58,8 +60,9 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 全部設定喺 `i_widget.py` 開頭同 `build_small`／`build_medium`／`build_large` 函數入面：
 
-- `RELOAD_INTERVAL`：系統資訊更新頻率（預設 15 分鐘）。電量唔會即時反映，iOS 亦只會「唔早於」呢個時間更新。
-- `BACKGROUND`、`PRIMARY`、`SECONDARY`、`GREEN`／`ORANGE`／`RED`：顏色。`wd.Color.dynamic(light=..., dark=...)` 分別設定淺色同深色模式。
+- `RELOAD_INTERVAL`：系統資訊更新頻率（預設 30 分鐘）。唔建議再低，細過大約 20 分鐘會超出 WidgetKit 每日預算，反而更新得更慢。
+- `BACKGROUND`、`PRIMARY`、`SECONDARY`、`ACCENT`、`GREEN`／`ORANGE`／`RED`／`BLUE`…：顏色。`wd.Color.dynamic(light=..., dark=...)` 分別設定淺色同深色模式；盡量用系統色（`wd.COLOR_*`），tinted／clear 模式先會正確上色。
+- `LOW_STORAGE_RATIO`：可用空間低過幾多比例就轉紅（預設 10%）。
 - `build_small`／`build_medium`／`build_large`：版面。`layout.add_row([...])` 加一行，`wd.Spacer()` 撐開左右，`layout.add_vertical_spacer()` 撐開上下，`layout.add_vertical_divider()` 畫分隔線。
 - `WEEKDAYS`：星期顯示文字。
 
@@ -67,8 +70,8 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 - **`wd.Color.dynamic()` 需要繞過 Pyto 嘅 bug**。Pyto 19.0（`widgets.py`）入面 `Color.dynamic()` 會叫 `check(light, "light", Color)`，但 `check()` 係 `for _type in types:` —— 傳入一個 type 而唔係 tuple，所以一定爆 `TypeError: 'type' object is not iterable`。呢個係官方 bug，唔係用法錯。程式頂部嘅 `_patch_color_dynamic()` 會先試一次，正常就唔理；爆 `TypeError` 就換用 `colorWithLight()` 直接砌返同樣效果。日後 Pyto 官方修咗，呢個 patch 會自動讓路唔會阻手。
 - **電量有可能顯示 `—`**。widget 擴展（extension）嘅記憶體同權限都收得好緊，`UIDevice` 喺擴展入面經常讀唔到電量；程式已經自動退回用 IOKit 讀，若兩者都失敗就會顯示 `—`。想穩定讀到電量，可以開 Pyto 嘅 **「Start Handling Widgets In App」** 捷徑（Pyto 14+），令 widget script 改由 Pyto 主 app 執行，RAM 限制同權限都鬆好多；建議喺「捷徑」加自動化，每日行一次確保 Pyto 喺背景。
-- **開機時間** 來自 `NSProcessInfo.systemUptime`，包含睡眠時間。
-- **儲存空間** 用 `os.statvfs("/")`，數字同「設定 → 一般 → iPhone 儲存空間」未必完全一致。
+- **開機時間** 優先用 `kern.boottime` 計（包括睡眠時間）；讀唔到就退返 `NSProcessInfo.systemUptime`，嗰個**唔計**睡眠時間，會偏細。
+- **儲存空間** 優先用 `NSURLVolumeAvailableCapacityForImportantUsageKey`（同「設定 → 一般 → iPhone 儲存空間」一樣計埋可清除空間），讀唔到就退返 `os.statvfs` 讀資料卷。單位用十進制（1 GB = 1000³），同 iOS 一致。
 - 「Run Script」模式嘅 script 唔可以 import 大部分含 C 擴展嘅套件（Pillow 除外），所以呢隻 widget 只用標準庫加 `rubicon.objc` 讀系統資訊。
 - iOS 只會「唔早於」你要求嘅時間更新 widget，實際更新時間由系統決定。
 
@@ -80,7 +83,9 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | `i_widget_launcher.py` | 自動更新啟動器，**widget 指向嘅係佢** | 幾乎唔使 |
 | `i_widget.fingerprint` | 版本指紋（SHA256 前綴） | GitHub Action 自動生成 |
 | `make_fingerprint.py` | 手動重算指紋 | 唔使 |
-| `test_launcher.py` | 更新邏輯測試（10 種情境，34 項斷言） | 改 launcher 時 |
+| `test_launcher.py` | 更新邏輯測試（16 種情境，50 項斷言） | 改 launcher 時 |
+| `test_widget.py` | widget 本體 smoke test（用 mock Pyto 砌齊四個尺寸） | 改 `i_widget.py` 時 |
+| `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
 | `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
 
@@ -91,12 +96,16 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 ```bash
 python3 make_fingerprint.py    # 重算指紋（正常唔使，Action 會自動做）
-python3 test_launcher.py       # 34 項斷言，確認更新邏輯冇壞
+python3 test_widget.py         # widget 本體喺 mock Pyto 行唔行到
+python3 test_launcher.py       # 50 項斷言，確認更新邏輯冇壞
 git commit -am "..." && git push
 ```
 
 Push 咗之後，GitHub Action 會自動更新 `i_widget.fingerprint`，
 手機下次 reload 就會自己攞新版。
 
-⚠️ 語法錯會被 launcher 擋（唔會炸 widget），但**語法啱、邏輯錯**嘅新版
-會照樣執行。所以 push 前喺 Pyto 試一次。
+PR 同 `main` 都會自動跑兩個測試（`.github/workflows/tests.yml`）；
+指紋 Action 亦會先跑 `test_widget.py`，失敗就唔發佈新指紋。
+
+⚠️ 語法錯會被 launcher 擋（唔會炸 widget），smoke test 亦擋到大部分 crash，
+但 mock 唔等於真機 —— 用到新嘅 Pyto API 時，push 前喺 Pyto 試一次。
