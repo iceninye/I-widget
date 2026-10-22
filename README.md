@@ -16,15 +16,40 @@ iPhone Home Screen 嘅「時間／系統狀態」widget，用 **Pyto**（iOS 上
 
 支援淺色／深色模式。
 
+## 自動更新
+
+Widget 會**自動跟 GitHub 最新版本**——改完 `i_widget.py` push 上 `main`，
+手機下次 reload 就會自己攞新版，唔使再手動抄入 Pyto。
+
+做法係「指紋檢查 + 本地快取 + 三層回退」：
+widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落載完整程式碼；
+下載完做語法檢查先寫入快取。任何一步失敗都繼續行舊快取，
+所以網絡斷、GitHub 掛、推咗個壞 commit 落 `main`，widget 都唔會空白。
+
+設計理由同驗證見 [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md)。
+
 ## 安裝
 
+**用自動更新（建議）**
+
 1. 喺 iPhone 裝 Pyto（App Store 搜尋「Pyto」，開發者 Emma Labbé）。
-2. 將 `i_widget.py` 放入 Pyto 嘅 scripts 資料夾：喺「檔案」App 搵到 `Pyto` 呢個位置，將檔案複製入去；亦可以喺 Pyto 入面新建檔案再貼上內容。
-3. 喺 Pyto 開 `i_widget.py` 行一次，確認冇紅字錯誤。
-4. 長按 Home Screen → 加**Pyto** widget → 揀尺寸 → 長按 widget → **編輯 Widget**：
+2. 將 **`i_widget_launcher.py`** 放入 Pyto 嘅 scripts 資料夾。
+   唔使抄 `i_widget.py`——launcher 會自己落載。
+3. 長按 Home Screen → 加**Pyto** widget → 揀尺寸 → 長按 widget → **編輯 Widget**：
    - `Widget Type`：`Run Script`
-   - `Script`：揀 `i_widget.py`
-5. 完成。想換尺寸就另外加一個 widget 再揀。
+   - `Script`：揀 **`i_widget_launcher.py`**
+4. 完成。第一次 reload 會落載（大約幾秒），之後自動跟最新版。
+
+**本地執行（離線用）**
+
+如果要完全離線、唔想佢上網，就直接用 `i_widget.py`：
+
+1. 將 `i_widget.py` 放入 Pyto 嘅 scripts 資料夾。
+2. 喺 Pyto 開 `i_widget.py` 行一次，確認冇紅字錯誤。
+3. Widget 嘅 `Script` 揀 `i_widget.py`。
+
+⚠️ 本地模式唔會自動更新，改咗 GitHub 都唔會生效。
+兩種模式嘅檔案唔會互相影響，想轉換只需要改 widget 設定。
 
 ## 自訂
 
@@ -46,9 +71,29 @@ iPhone Home Screen 嘅「時間／系統狀態」widget，用 **Pyto**（iOS 上
 
 ## 檔案
 
-```
-i_widget.py   主程式（widget 本身）
-LICENSE       MIT
+| 檔案 | 角色 | 幾常改 |
+| --- | --- | --- |
+| `i_widget.py` | widget 本體 | 改版面／內容時 |
+| `i_widget_launcher.py` | 自動更新啟動器，**widget 指向嘅係佢** | 幾乎唔使 |
+| `i_widget.fingerprint` | 版本指紋（SHA256 前綴） | GitHub Action 自動生成 |
+| `make_fingerprint.py` | 手動重算指紋 | 唔使 |
+| `test_launcher.py` | 更新邏輯測試（7 種情境，18 項斷言） | 改 launcher 時 |
+| `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
+| `LICENSE` | MIT | 唔使 |
+
+因為 widget script 會被 Pyto 複製到 `Documents/<id>.py` 再執行，
+`i_widget.py` 所有程式碼都刻意寫喺同一隻檔案入面，避免 import 鄰近模組時路徑出問題。
+
+## 改程式碼之後
+
+```bash
+python3 make_fingerprint.py    # 重算指紋（正常唔使，Action 會自動做）
+python3 test_launcher.py       # 18 項斷言，確認更新邏輯冇壞
+git commit -am "..." && git push
 ```
 
-因為 widget script 會被 Pyto 複製到 `Documents/<id>.py` 再執行，所有程式碼都刻意寫喺同一隻檔案入面，避免 import 鄰近模組時路徑出問題。
+Push 咗之後，GitHub Action 會自動更新 `i_widget.fingerprint`，
+手機下次 reload 就會自己攞新版。
+
+⚠️ 語法錯會被 launcher 擋（唔會炸 widget），但**語法啱、邏輯錯**嘅新版
+會照樣執行。所以 push 前喺 Pyto 試一次。
