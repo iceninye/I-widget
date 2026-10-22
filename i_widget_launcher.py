@@ -350,8 +350,11 @@ def _load_code():
 
 # --- 萬一連程式碼都攞唔到 -----------------------------------------------
 
-def _show_offline_widget(reason):
-    """完全冇程式碼可用時，顯示一個講明情況嘅 widget，唔好留空白。"""
+def _show_offline_widget(reason, title="更新失敗", detail=None):
+    """顯示一個講明情況嘅 widget，唔好留空白。
+
+    ``detail`` 係額外一行細字（例如錯誤訊息），方便喺 home screen 直接睇到原因。
+    """
     try:
         widget = wd.Widget()
         for layout in (
@@ -363,8 +366,12 @@ def _show_offline_widget(reason):
             layout.add_vertical_spacer()
             layout.add_row([wd.Text("i-widget", font=wd.Font.bold_system_font_of_size(20))])
             layout.add_row([
-                wd.Text("更新失敗", font=wd.Font.system_font_of_size(13), color=wd.COLOR_SECONDARY_LABEL),
+                wd.Text(title, font=wd.Font.system_font_of_size(13), color=wd.COLOR_SECONDARY_LABEL),
             ])
+            if detail:
+                layout.add_row([
+                    wd.Text(detail, font=wd.Font.system_font_of_size(10), color=wd.COLOR_SECONDARY_LABEL),
+                ])
             layout.add_vertical_spacer()
 
         wd.schedule_next_reload(timedelta(minutes=30))
@@ -392,7 +399,17 @@ def main():
         return
 
     _log(f"執行中（來源：{origin}）")
-    exec(compiled, {"__name__": "__main__", "__file__": __file__})
+    try:
+        exec(compiled, {"__name__": "__main__", "__file__": __file__})
+    except Exception as error:
+        # 以前 widget 程式一爆錯，home screen 就一片空白，完全睇唔到原因。
+        # 而家將錯誤顯示出嚟，下次 reload 會再試。
+        _log(f"widget 執行出錯：{type(error).__name__}: {error}")
+        _show_offline_widget(
+            "widget 執行出錯",
+            title="執行出錯",
+            detail=f"{type(error).__name__}: {error}"[:140],
+        )
 
 
 main()

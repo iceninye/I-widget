@@ -64,9 +64,12 @@ BACKGROUND = wd.Color.dynamic(
     light=wd.Color.rgb(1.0, 1.0, 1.0),
     dark=wd.Color.rgb(0.11, 0.11, 0.118),
 )
-PRIMARY = _system_color(
-    "LABEL",
-    wd.Color.dynamic(light=wd.Color.rgb(0.0, 0.0, 0.0), dark=wd.Color.rgb(1.0, 1.0, 1.0)),
+# 主文字色刻意唔用 COLOR_LABEL：extension 入面系統語意色係按 Pyto 主 app 嘅
+# 外觀解析，同 widget 自己嘅淺／深色可能唔同步，會出現白底白字。
+# 自訂 dynamic 色同背景一齊解析，一定對得上。
+PRIMARY = wd.Color.dynamic(
+    light=wd.Color.rgb(0.0, 0.0, 0.0),
+    dark=wd.Color.rgb(1.0, 1.0, 1.0),
 )
 SECONDARY = wd.COLOR_SECONDARY_LABEL
 TERTIARY = _system_color("TERTIARY_LABEL", SECONDARY)
