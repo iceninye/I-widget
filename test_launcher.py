@@ -516,6 +516,20 @@ w_w, ver_w, err_w = run_launcher(dw, base=BASE2)
 check("W1 有效快取照常用", ver_w == "version v2", f"ver={ver_w}")
 check("W2 節流生效：零網絡請求", len(HITS) == 0, f"HITS={len(HITS)}")
 
+# ================================================================ 情境 X
+print("\n【X】足跡：真機硬崩潰後可以睇到最後去到邊")
+dx = fresh()
+UK_STORE.clear()
+SERVE.update(fp=FP_V1, py=GOOD_V1)
+run_launcher(dx, base=BASE2)
+trace = UK_STORE.get("i_widget.trace", "")
+check("X1 有寫足跡", bool(trace), f"{trace!r}")
+for step in ("1 module 開始", "4a 問 GitHub 指紋", "7 即將 exec", "8 exec 完"):
+    check(f"X2 足跡有「{step}」", step in trace, trace)
+run_launcher(dx, base=BASE2)
+check("X3 保留上一輪並用 ==== 分隔", UK_STORE["i_widget.trace"].count("====") >= 2,
+      UK_STORE["i_widget.trace"])
+
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
 if FAIL:

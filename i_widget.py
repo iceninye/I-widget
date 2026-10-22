@@ -508,8 +508,24 @@ def build_large(layout, now, level, charging, free, total, system):
     layout.set_background_color(BACKGROUND)
 
 
+def _crumb(step):
+    """足跡：同 launcher 共用 userkeys 嘅 trace，記低 widget 本體去到邊。
+
+    硬崩潰（ObjC abort、被系統殺）try/except 捉唔到，只有逐步寫入先睇到死喺邊。
+    直接行 i_widget.py（唔經 launcher）時 launcher 嘅 _crumb 唔存在，就靜靜略過。
+    """
+    try:
+        import userkeys
+
+        old = userkeys.get("i_widget.trace")
+        userkeys.set(f"{old}\n   widget: {step}", "i_widget.trace")
+    except BaseException:
+        pass
+
+
 def main():
     now = datetime.now()
+    _crumb("main 開始")
 
     # 每個資料源都獨立保護。
     # 背景：真機 home screen 長期顯示綠色 default template，即係
@@ -517,9 +533,13 @@ def main():
     # 呢啲讀取全部依賴 iOS 專有 API（_objc_class / os.statvfs），
     # 任何一個喺某個 Pyto 版本或某次 reload 失敗就會令整個 widget 死。
     # 寧願少一項資料，都唔好成個唔見。
+    _crumb("讀電量前")
     level, charging = _safe(lambda: read_battery(), (None, False))
+    _crumb(f"讀電量後 {level}")
     free, total = _safe(lambda: read_storage(), (None, None))
+    _crumb(f"讀儲存後 {free}/{total}")
     system = _safe(read_system, {})
+    _crumb(f"讀系統後 {sorted(system)}")
 
     widget = _safe(wd.Widget)
     if widget is None:
@@ -542,7 +562,9 @@ def main():
             _minimal_layout(layout, f"{name} 出錯", error, now)
 
     _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
+    _crumb("即將 show_widget")
     wd.show_widget(widget)
+    _crumb("show_widget 已叫")
 
 
 def _minimal_layout(layout, title, error, now):
