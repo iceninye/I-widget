@@ -447,7 +447,21 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
 # --- 入口 ---------------------------------------------------------------
 
 def main():
-    code, origin = _load_code()
+    # ⚠️ 最外層防線。
+    # 之前 _load_code() 同 main() 都冇 try 住自己：任何未預見嘅 exception
+    # （userkeys 怪手勢、檔案 I/O、import 失敗…）都會令成個 script 死喺度，
+    # `_show_offline_widget()` 永遠唔會被叫 → iOS 顯示綠色 default template。
+    # 呢個 try 保證「只要仲有命，就一定見到畫面」。
+    try:
+        code, origin = _load_code()
+    except Exception as error:
+        _log(f"_load_code 爆：{type(error).__name__}: {error}")
+        _show_offline_widget(
+            "載入階段出錯",
+            title="載入失敗",
+            detail=f"{type(error).__name__}: {error}"[:140],
+        )
+        return
 
     if not code:
         _show_offline_widget("攞唔到任何程式碼")
@@ -464,7 +478,9 @@ def main():
     _log(f"執行中（來源：{origin}）")
     try:
         exec(compiled, {"__name__": "__main__", "__file__": __file__})
-    except Exception as error:
+    except BaseException as error:
+        # BaseException：連 SystemExit / KeyboardInterrupt 都捉埋，
+        # 因為呢度寧願畫錯都唔好畫唔到。
         # 以前 widget 程式一爆錯，home screen 就一片空白，完全睇唔到原因。
         # 而家將錯誤顯示出嚟，下次 reload 會再試。
         _log(f"widget 執行出錯：{type(error).__name__}: {error}")
@@ -475,4 +491,19 @@ def main():
         )
 
 
-main()
+# 最後一道：連 main() 本身都爆，都要嘗試講返啲嘢。
+try:
+    main()
+except BaseException as _fatal:
+    try:
+        print(f"[i-widget] FATAL in main(): {type(_fatal).__name__}: {_fatal}")
+    except Exception:
+        pass
+    try:
+        _show_offline_widget(
+            "launcher 嚴重錯誤",
+            title="嚴重錯誤",
+            detail=f"{type(_fatal).__name__}: {_fatal}"[:140],
+        )
+    except BaseException:
+        pass
