@@ -101,6 +101,87 @@ def _safe(fn, fallback=None):
         return fallback
 
 
+# --------------------------------------------------------------------------
+# 崩潰自癒（2026-10-22 真機足跡確認：砌版面時 process 被殺，但冇任何例外）
+# --------------------------------------------------------------------------
+#
+# 硬崩潰 try/except 捉唔到。做法：建立每個「有風險」元件之前，先喺 userkeys 寫低
+# 「我而家做緊 X」；X 建完先清走。如果 process 死咗，標記就留低。
+# 下次 reload 睇到舊標記（超過 10 秒前），就知道 X 令 process 死過，之後跳過 X
+# （用後備），widget 就會自己恢復，用戶唔使再做任何嘢。
+TRACE_KEY = "i_widget.trace2"      # 足跡（唔同 launcher 嘅 i_widget.trace 撞）
+INFLIGHT_KEY = "i_widget.inflight"
+BANNED_KEY = "i_widget.banned"
+BAN_AFTER_SECONDS = 10             # 同時跑緊嘅其他 process 嘅標記唔當崩潰
+TRACE_MAX_LINES = 40
+
+_BANNED_NOW = set()
+
+
+def _kget(key):
+    try:
+        import userkeys
+
+        return userkeys.get(key) or ""
+    except BaseException:
+        return ""
+
+
+def _kset(key, value):
+    try:
+        import userkeys
+
+        userkeys.set(value, key)
+    except BaseException:
+        pass
+
+
+def _crumb(step):
+    """足跡：記低 widget 本體去到邊（硬崩潰後仍然睇得到）。"""
+    try:
+        lines = _kget(TRACE_KEY).splitlines()[-(TRACE_MAX_LINES - 1):]
+        lines.append(f"p{os.getpid() % 1000} {step}")
+        _kset(TRACE_KEY, "\n".join(lines))
+    except BaseException:
+        pass
+
+
+def _recover_from_crash():
+    """上次有元件令 process 死咗 → 以後跳過佢。"""
+    global _BANNED_NOW
+    banned = {name for name in _kget(BANNED_KEY).split(",") if name}
+    marker = _kget(INFLIGHT_KEY)
+    if marker:
+        try:
+            name, started = marker.split("|")
+            if time.time() - float(started) > BAN_AFTER_SECONDS:
+                banned.add(name)
+                _kset(BANNED_KEY, ",".join(sorted(banned)))
+                _kset(INFLIGHT_KEY, "")
+                _crumb(f"偵測到上次喺「{name}」死咗，已停用")
+        except BaseException:
+            _kset(INFLIGHT_KEY, "")
+    _BANNED_NOW = banned
+
+
+def _risky(name, build):
+    """建一個有風險嘅元件。被停用就回傳 None（由呼叫者用後備）。"""
+    if name in _BANNED_NOW:
+        return None
+    _kset(INFLIGHT_KEY, f"{name}|{time.time()}")
+    _crumb(f"建 {name}")
+    return build()
+
+
+def _add_row(layout, items):
+    """加一行；None（被停用嘅元件）自動略過。"""
+    layout.add_row([item for item in items if item is not None])
+
+
+def spacer():
+    return _risky("spacer", wd.Spacer)
+
+
 def _system_color(name, fallback):
     """用 iOS 系統語意色（自動跟淺／深色、tinted、clear 模式），舊版 Pyto 冇就用後備。
 
@@ -362,8 +443,11 @@ def label(text, size=13, color=SECONDARY, bold=False):
 
 
 def icon(name, color=SECONDARY, size=13):
-    padding = wd.Padding(top=3, bottom=3, right=6)
-    return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
+    def build():
+        padding = wd.Padding(top=3, bottom=3, right=6)
+        return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
+
+    return _risky("icon", build)
 
 
 def status_row(title, value, symbol, tint, value_color=PRIMARY):
@@ -371,19 +455,26 @@ def status_row(title, value, symbol, tint, value_color=PRIMARY):
     return [
         icon(symbol, color=tint, size=14),
         label(title, size=14, color=SECONDARY),
-        wd.Spacer(),
+        spacer(),
         label(value, size=14, color=value_color, bold=True),
     ]
 
 
 def clock(now, size):
     # style=DATE_STYLE_TIME 交畀系統自動更新，唔需要靠 reload 跳秒。
-    return wd.DynamicDate(
-        now,
-        style=wd.DATE_STYLE_TIME,
-        font=wd.Font.bold_system_font_of_size(size),
-        color=PRIMARY,
+    node = _risky(
+        "clock",
+        lambda: wd.DynamicDate(
+            now,
+            style=wd.DATE_STYLE_TIME,
+            font=wd.Font.bold_system_font_of_size(size),
+            color=PRIMARY,
+        ),
     )
+    if node is None:
+        # 後備：靜態時間（要靠 reload 更新，但好過冇）。
+        node = label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
+    return node
 
 
 def weekday_label(now, size=13):
@@ -396,7 +487,7 @@ def date_label(now, size=13):
 
 def header_row(now, trailing=()):
     """星期（紅）＋日期（灰），右邊可以擺狀態。"""
-    return [weekday_label(now), date_label(now), wd.Spacer(), *trailing]
+    return [weekday_label(now), date_label(now), spacer(), *trailing]
 
 
 def battery_color(level, charging):
@@ -441,30 +532,30 @@ def storage_color(free, total):
 
 
 def build_small(layout, now, level, charging):
-    layout.add_row([weekday_label(now, size=14), wd.Spacer()])
-    layout.add_row([date_label(now), wd.Spacer()])
+    _add_row(layout, [weekday_label(now, size=14), spacer()])
+    _add_row(layout, [date_label(now), spacer()])
     layout.add_vertical_spacer()
-    layout.add_row([clock(now, 42)])
+    _add_row(layout, [clock(now, 42)])
     layout.add_vertical_spacer()
-    layout.add_row([*battery_chip(level, charging), wd.Spacer()])
-    layout.set_background_color(BACKGROUND)
+    _add_row(layout, [*battery_chip(level, charging), spacer()])
+    _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
 def build_medium(layout, now, level, charging, free, total, system):
-    layout.add_row(header_row(now, battery_chip(level, charging)))
+    _add_row(layout, header_row(now, battery_chip(level, charging)))
     layout.add_vertical_spacer()
-    layout.add_row([clock(now, 58)])
+    _add_row(layout, [clock(now, 58)])
     layout.add_vertical_spacer()
 
     footer = [
         icon("internaldrive.fill", color=BLUE),
         label(f"{format_bytes(free)} 可用", color=storage_color(free, total)),
-        wd.Spacer(),
+        spacer(),
     ]
     if system.get("low_power"):
         footer += [icon("leaf.fill", color=ORANGE), label("低耗電", color=ORANGE)]
-    layout.add_row(footer)
-    layout.set_background_color(BACKGROUND)
+    _add_row(layout, footer)
+    _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
 def build_large(layout, now, level, charging, free, total, system):
@@ -476,13 +567,13 @@ def build_large(layout, now, level, charging, free, total, system):
     if total:
         storage_text += f" / {format_bytes(total)}"
 
-    layout.add_row(header_row(now))
+    _add_row(layout, header_row(now))
     layout.add_vertical_spacer()
-    layout.add_row([clock(now, 64)])
+    _add_row(layout, [clock(now, 64)])
     layout.add_vertical_spacer()
-    layout.add_vertical_divider()
+    _risky("divider", layout.add_vertical_divider)
 
-    layout.add_row(
+    _add_row(layout, 
         status_row(
             "電量",
             battery_text,
@@ -491,41 +582,27 @@ def build_large(layout, now, level, charging, free, total, system):
             battery_color(level, charging),
         )
     )
-    layout.add_row(
+    _add_row(layout, 
         status_row(
             "儲存空間", storage_text, "internaldrive.fill", BLUE, storage_color(free, total)
         )
     )
-    layout.add_row(
+    _add_row(layout, 
         status_row("開機時間", format_uptime(system.get("uptime")), "clock.fill", INDIGO)
     )
-    layout.add_row(
+    _add_row(layout, 
         status_row("系統版本", system.get("version", MISSING), "iphone.gen3", GRAY)
     )
     if system.get("low_power"):
-        layout.add_row(status_row("低耗電模式", "已開啟", "leaf.fill", ORANGE, ORANGE))
+        _add_row(layout, status_row("低耗電模式", "已開啟", "leaf.fill", ORANGE, ORANGE))
 
-    layout.set_background_color(BACKGROUND)
-
-
-def _crumb(step):
-    """足跡：同 launcher 共用 userkeys 嘅 trace，記低 widget 本體去到邊。
-
-    硬崩潰（ObjC abort、被系統殺）try/except 捉唔到，只有逐步寫入先睇到死喺邊。
-    直接行 i_widget.py（唔經 launcher）時 launcher 嘅 _crumb 唔存在，就靜靜略過。
-    """
-    try:
-        import userkeys
-
-        old = userkeys.get("i_widget.trace")
-        userkeys.set(f"{old}\n   widget: {step}", "i_widget.trace")
-    except BaseException:
-        pass
+    _risky("background", lambda: layout.set_background_color(BACKGROUND))
 
 
 def main():
     now = datetime.now()
-    _crumb("main 開始")
+    _recover_from_crash()
+    _crumb(f"main 開始 停用={sorted(_BANNED_NOW)}")
 
     # 每個資料源都獨立保護。
     # 背景：真機 home screen 長期顯示綠色 default template，即係
@@ -541,7 +618,9 @@ def main():
     system = _safe(read_system, {})
     _crumb(f"讀系統後 {sorted(system)}")
 
+    _crumb("建 Widget()")
     widget = _safe(wd.Widget)
+    _crumb(f"Widget() {'失敗' if widget is None else '完'}")
     if widget is None:
         return
 
@@ -556,12 +635,16 @@ def main():
         if layout is None:
             continue
         try:
+            _crumb(f"{name} 開始")
             builder(layout)
+            _crumb(f"{name} 完")
         except BaseException as error:
+            _crumb(f"{name} 爆 {type(error).__name__}: {error}")
             # 呢個 family 壞咗就補最基本內容，好過由 iOS 顯示綠色 template。
             _minimal_layout(layout, f"{name} 出錯", error, now)
 
     _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
+    _kset(INFLIGHT_KEY, "")  # 順利砌完，冇元件令 process 死
     _crumb("即將 show_widget")
     wd.show_widget(widget)
     _crumb("show_widget 已叫")
@@ -577,7 +660,7 @@ def _minimal_layout(layout, title, error, now):
 
     _safe(layout.add_vertical_spacer)
     for line in (title, f"{type(error).__name__}: {error}"[:110]):
-        _safe(lambda s=line: layout.add_row([_safe(lambda t=s: wd.Text(t))]))
+        _safe(lambda s=line: _add_row(layout, [_safe(lambda t=s: wd.Text(t))]))
     _safe(lambda: layout.set_background_color(BACKGROUND))
 
 
