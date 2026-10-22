@@ -47,7 +47,8 @@ class Font:
 
 
 class Padding:
-    def __init__(self, top=0, bottom=0, left=0, right=0): pass
+    def __init__(self, top=0, bottom=0, left=0, right=0):
+        self.top, self.bottom, self.left, self.right = top, bottom, left, right
 
 
 class Component:
@@ -62,10 +63,14 @@ class Spacer: pass
 
 
 class WidgetLayout:
-    def __init__(self): self.rows = []; self.background = None
-    def add_row(self, row): self.rows.append(row)
-    def add_vertical_spacer(self): self.rows.append("<v>")
-    def add_vertical_divider(self): self.rows.append("|")
+    def __init__(self): self.rows = []; self.row_styles = []; self.background = None
+    def add_row(self, row, background_color=None, corner_radius=0, link=None):
+        # 照抄 Pyto：row 係 list；可以有 background_color／corner_radius（卡片行）
+        assert isinstance(row, list), "add_row 要 list"
+        self.rows.append(row)
+        self.row_styles.append((background_color, corner_radius))
+    def add_vertical_spacer(self): self.rows.append("<v>"); self.row_styles.append(None)
+    def add_vertical_divider(self, color=None): self.rows.append("|"); self.row_styles.append(None)
     def set_background_color(self, color): self.background = color
 
 
@@ -88,7 +93,8 @@ for _k in ("Color", "Font", "Padding", "Text", "DynamicDate", "SystemSymbol", "S
            "show_widget", "schedule_next_reload", "__PyColor__"):
     setattr(wd, _k, globals()[_k])
 for _n in ("LABEL", "SECONDARY_LABEL", "TERTIARY_LABEL", "SYSTEM_GREEN", "SYSTEM_ORANGE",
-           "SYSTEM_RED", "SYSTEM_BLUE", "SYSTEM_INDIGO", "SYSTEM_GRAY"):
+           "SYSTEM_RED", "SYSTEM_BLUE", "SYSTEM_INDIGO", "SYSTEM_GRAY",
+           "TERTIARY_SYSTEM_FILL"):
     setattr(wd, f"COLOR_{_n}", Color(f"const:{_n}"))
 sys.modules["widgets"] = wd
 

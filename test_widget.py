@@ -164,6 +164,48 @@ check("R12 舊版本停用名單自動清走", UK_STORE.get("i_widget.banned") =
 check("R13 之後版本號更新", UK_STORE.get("i_widget.ban_epoch") == EPOCH)
 check("R14 Spacer 回復使用", "Spacer" in kinds(w.large_layout), f"{kinds(w.large_layout)}")
 
+print("\n【L】版面：卡片、進度條、低耗電、邊距")
+from mock_pyto import Widget  # noqa: E402
+
+SYS = {"low_power": True, "version": "iOS 27.0.1", "uptime": 23 * 86400 + 18 * 3600}
+fresh_store()
+lw = Widget()
+g["build_large"](lw.large_layout, datetime.now(), 0.75, False, 32_600_000_000, 255_400_000_000, SYS)
+L = lw.large_layout
+cards = [i for i, st in enumerate(L.row_styles) if st and st[0] is not None]
+check("L1 大尺寸有 4 張資料卡（圓角底色）", len(cards) == 4, f"{len(cards)}")
+check("L2 卡片有圓角", all(L.row_styles[i][1] > 0 for i in cards))
+big = [text_of(c) for r in L.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
+check("L3 電量進度條", any("▰" in (t or "") and "▱" in (t or "") for t in big), f"{big}")
+check("L4 低耗電唔再佔獨立一行", "低耗電模式" not in big and "已開啟" not in big)
+check("L5 低耗電葉仔圖示喺頂部", any(type(c).__name__ == "SystemSymbol" for r in L.rows[:1]
+      if isinstance(r, list) for c in r))
+check("L6 儲存空間數值（單位只寫一次）", "32.6 / 255.4 GB" in big, f"{big}")
+check("L7 每張卡都有 Spacer（數值靠右）", all(any(type(c).__name__ == "Spacer" for c in L.rows[i]) for i in cards))
+check("L8 大尺寸總行數 ≤ 20（唔會溢出）", len(L.rows) <= 20, f"{len(L.rows)}")
+
+sm = Widget()
+g["build_small"](sm.small_layout, datetime.now(), 0.2, False, SYS)
+check("L9 小尺寸電量偏低有紅色", any(c.__dict__.get("_Component__kw", {}).get("color") is g["RED"]
+      for r in sm.small_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)))
+md = Widget()
+g["build_medium"](md.medium_layout, datetime.now(), 0.5, True, 32_600_000_000, 255_400_000_000, SYS)
+mt = [text_of(c) for r in md.medium_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)]
+check("L10 中尺寸有儲存空間", "32.6 GB 可用" in mt, f"{mt}")
+
+# 卡片功能唔支援／死過 → 退返普通行，內容照出
+fresh_store(banned="card")
+lw = Widget()
+g["_BANNED_NOW"].clear(); g["_BANNED_NOW"].add("card")
+g["build_large"](lw.large_layout, datetime.now(), 0.75, False, 32_600_000_000, 255_400_000_000, SYS)
+check("L11 卡片被停用 → 冇底色但內容照出",
+      not any(st and st[0] is not None for st in lw.large_layout.row_styles)
+      and "電量" in [text_of(c) for r in lw.large_layout.rows if isinstance(r, list) for c in r if isinstance(c, Text)])
+g["_BANNED_NOW"].clear()
+
+sb = g["segment_bar"]
+check("L12 進度條 0／50／100%", sb(0) == "▱" * 10 and sb(0.5) == "▰" * 5 + "▱" * 5 and sb(1) == "▰" * 10 and sb(None) == "▱" * 10)
+
 print("\n" + "=" * 60)
 print(f"通過 {len(PASS)}  失敗 {len(FAIL)}")
 if FAIL:
