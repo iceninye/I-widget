@@ -23,6 +23,7 @@ struct ClockText: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.5)
+            .contentTransition(.identity)
     }
 }
 
@@ -74,7 +75,7 @@ struct ProgressBar: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                Capsule().fill(Color.secondary.opacity(0.25))
                 Capsule()
                     .fill(tint)
                     .frame(width: max(0, min(1, fraction)) * geometry.size.width)
@@ -102,16 +103,53 @@ struct StatCard: View {
             Spacer(minLength: 4)
             if let fraction {
                 ProgressBar(fraction: fraction, tint: tint)
-                    .frame(width: 70, height: 6)
+                    .frame(minWidth: 28, maxWidth: 70)
+                    .frame(height: 6)
             }
             Text(value)
                 .fontWeight(.semibold)
+                .monospacedDigit()
                 .foregroundStyle(valueColor)
+                .layoutPriority(1)
         }
         .font(.system(size: 14))
         .lineLimit(1)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, 10)
+        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// 中尺寸用嘅精簡資料列：圖示 + 數值，下面一條進度條（唔設標題，慳位）。
+struct CompactStat: View {
+    let symbol: String
+    let tint: Color
+    let value: String
+    var valueColor: Color = .primary
+    var fraction: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .foregroundStyle(tint)
+                    .widgetAccentable()
+                Text(value)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(valueColor)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 14))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            if let fraction {
+                ProgressBar(fraction: fraction, tint: tint)
+                    .frame(height: 5)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
