@@ -101,7 +101,7 @@ enum ICalendar {
         value.replacingOccurrences(of: "\\n", with: " ")
             .replacingOccurrences(of: "\\N", with: " ")
             .replacingOccurrences(of: "\\,", with: ",")
-            .replacingOccurrences(of: "\;", with: ";")
+            .replacingOccurrences(of: "\\;", with: ";")
             .replacingOccurrences(of: "\\\\", with: "\\")
     }
 
