@@ -74,7 +74,7 @@ def _dyn(light, dark):
 
 _patch_color_dynamic()
 
-# 時間由系統自動跳動（DynamicDate），其餘系統資訊每次 reload 重新讀取。
+# 時間用 DynamicDate 嘅計時器樣式由系統即時跳動（見 place_clock），其餘系統資訊每次 reload 重新讀取。
 #
 # 30 分鐘唔係隨意揀：WidgetKit 用「每日預算」分配 reload，Apple 官方講明
 # 一般用家每日 40–70 次（大約 15–60 分鐘一次）。15 分鐘等於要求 96 次/日，
@@ -82,8 +82,8 @@ _patch_color_dynamic()
 # iOS 27 更加收緊咗記憶體同電力預算，overshoot 嘅 widget 會被更快 throttle。
 #
 # 30 分鐘 = 48 次/日，穩穩喺預算內。以電量／儲存空間呢類資料來講，
-# 半個鐘更新一次已經夠 — 真正要實時嘅係時間，而時間交畀 DynamicDate，
-# 唔使靠 reload。
+# 半個鐘更新一次已經夠 — 真正要實時嘅係時間，而時間交畀計時器樣式嘅
+# DynamicDate，唔使靠 reload。
 RELOAD_INTERVAL = timedelta(minutes=30)
 
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
@@ -120,7 +120,7 @@ TRACE_MAX_LINES = 40
 
 # 停用名單嘅版本。改動元件寫法（或者之前有誤判）時 +1，
 # 每部機第一次行新版會自動清走舊名單，用戶唔使手動 userkeys.set。
-BAN_EPOCH = 2
+BAN_EPOCH = 3
 
 _BANNED_NOW = set()
 
@@ -195,12 +195,21 @@ def _recover_from_crash():
 
 
 def _risky(name, build):
-    """建一個有風險嘅元件。被停用就回傳 None（由呼叫者用後備）。"""
+    """執行一個會碰 native 嘅操作（add_row／set_background…）。被停用就回傳 None。
+
+    ⚠️ 標記必須包住「真正碰 native 嘅一刻」，唔係包住元件建構：
+    Pyto 嘅 Text／SystemSymbol／DynamicDate／Spacer 建構時只係純 Python，
+    native 物件係 ``layout.add_row()`` 先砌。標記放錯位會令 process 死喺
+    後面某個 add_row 時，錯怪最近建構嘅元件（spacer 就係咁被誤判停用）。
+    成功就即刻清標記，所以殘留嘅標記一定係死喺呢個操作入面。
+    """
     if name in _BANNED_NOW:
         return None
     _kset(INFLIGHT_KEY, f"{name}|{time.time()}")
-    _crumb(f"建 {name}")
-    return build()
+    try:
+        return build()
+    finally:
+        _kset(INFLIGHT_KEY, "")
 
 
 def _add_row(layout, items):
@@ -209,7 +218,8 @@ def _add_row(layout, items):
 
 
 def spacer():
-    return _risky("spacer", wd.Spacer)
+    # Spacer() 純 Python，冇 native 風險，唔使標記。
+    return None if "spacer" in _BANNED_NOW else wd.Spacer()
 
 
 def _system_color(name, fallback):
@@ -512,11 +522,10 @@ def label(text, size=13, color=SECONDARY, bold=False, padding=None):
 
 
 def icon(name, color=SECONDARY, size=13, top=2, bottom=2, left=0, right=6):
-    def build():
-        padding = wd.Padding(top=top, bottom=bottom, left=left, right=right)
-        return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
-
-    return _risky("icon", build)
+    if "icon" in _BANNED_NOW:
+        return None
+    padding = wd.Padding(top=top, bottom=bottom, left=left, right=right)
+    return wd.SystemSymbol(name, color=color, font_size=size, padding=padding)
 
 
 def _add_card(layout, items):
@@ -554,30 +563,58 @@ def stat_card(layout, symbol, tint, title, value, value_color=PRIMARY, bar=None,
     _add_card(layout, cells)
 
 
-def clock(now, size):
-    """大字時間。優先用 DynamicDate（系統自動跳動），死過就換下一種寫法。
+def _midnight(now):
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    真機足跡（2026-10-22，兩個獨立 process）：「rich」寫法
-    ``DynamicDate(now, style=TIME, font=…, color=…)`` 一建就令 process 被殺。
-    所以只保留較簡單嘅寫法，由豐富到簡單逐個試；每個寫法有自己嘅停用標記，
-    死一次就跳去下一個（見 ``_risky``）。全部死晒就用靜態文字。
+
+def place_clock(layout, now, size, tail=(), timer_size=None):
+    """加一行大字時間。
+
+    首選「計時器寫法」：``DynamicDate(今日 00:00, style=TIMER)`` 由 iOS 即時由 00:00 起數，
+    顯示 ``h:mm:ss``，等於會自己跳動嘅時鐘，唔使靠 reload。
+    （``DATE_STYLE_TIME`` 只係顯示傳入日期嘅時間，唔會跳動，所以時鐘會停喺上次 reload。）
+
+    例外：計時器喺 1 小時內只顯示「分:秒」，所以 00:00–00:59 唔用。
+    後備依次係：``DATE_STYLE_TIME`` 嘅三種寫法（靜態）、純文字。
+    每個寫法有自己嘅停用標記（真機：font+color 寫法會令 process 被殺），標記包住 ``add_row``。
     """
-    font = lambda: wd.Font.bold_system_font_of_size(size)
-    for name, build in (
-        ("clock_font", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, font=font())),
-        ("clock_color", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, color=PRIMARY)),
-        ("clock_plain", lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME)),
-    ):
+    font = lambda sz=size: wd.Font.bold_system_font_of_size(sz)
+    variants = []
+    if now.hour != 0:
+        t_size = timer_size or size
+        variants.append(("clock_timer", t_size, lambda: wd.DynamicDate(
+            _midnight(now), style=wd.DATE_STYLE_TIMER, font=font(t_size))))
+    variants += [
+        ("clock_font", size, lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, font=font())),
+        ("clock_color", size, lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME, color=PRIMARY)),
+        ("clock_plain", size, lambda: wd.DynamicDate(now, style=wd.DATE_STYLE_TIME)),
+    ]
+    for name, _size, build in variants:
+        if name in _BANNED_NOW:
+            continue
         try:
-            node = _risky(name, build)
+            row = [build(), *[item for item in tail if item is not None]]
+            _risky(name, lambda: layout.add_row(row))
+            return
         except BaseException as error:
             _crumb(f"{name} 爆 {type(error).__name__}: {error}")
-            continue
-        if node is not None:
-            return node
     # 後備：靜態時間（要靠 reload 更新，但好過冇）。
     _crumb("clock 用靜態文字")
-    return label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True)
+    row = [label(now.strftime("%H:%M"), size=size, color=PRIMARY, bold=True),
+           *[item for item in tail if item is not None]]
+    layout.add_row(row)
+
+
+def next_reload_delay(now):
+    """下次 reload 要趕得及 00:00 同 01:00（計時器寫法喺 00:xx 唔啱用，跨日會變 24:xx）。"""
+    edges = []
+    for hour in (0, 1):
+        edge = now.replace(hour=hour, minute=0, second=20, microsecond=0)
+        if edge <= now:
+            edge += timedelta(days=1)
+        edges.append(edge)
+    until_edge = min(edge - now for edge in edges)
+    return min(RELOAD_INTERVAL, until_edge)
 
 
 def weekday_label(now, size=14, padding=None):
@@ -660,7 +697,7 @@ def build_small(layout, now, level, charging, system):
     _add_row(layout, [weekday_label(now, 14, _pad(top=TOP_INSET, left=INSET)), spacer()])
     _add_row(layout, [date_label(now, 13, _pad(left=INSET)), spacer()])
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 44), spacer()])
+    place_clock(layout, now, 44, [spacer()], timer_size=28)
     layout.add_vertical_spacer()
     _add_row(layout, [
         *battery_chip(level, charging, size=14, top=0, right=0),
@@ -676,7 +713,7 @@ def build_medium(layout, now, level, charging, free, total, system):
     chip = battery_chip(level, charging, size=14, top=TOP_INSET, right=INSET)
     _add_row(layout, header_row(now, chip))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 56), spacer()])
+    place_clock(layout, now, 56, [spacer()], timer_size=50)
     layout.add_vertical_spacer()
     _add_row(layout, [
         icon("internaldrive.fill", color=BLUE, size=14, left=INSET),
@@ -698,7 +735,7 @@ def build_large(layout, now, level, charging, free, total, system):
 
     _add_row(layout, header_row(now, low_power_chip(system, size=15, top=TOP_INSET, right=INSET), size=15))
     layout.add_vertical_spacer()
-    _add_row(layout, [clock(now, 80)])
+    place_clock(layout, now, 80, timer_size=60)
     layout.add_vertical_spacer()
 
     color = battery_color(level, charging)
@@ -714,6 +751,19 @@ def build_large(layout, now, level, charging, free, total, system):
     stat_card(layout, "iphone.gen3", GRAY, "系統版本", system.get("version", MISSING))
     _add_gap(layout, BOTTOM_INSET)
     _risky("background", lambda: layout.set_background_color(BACKGROUND))
+
+
+def _is_ipad():
+    """extra large 只喺 iPad 出現。讀唔到就當 iPad（多砌少少，但安全）。"""
+    try:
+        return int(_objc_class("UIDevice").currentDevice.userInterfaceIdiom) == 1
+    except BaseException:
+        return True
+
+
+def family_names(ipad):
+    names = ("small_layout", "medium_layout", "large_layout")
+    return names + ("extra_large_layout",) if ipad else names
 
 
 def main():
@@ -742,12 +792,18 @@ def main():
         return
 
     # 每個 family 獨立保護：small 壞唔影響 large。
+    # iPhone 唔會用到 extra large，唔砌可以慳返四分一工夫同記憶體
+    # （真機足跡：同一份 code 有時跑得完、有時喺砌版面中途被殺，疑似資源問題）。
+    wanted = family_names(_is_ipad())
+    _crumb(f"砌 {len(wanted)} 個 family")
     for name, builder in (
         ("small_layout", lambda L: build_small(L, now, level, charging, system)),
         ("medium_layout", lambda L: build_medium(L, now, level, charging, free, total, system)),
         ("large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
         ("extra_large_layout", lambda L: build_large(L, now, level, charging, free, total, system)),
     ):
+        if name not in wanted:
+            continue
         layout = _safe(lambda n=name: getattr(widget, n))
         if layout is None:
             continue
@@ -760,7 +816,7 @@ def main():
             # 呢個 family 壞咗就補最基本內容，好過由 iOS 顯示綠色 template。
             _minimal_layout(layout, f"{name} 出錯", error, now)
 
-    _safe(lambda: wd.schedule_next_reload(RELOAD_INTERVAL))
+    _safe(lambda: wd.schedule_next_reload(next_reload_delay(now)))
     _kset(INFLIGHT_KEY, "")  # 順利砌完，冇元件令 process 死
     _kset(STRIKES_KEY, "")   # 要「連續」死先算，成功一次就清零
     _crumb("即將 show_widget")

@@ -58,17 +58,27 @@ launcher 同 widget 本體每過一個關卡就寫一行到 userkeys，附 pid�
 用 `i_widget_trace.py` 讀出。
 
 ### 2. 崩潰自癒（`i_widget.py`）
-建立有風險元件（`DynamicDate`／`SystemSymbol`／`Spacer`／divider／background）之前，
-先寫 `inflight = 名|時間`；建完先清。Process 死咗標記就留低。
+Process 死咗，`try/except` 完全冇機會行。所以喺「會碰 native 嘅操作」之前先寫 `inflight = 名|時間`，成功就即刻清走；死咗標記就留低。
 下次 reload 見到超過 10 秒前嘅標記：
 
-- 記一次 strike；**同一個元件連續死兩次先停用**（多個 process 同時死會互相覆寫標記，單次證據可能係誤判——今次 `spacer` 就係咁被誤停用）。
-- 停用後用後備：時間改試下一種 `DynamicDate` 寫法，全部死晒就用靜態文字；圖示／Spacer 等直接略過。
+- 記一次 strike；**同一個名連續死兩次先停用**（多個 process 同時死會互相覆寫標記，單次證據可能係誤判）。
+- 停用後用後備：時間改試下一種 `DynamicDate` 寫法，全部死晒就用靜態文字；卡片行退返普通行。
 - 順利完成一輪就清零 strike，所以只計「連續」。
 - `BAN_EPOCH` 版本號：元件寫法改動或發現誤判時 +1，每部機第一次行新版會自動清走舊停用名單，唔使手動 `userkeys.set`。
 
+**標記要包住 native 嘅一刻，唔係元件建構（2026-10-23 更正）**：讀 Pyto 源碼（`Lib/widgets.py`）先知道，
+`Text`／`SystemSymbol`／`DynamicDate`／`Spacer` 建構時只係純 Python，native 物件要到 `layout.add_row()` 先砌。
+最初我喺建構前寫標記，所以 process 死喺後面某個 `add_row` 時，責任會歸咎最近建構嘅元件——
+`spacer` 就係咁被誤判停用（`Spacer.__init__` 其實乜都唔做）。
+現時標記包住 `add_row`（clock、卡片行）、`set_background_color`、`add_vertical_divider`，並喺操作成功後即刻清走。
+
+**懷疑係資源問題**：同一份 code，有 process 跑晒（`show_widget 已叫`），有 process 喺砌版面中途被殺。
+iPhone 唔會用到 extra large，所以只砌 small／medium／large；亦減少咗每個元件一次嘅 userkeys 寫入。
+
 ### 3. 時間元件
-`clock()` 依次試：只帶 font → 只帶 color → 全部預設 → 靜態文字。「font+color」寫法已確認致命，唔再試。
+`DATE_STYLE_TIME` 只顯示傳入日期嘅時間，**唔會自己跳動**（舊文件／註解講錯咗），所以時鐘會停喺上次 reload。
+`place_clock()` 依次試：計時器（`DATE_STYLE_TIMER`，由 00:00 起數，即時跳動，`h:mm:ss`；00:00–00:59 唔用）→ TIME＋font → TIME＋color → TIME → 靜態文字。
+「font+color」寫法已確認致命，唔再試。各寫法有各自停用標記。
 
 ---
 
