@@ -5,6 +5,8 @@ import WidgetKit
 struct IWidgetBundle: WidgetBundle {
     var body: some Widget {
         IWidget()
+        ScheduleWidget()
+        VPSWidget()
     }
 }
 

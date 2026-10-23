@@ -73,6 +73,9 @@ targets:
       - path: Shared/GoldModels.swift
       - path: Shared/OSVersion.swift
       - path: Shared/InfoFormatting.swift
+      - path: Shared/RosterModels.swift
+      - path: Shared/ICalendar.swift
+      - path: Shared/VPSStatus.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests
