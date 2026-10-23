@@ -23,3 +23,10 @@ jobs:
 
       - name: Launcher update logic
         run: python3 test_launcher.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Scriptable version
+        run: node scriptable/test-i-widget.js
