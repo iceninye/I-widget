@@ -12,6 +12,55 @@ extension BatteryTone {
     }
 }
 
+extension RebootHint {
+    var tint: Color {
+        switch self {
+        case .none: return .indigo
+        case .soon: return .orange
+        case .due: return .red
+        }
+    }
+
+    var valueColor: Color {
+        switch self {
+        case .none: return .primary
+        case .soon: return .orange
+        case .due: return .red
+        }
+    }
+}
+
+/// 完整彩色先畫實色底；Clear／Tinted（Liquid Glass）由系統畫玻璃，唔好自己蓋住。
+struct WidgetBackground: View {
+    @Environment(\.widgetRenderingMode) private var mode
+
+    var body: some View {
+        if mode == .fullColor {
+            Color(uiColor: .systemBackground)
+        } else {
+            Color.clear
+        }
+    }
+}
+
+/// 「即時更新」掣。小／中尺寸得個圖示，大尺寸連字。
+struct RefreshButton: View {
+    var showsTitle = false
+
+    var body: some View {
+        Button(intent: RefreshIntent()) {
+            if showsTitle {
+                Label("即時更新", systemImage: "arrow.clockwise")
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.secondary)
+    }
+}
+
 /// 大字時間（24 小時制 HH:mm）。
 struct ClockText: View {
     let date: Date
@@ -29,9 +78,12 @@ struct ClockText: View {
 
 /// 星期（紅）＋ 日期（灰），低耗電模式時右邊有葉仔。
 struct DateHeader: View {
+    enum Refresh { case none, icon, full }
+
     let date: Date
     var size: CGFloat = 14
     var lowPower = false
+    var refresh = Refresh.none
 
     var body: some View {
         HStack(spacing: 6) {
@@ -47,9 +99,38 @@ struct DateHeader: View {
                     .foregroundStyle(.orange)
                     .widgetAccentable()
             }
+            if refresh != .none {
+                RefreshButton(showsTitle: refresh == .full)
+            }
         }
         .font(.system(size: size))
         .lineLimit(1)
+    }
+}
+
+/// 中尺寸：圖示 + 今日氣溫範圍 + 明日。
+struct WeatherLine: View {
+    let weather: WeatherSnapshot?
+
+    var body: some View {
+        if let weather {
+            HStack(spacing: 4) {
+                Image(systemName: WeatherCode.symbol(weather.today.code))
+                    .foregroundStyle(.cyan)
+                    .widgetAccentable()
+                Text(Formatting.tempRange(weather.today))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                if let tomorrow = weather.tomorrow {
+                    Text("明 \(Formatting.tempRange(tomorrow))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .font(.system(size: 12))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
     }
 }
 
@@ -69,6 +150,7 @@ struct BatteryChip: View {
 }
 
 struct ProgressBar: View {
+    @Environment(\.widgetRenderingMode) private var mode
     let fraction: Double
     let tint: Color
 
@@ -77,8 +159,9 @@ struct ProgressBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.secondary.opacity(0.25))
                 Capsule()
-                    .fill(tint)
+                    .fill(mode == .fullColor ? tint : Color.primary)
                     .frame(width: max(0, min(1, fraction)) * geometry.size.width)
+                    .widgetAccentable()
             }
         }
     }
@@ -110,6 +193,7 @@ struct StatCard: View {
                 .fontWeight(.semibold)
                 .monospacedDigit()
                 .foregroundStyle(valueColor)
+                .minimumScaleFactor(0.8)
                 .layoutPriority(1)
         }
         .font(.system(size: 14))
