@@ -19,7 +19,7 @@ struct StatsWidgetView: View {
             CircularView(entry: entry)
         case .accessoryRectangular:
             RectangularView(entry: entry)
-        @unknown default:
+        default:
             LargeView(entry: entry)
         }
     }
