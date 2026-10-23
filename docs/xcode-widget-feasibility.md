@@ -189,7 +189,7 @@ widget 只讀，唔入伺服器：
 
 1. **唔付費**：唔用 TestFlight／Push／WeatherKit。安裝用 Xcode 每 7 日重裝，或 AltStore（見 A 節）。
 2. **日曆**：用 iPhone 系統日曆（EventKit），步驟見 K1。
-3. **工作更份**：Ice 話其他 thread 有資料，但我睇晒其他三個 thread、repo 同兩張 uploads 截圖（只係 app 同 widget 嘅畫面），**搵唔到更份資料來源**。暫時假設更份係系統日曆內嘅事件（K1 有設計），但仍要 Ice 確認（見 L）。
+3. **工作更份**：資料來源係 Ice 自己嘅 repo [tml-roster](https://github.com/iceninye/tml-roster)（屯馬綫 Duty Roster），設計見 K6。
 4. **VPS**：Ubuntu，步驟見 K2。
 5. **天氣**：跟 GPS，定時更新。
 6. **黃金**：USD/oz，定時更新。
@@ -202,17 +202,21 @@ Xcode 版已經喺 iOS 27.0.1 真機行得，顯示電量、儲存空間、開�
 
 ## K. 實作步驟
 
-### K1. 日曆（EventKit）
-**你要做嘅（一次性）**
-1. iPhone：設定 → 日曆 → 帳號 → 加入帳號 → Google，用學校帳號登入，開啟「日曆」。個人／工作 Google 帳號都一樣加入。
-2. 如果登入後學校日曆冇出現或者被擋，係學校 Workspace 管理員限制，要問學校 IT；備選係日曆網頁版取「iCal 格式私人地址」（亦可能被關），到時我再做 iCal 版。
-3. 打開 i-widget app，按「允許日曆」（完整存取）。
+### K1. 學校日曆（四個公開 Google 日曆）
+Ice 提供咗學校（聖公會聖西門呂明才中學）四個日曆：事項、假期、考試及統測、循環周（Cycle No./Day）。
+佢哋係**公開嵌入日曆**（網頁 embed 連結），唔需要登入 Google，所以**唔使 OAuth、唔使 EventKit**，亦冇憑證要保管。
 
-**我會做嘅**
-- app 同 extension 嘅 Info.plist 加 `NSCalendarsFullAccessUsageDescription`；用 `EKEventStore.requestFullAccessToEvents`。
-- 設定頁揀邊啲日曆係「工作」、邊啲係「學校」（按日曆名稱），唔需要任何 Google 憑證。
-- 今日：列出尚餘事件；明日：事件數量＋頭兩項。Timeline entry 設喺事件開始／結束時間，唔使靠 reload。
-- 「工作更份」：如果更份係日曆事件（例如標題「早更」「夜更」），顯示今日更份；如果唔係，要 Ice 講資料喺邊。
+**建議做法：widget 直接讀公開 iCal**
+- 每個日曆 ID 解 base64（`src=` 嗰串）得到 `skhsslmc.edu.hk_<隨機碼>@group.calendar.google.com`。
+- 公開日曆嘅 iCal 位址格式：`https://calendar.google.com/calendar/ical/<日曆ID（URL 編碼）>/public/basic.ics`。
+- widget 抓四條 `.ics`，用細型 iCalendar 解析器（`VEVENT`：`DTSTART`／`DTEND`／`SUMMARY`、全日事件 `VALUE=DATE`、基本 `RRULE`），合併後顯示：
+  - 今日：循環周（例如 Day 3）、今日事項。
+  - 明日：事項／假期／考試概要（數量＋頭兩項）。
+- 好處：無權限彈窗、`即時更新` 掣可以即刻重抓、唔受學校限制 Google 帳號同步影響。
+- **未驗證**（我環境封網）：要確認四條日曆係咪「對外公開（See all event details）」令 `/public/basic.ics` 可讀；請 Ice 喺 iPhone Safari 開一條 `.ics` 網址，會自動下載／彈出訂閱就得。
+- 備選：如果 `.ics` 讀唔到，喺 iPhone「日曆 → 加入訂閱日曆」貼同一個位址，或者登入學校 Google 帳號，再用 EventKit 讀（需要 `NSCalendarsFullAccessUsageDescription`）。
+
+日曆 ID 係公開資料（學校網頁已公開），放喺 app 設定常數無妨；唔係憑證。
 
 ### K2. Ubuntu VPS 狀態
 **喺 VPS 上（SSH 入去自己做，唔好將密碼貼出嚟）**
@@ -258,8 +262,34 @@ os.replace(tmp, "/var/www/status/status.json")
 ### K5. 黃金 USD/oz
 - 每 15 分鐘 reload，顯示現價、較上次變動、「更新於 HH:mm」；超過 1 小時轉灰。來源見 G 節，實作前先喺 Mac／iPhone 上核對該 API 免費額度。
 
+### K6. 工作更份（來自 tml-roster）
+我睇咗 `tml-roster` repo（只讀）。重點：
+- Roster 係 136 行（每行一個星期，週一至週日 7 格），循環；`anchor` 記「某個星期一嗰週做第幾行」。格內容：7 位更份編號（頭 4 位係 Duty Sheet：1101 平日、6091 星期六、7091 星期日）、`RD`／`AL`／`SH`／`HC`、後備更 `HSP1`／`KSP1…`；另有「某日手動改」`overrides`。
+- 服務日由香港時間 **04:00** 轉日（00:30 前後收工仍算前一日）。
+- 更份上落班時間：TML-traffic 嘅 `data/duty-basic.json`，格式 `"1100101":[上班秒,"地點",下班秒,"地點",工時,"DE/DL"]`（秒數由服務日 00:00 起計，可超過 86400）。特別日子（8022／8023／8027／7091M）要睇 `data/duties/index.json` 嘅 `dates`／`alsoOn`。
+- 你嘅更表**只存喺瀏覽器**；有雲端同步：`tml-roster` 嘅 Cloudflare Worker `GET /api/roster/<token>` 回傳完整 roster（rows／numbers／anchor／overrides）。token 係 20–64 位 `[a-z0-9]`，「靠 URL 保密」——**攞到條 URL 嘅人讀寫得到**。
+
+**widget 設計**
+1. app 設定頁輸入 tml-roster 嘅同步 token（或者貼上「設定／備份」匯出嘅 JSON），存 Keychain／App Group；**token 同 roster 內容絕不寫入 repo、測試、文件**（`tml-roster` 自己亦咁規定）。
+2. widget 唯讀：每日抓一次 roster（`GET`，唔 `PUT`），快取落 App Group；`duty-basic.json` 同 `index.json` 由 TML-traffic 讀（同 tml-roster 一樣先試 `tml-traffic.iceninye.workers.dev`，再試 GitHub raw）。
+3. 用 Swift 移植 `lib/tml-roster.js` 嘅 `rowAfter`／`dayEntry`／`serviceDate`（約 100 行純函數），並照搬 `tools/validate_roster.mjs` 嘅虛構 roster 做 XCTest 對照測試。
+4. 顯示：今日更份編號＋類別（死早／早／中／夜／死夜，按 `lib/tml-shift.js`：06:30 前上班＝死早，00:30 後下班＝死夜，其餘按 10:00／15:00 分早／中／夜）、上班／下班時間同地點；明日同樣。`RD`／`AL`／`SH` 顯示「休息」「年假」「公眾假期」。
+5. 風險：(a) token 若外洩，roster 會被讀寫，widget 只做 `GET`，但 token 要放 Keychain；(b) 雲端同步係 Ice 手動開啟先有，冇 token 就用貼上 JSON；(c) widget 抓取失敗要顯示上次快取＋「更新於」。
+
+### K7. 實際 VPS（Hostinger，Ubuntu）
+Ice 提供咗 VPS 主機名同證書已備。主機名唔寫入 repo，由 app 設定頁輸入。nginx 範例（token 用 `openssl rand -hex 32` 產生，只放伺服器同 iPhone）：
+```nginx
+location = /status.json {
+    if ($http_authorization != "Bearer <你的token>") { return 401; }
+    default_type application/json;
+    add_header Cache-Control "no-store";
+    alias /var/www/status/status.json;
+}
+```
+（放入已有 TLS 證書嘅 `server {}` 區塊，`sudo nginx -t && sudo systemctl reload nginx`。）
+
 ## L. 仍要問 Ice
 
-1. **工作更份**資料喺邊？（系統日曆事件／其他 App／Excel／PDF／手寫）如果係日曆，事件標題通常係點寫？
-2. 邊啲日曆係「工作」、邊啲係「學校」？（同步後我可以按日曆名篩選）
-3. VPS 係咪可以開一個 HTTPS 網域（有網域＋證書）？冇網域嘅話我改用 Tailscale 或其他方案。
+1. **tml-roster 同步 token**：widget 要讀你嘅雲端 roster，需要你喺 app 設定頁自己輸入（唔好貼喺 chat）。你想用「雲端同步 token」，定係貼匯出嘅備份 JSON（離線，要手動更新）？
+2. **學校日曆**：請喺 iPhone Safari 開四條公開 `.ics` 之一確認可讀（見 K1）；如果唔得，我會轉用「訂閱日曆＋EventKit」。
+3. **VPS**：請喺 VPS 按 K2 同 K7 部署狀態腳本同 nginx，完成後話我知（只要講「做咗」，唔使貼 token）。
