@@ -26,7 +26,13 @@ open iWidget.xcodeproj
 4. 第一次會提示「不受信任嘅開發者」：設定 → 一般 → **VPN 與裝置管理** → 揀你個 Apple ID → 信任。再 Run 一次。
 
 ## 4. 加 widget
-主畫面長按 → 左上角 **+** → 搵 **i-widget** → 揀尺寸（小／中／大）加入。
+主畫面長按 → 左上角 **+** → 搵 **i-widget** → 揀**大**尺寸加入（全部資料整合喺一個 widget）。
+加入後長按 widget →「編輯小工具」，填：
+- tml-roster 同步 token（更份）
+- VPS 狀態網址：`https://<你個網域>/status.json`
+- VPS token（唔使打 `Bearer`）
+
+電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
 鎖屏：長按鎖屏 → 自訂 → 加入元件 → 揀行內／圓形／長方形。
 
 ## 常見問題

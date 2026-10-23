@@ -76,6 +76,8 @@ targets:
       - path: Shared/RosterModels.swift
       - path: Shared/ICalendar.swift
       - path: Shared/VPSStatus.swift
+      - path: Shared/BatteryEstimate.swift
+      - path: Shared/DutyCards.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests

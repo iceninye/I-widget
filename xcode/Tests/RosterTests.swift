@@ -113,25 +113,84 @@ final class RosterTests: XCTestCase {
         XCTAssertThrowsError(try DutyBasic.parse(Data("{}".utf8)))
     }
 
-    func testSummary() {
+    private let sheets = [
+        DutySheet(code: "1101", file: "DS1101.json", special: false, dates: []),
+        DutySheet(code: "7091", file: "DS7091.json", special: false, dates: []),
+        DutySheet(code: "7091M", file: "DS7091M.json", special: true, dates: ["2026-11-01"]),
+        DutySheet(code: "8022", file: "DS8022.json", special: true, dates: ["2026-10-24"]),
+    ]
+
+    func testDutyDayFromBasic() {
         var plain = roster
         plain.overrides["2026-10-23"] = "1100101"
-        plain.overrides["2026-10-24"] = "7091999"
-        let duties = ["1100101": DutyTime(on: 17_100, onPlace: "屯門", off: 42_300, offPlace: "錦上路", hours: 6.5)]
+        plain.overrides["2026-10-25"] = "7091999"
+        let basic = ["1100101": DutyTime(on: 17_100, onPlace: "屯門", off: 42_300, offPlace: "錦上路", hours: 6.5)]
+        let make = { (date: String) in
+            DutyDay.make(roster: plain, date: date, basic: basic, cards: [:], sheets: self.sheets, places: .empty)
+        }
 
-        let duty = RosterSummary.summary(roster: plain, duties: duties, date: "2026-10-23")
-        XCTAssertEqual(duty?.label, "死早更 1100101")
-        XCTAssertEqual(duty?.times, "04:45–11:45")
-        XCTAssertEqual(duty?.places, "屯門 → 錦上路")
+        let duty = make("2026-10-23")
+        XCTAssertEqual(duty?.title, "死早更 1100101")
+        XCTAssertEqual(duty?.times, "04:45 – 11:45")
+        XCTAssertEqual(duty?.route, "屯門 → 錦上路")
+        XCTAssertEqual(duty?.hoursText, "6.5 小時")
+        XCTAssertEqual(duty?.isOverride, true)
 
-        let unknown = RosterSummary.summary(roster: plain, duties: duties, date: "2026-10-24")
-        XCTAssertEqual(unknown?.label, "更份 7091999")
+        let unknown = make("2026-10-25")
+        XCTAssertEqual(unknown?.title, "更份 7091999")
         XCTAssertNil(unknown?.times)
 
-        let rest = RosterSummary.summary(roster: roster, duties: duties, date: "2026-10-24")
-        XCTAssertEqual(rest?.label, "休息")
+        let rest = DutyDay.make(roster: roster, date: "2026-10-24", basic: basic, cards: [:], sheets: sheets, places: .empty)
+        XCTAssertEqual(rest?.title, "休息")
+        XCTAssertEqual(rest?.kind, .rest)
 
-        XCTAssertEqual(RosterSummary.clock(90_000), "01:00+1")
-        XCTAssertNil(RosterSummary.summary(roster: roster, duties: [:], date: "garbage"))
+        XCTAssertNil(DutyDay.make(roster: roster, date: "garbage", basic: [:], cards: [:], sheets: [], places: .empty))
+    }
+
+    func testDutyDayFromCardUsesDatedSheetAndMeal() throws {
+        var plain = roster
+        plain.overrides["2026-11-01"] = "7091101"
+        plain.overrides["2026-10-24"] = "6091124"
+        let json = #"{"duties":[{"id":"7091101","group":"KSR","on":[31980,"KSR"],"off":[90000,"TAD"],"work":510,"meal":[38640,40440,"LT2","HUH3"]},{"id":"7091102","on":null}]}"#
+        let cards = try DutyData.parseCards(Data(json.utf8), ids: ["7091101", "7091102"])
+        XCTAssertEqual(cards.count, 1)
+        let keyed = [DutyDay.cardKey(sheet: "7091M", id: "7091101"): cards["7091101"]!]
+        let places = PlaceNames(stations: ["KSR": "錦上路", "HUH": "紅磡"], places: [:])
+
+        let day = DutyDay.make(roster: plain, date: "2026-11-01", basic: [:], cards: keyed, sheets: sheets, places: places)
+        XCTAssertEqual(day?.datedSheet, "7091M")
+        XCTAssertEqual(day?.group, "KSR")
+        XCTAssertEqual(day?.shift, .night)
+        XCTAssertEqual(day?.times, "08:53 – 01:00")
+        XCTAssertEqual(day?.route, "錦上路 → 大圍廠 TAD")
+        XCTAssertEqual(day?.hoursText, "8.5 小時")
+        XCTAssertEqual(day?.mealText, "用膳 10:44–11:14 紅磡廠 LT2 → 紅磡 3")
+        XCTAssertNil(day?.hint)
+
+        // 8022 唔係 6091 開頭：唔自動換，只提示
+        let special = DutyDay.make(roster: plain, date: "2026-10-24", basic: [:], cards: [:], sheets: sheets, places: places)
+        XCTAssertNil(special?.datedSheet)
+        XCTAssertEqual(special?.hint, "當日用 Duty Sheet 8022，更份可能係 8022124")
+    }
+
+    func testServiceSecondDates() {
+        let day = DutyDay(date: "2026-10-23", code: "X", kind: .duty, title: "X")
+        XCTAssertEqual(day.moment(atServiceSecond: 0), date("2026-10-22T16:00:00Z"))
+        XCTAssertEqual(day.moment(atServiceSecond: 90_000), date("2026-10-23T17:00:00Z"))
+    }
+
+    func testIndexAndPlaceNames() throws {
+        let index = #"{"sheets":[{"code":"7091M","file":"DS7091M.json","class":"special","dates":["2026-11-01"],"alsoOn":["2026-11-02"]},{"code":"bad","file":"../x.json"}]}"#
+        let parsed = try DutyData.parseIndex(Data(index.utf8))
+        XCTAssertEqual(parsed, [DutySheet(code: "7091M", file: "DS7091M.json", special: true, dates: ["2026-11-01", "2026-11-02"])])
+        XCTAssertEqual(DutyData.sheet(for: "7091101", date: "2026-11-02", sheets: parsed), "7091M")
+        XCTAssertEqual(DutyData.sheet(for: "7091101", date: "2026-11-03", sheets: parsed), "7091")
+
+        let network = #"{"stations":{"KSR":{"tc":"錦上路"}},"places":{"note":"x","OS":{"tc":"外放車"}}}"#
+        let places = try PlaceNames.parse(Data(network.utf8))
+        XCTAssertEqual(places.name("KSR2"), "錦上路 2")
+        XCTAssertEqual(places.name("KSR"), "錦上路")
+        XCTAssertEqual(places.name("OS"), "外放車")
+        XCTAssertEqual(places.name("ZZZ"), "ZZZ")
     }
 }
