@@ -14,7 +14,7 @@ struct IWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: StatsProvider()) { entry in
             StatsWidgetView(entry: entry)
-                .containerBackground(Color(uiColor: .systemBackground), for: .widget)
+                .containerBackground(for: .widget) { WidgetBackground() }
         }
         .configurationDisplayName("i-widget")
         .description("時間、電量、儲存空間、開機時間同系統版本。")

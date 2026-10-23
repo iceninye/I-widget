@@ -32,7 +32,7 @@ struct SmallView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            DateHeader(date: entry.date, size: 13, lowPower: entry.stats.isLowPowerMode)
+            DateHeader(date: entry.date, size: 13, lowPower: entry.stats.isLowPowerMode, refresh: .icon)
             Spacer(minLength: 0)
             ClockText(date: entry.date, size: 44)
             Spacer(minLength: 0)
@@ -49,7 +49,7 @@ struct MediumView: View {
         let lowStorage = Formatting.isLowStorage(free: stats.freeBytes, total: stats.totalBytes)
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 0) {
-                DateHeader(date: entry.date, size: 14, lowPower: stats.isLowPowerMode)
+                DateHeader(date: entry.date, size: 14, lowPower: stats.isLowPowerMode, refresh: .icon)
                 Spacer(minLength: 0)
                 ClockText(date: entry.date, size: 48)
             }
@@ -81,7 +81,7 @@ struct LargeView: View {
         let stats = entry.stats
         let lowStorage = Formatting.isLowStorage(free: stats.freeBytes, total: stats.totalBytes)
         VStack(spacing: 8) {
-            DateHeader(date: entry.date, size: 15, lowPower: stats.isLowPowerMode)
+            DateHeader(date: entry.date, size: 15, lowPower: stats.isLowPowerMode, refresh: .full)
             Spacer(minLength: 0)
             ClockText(date: entry.date, size: 80)
                 .frame(maxWidth: .infinity)
@@ -102,7 +102,13 @@ struct LargeView: View {
                 valueColor: lowStorage ? .red : .primary,
                 fraction: Formatting.usedFraction(free: stats.freeBytes, total: stats.totalBytes)
             )
-            StatCard(symbol: "clock.fill", tint: .indigo, title: "開機時間", value: entry.uptimeText)
+            StatCard(
+                symbol: "clock.fill",
+                tint: entry.rebootHint.tint,
+                title: "開機時間",
+                value: entry.uptimeText + entry.rebootHint.suffix,
+                valueColor: entry.rebootHint.valueColor
+            )
             StatCard(symbol: "iphone.gen3", tint: .gray, title: "系統版本", value: stats.versionText)
         }
     }

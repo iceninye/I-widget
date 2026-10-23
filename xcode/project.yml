@@ -66,6 +66,7 @@ targets:
       - path: Shared/Formatting.swift
       - path: Shared/ClockTimeline.swift
       - path: Shared/BatteryStyle.swift
+      - path: Shared/RebootHint.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests

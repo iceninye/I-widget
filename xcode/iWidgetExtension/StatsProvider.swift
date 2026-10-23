@@ -6,6 +6,7 @@ struct StatsEntry: TimelineEntry {
     let stats: SystemStats
 
     var uptimeText: String { Formatting.uptime(stats.uptime(at: date)) }
+    var rebootHint: RebootHint { RebootHint.level(uptime: stats.uptime(at: date)) }
     var batteryText: String { Formatting.percent(stats.batteryLevel) }
     var batteryTone: BatteryTone { BatteryStyle.tone(level: stats.batteryLevel, charging: stats.isCharging) }
     var batterySymbol: String { BatteryStyle.symbol(level: stats.batteryLevel, charging: stats.isCharging) }

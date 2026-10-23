@@ -13,7 +13,11 @@ struct ContentView: View {
                 Section("目前讀數（app 內）") {
                     LabeledContent("電量", value: Formatting.percent(stats.batteryLevel))
                     LabeledContent("儲存空間", value: Formatting.storagePair(free: stats.freeBytes, total: stats.totalBytes))
-                    LabeledContent("開機時間", value: Formatting.uptime(stats.uptime(at: Date())))
+                    LabeledContent(
+                        "開機時間",
+                        value: Formatting.uptime(stats.uptime(at: Date()))
+                            + RebootHint.level(uptime: stats.uptime(at: Date())).suffix
+                    )
                     LabeledContent("系統版本", value: stats.versionText)
                     LabeledContent("低耗電模式", value: stats.isLowPowerMode ? "已開啟" : "未開啟")
                 }
