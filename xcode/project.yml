@@ -1,0 +1,82 @@
+# XcodeGen 專案設定：`xcodegen generate` 會產生 iWidget.xcodeproj。
+# 用法見 xcode/README.md。
+
+name: iWidget
+
+options:
+  bundleIdPrefix: com.iceninye
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    # Swift 5 語言模式：避免 Swift 6 嚴格 concurrency 令簡單 widget 都報錯。
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # 喺 Xcode 揀自己嘅 Team（Signing & Capabilities），或者喺呢度填 Team ID。
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  iWidget:
+    type: application
+    platform: iOS
+    sources:
+      - path: iWidget
+      - path: Shared
+    info:
+      path: iWidget/Info.plist
+      properties:
+        CFBundleDisplayName: i-widget
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget
+    dependencies:
+      - target: iWidgetExtension
+
+  iWidgetExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: iWidgetExtension
+      - path: Shared
+    info:
+      path: iWidgetExtension/Info.plist
+      properties:
+        CFBundleDisplayName: i-widget
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        # Extension 嘅 bundle id 一定要以 app 嘅 id 開頭。
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.widget
+        SKIP_INSTALL: YES
+
+  # 純邏輯（格式化、時間線、電池樣式）嘅單元測試：唔需要 app host，直接編入測試 bundle。
+  iWidgetTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+      - path: Shared/Formatting.swift
+      - path: Shared/ClockTimeline.swift
+      - path: Shared/BatteryStyle.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  iWidget:
+    build:
+      targets:
+        iWidget: all
+        iWidgetExtension: all
+    test:
+      targets:
+        - iWidgetTests

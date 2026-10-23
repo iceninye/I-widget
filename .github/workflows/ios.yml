@@ -1,0 +1,75 @@
+name: iOS build
+
+# xcode/ 入面嘅 Swift／WidgetKit 專案：喺 macOS runner 實際編譯同跑單元測試。
+# （開發環境係 Linux，編譯唔到 Swift，所以靠呢個 workflow 確認。）
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "xcode/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "xcode/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: xcode
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode 版本
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: 安裝 XcodeGen
+        run: brew install xcodegen
+
+      - name: 產生 Xcode 專案
+        run: xcodegen generate
+
+      - name: 編譯（app + widget extension，simulator，唔簽名）
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project iWidget.xcodeproj \
+            -scheme iWidget \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: 單元測試
+        run: |
+          set -o pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          devices = json.load(sys.stdin)['devices']
+          for runtime, items in devices.items():
+              if 'iOS' not in runtime:
+                  continue
+              for item in items:
+                  if 'iPhone' in item['name']:
+                      print(item['udid']); sys.exit(0)
+          sys.exit('搵唔到 iPhone simulator')
+          ")
+          echo "simulator: $UDID"
+          xcodebuild test \
+            -project iWidget.xcodeproj \
+            -scheme iWidget \
+            -destination "id=$UDID" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: 上載專案（唔想裝 XcodeGen 可以直接下載）
+        uses: actions/upload-artifact@v4
+        with:
+          name: iWidget.xcodeproj
+          path: xcode/iWidget.xcodeproj

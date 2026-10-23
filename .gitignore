@@ -2,3 +2,10 @@ i_widget.cached.py
 i_widget.cached.fingerprint
 i_widget.last_checked
 __pycache__/
+
+# XcodeGen 產生嘅專案（用 `xcodegen generate` 重新產生）
+xcode/iWidget.xcodeproj/
+xcode/**/Info.plist
+*.xcuserstate
+xcuserdata/
+DerivedData/
