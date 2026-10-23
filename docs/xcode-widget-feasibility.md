@@ -278,17 +278,15 @@ os.replace(tmp, "/var/www/status/status.json")
 4. 顯示：今日更份編號＋類別（死早／早／中／夜／死夜，按 `lib/tml-shift.js`：06:30 前上班＝死早，00:30 後下班＝死夜，其餘按 10:00／15:00 分早／中／夜）、上班／下班時間同地點；明日同樣。`RD`／`AL`／`SH` 顯示「休息」「年假」「公眾假期」。
 5. 風險：(a) token 若外洩，roster 會被讀寫，widget 只做 `GET`，但 token 要放 Keychain；(b) 雲端同步係 Ice 手動開啟先有，冇 token 就用貼上 JSON；(c) widget 抓取失敗要顯示上次快取＋「更新於」。
 
-### K7. 實際 VPS（Hostinger，Ubuntu）
-Ice 提供咗 VPS 主機名同證書已備。主機名唔寫入 repo，由 app 設定頁輸入。nginx 範例（token 用 `openssl rand -hex 32` 產生，只放伺服器同 iPhone）：
-```nginx
-location = /status.json {
-    if ($http_authorization != "Bearer <你的token>") { return 401; }
-    default_type application/json;
-    add_header Cache-Control "no-store";
-    alias /var/www/status/status.json;
-}
-```
-（放入已有 TLS 證書嘅 `server {}` 區塊，`sudo nginx -t && sudo systemctl reload nginx`。）
+### K7. 實際 VPS（Hostinger，Ubuntu，Docker＋Traefik）
+**已部署並驗證（2026-10-23，Ice 真機伺服器）**：無 token 回 401，帶 token 回 200。
+- 80/443 由 Docker 內嘅 Traefik 管（Let's Encrypt，`mytlschallenge`），所以唔用主機 nginx。
+- Traefik 原本 3.4.1 同 Docker 29.9.2 不相容（`client version 1.24 is too old`，所有路由 404），已升級 Traefik 鏡像。
+- 狀態端點 = `nginx:alpine` 容器（`/opt/status`，compose 專案 `status`），Traefik 標籤路由 `Host(<現有主機名>) && Path(/status.json)`，優先級 100；nginx 用 `map` 檢查 `Authorization: Bearer <token>`，`map_hash_bucket_size 128`。
+- 狀態腳本 `/usr/local/bin/vps-status.py`（root cron 每小時）輸出 OS、kernel、可更新數、安全更新數、需否重啟、`xray_running`、`hysteria2_listening`（Hysteria2 係 Xray 嘅 UDP 8443 inbound）。
+- n8n 已停並設 `--restart=no`（對外頁面關閉）；Redis／Postgres 暫留。
+- 主機名、token 唔寫入 repo；步驟文件在專案檔案 `widget/vps-status-setup.md`。
+- 下游 widget 設定：app 設定頁輸入「狀態網址」同 token（Keychain／App Group）。
 
 ## L. 仍要問 Ice
 
