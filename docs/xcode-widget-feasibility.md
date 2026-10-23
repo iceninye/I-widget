@@ -125,6 +125,8 @@ WidgetKit 嘅事實：
 
 ## E. 日曆來源（工作更份＋學校 Google 日曆）
 
+> **更新**：Ice 已提供學校公開日曆同 tml-roster，最終設計以 K1、K6 為準；下面係早前嘅一般性分析，EventKit 只作備選。
+
 **建議首選：EventKit（零憑證）**
 喺 iPhone「設定 → 日曆 → 帳號」加入 Google 帳號（學校＋個人），widget／app 用 `EKEventStore` 讀。
 - 好處：**唔使喺 app 或 repo 放任何 Google 憑證**；唔使 OAuth；離線有效；日曆更新會觸發 `EKEventStoreChanged`。
