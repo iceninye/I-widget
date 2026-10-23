@@ -11,8 +11,8 @@ final class ICalendarTests: XCTestCase {
     BEGIN:VEVENT
     DTSTART:20261023T010000Z
     DTEND:20261023T020000Z
-    SUMMARY:Staff meeting (folded
-     title)
+    SUMMARY:Staff meeting (fol
+     ded title)
     END:VEVENT
     BEGIN:VEVENT
     DTSTART:20261023T030000Z
