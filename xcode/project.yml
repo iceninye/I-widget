@@ -36,7 +36,7 @@ targets:
           - UIInterfaceOrientationPortrait
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget
     dependencies:
       - target: iWidgetExtension
 
@@ -56,7 +56,7 @@ targets:
     settings:
       base:
         # Extension 嘅 bundle id 一定要以 app 嘅 id 開頭。
-        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.widget
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.widget
         SKIP_INSTALL: YES
 
   # 純邏輯（格式化、時間線、電池樣式）嘅單元測試：唔需要 app host，直接編入測試 bundle。
@@ -80,7 +80,7 @@ targets:
       - path: Shared/DutyCards.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:

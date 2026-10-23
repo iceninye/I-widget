@@ -22,6 +22,15 @@ enum VPSHealth: Equatable {
 }
 
 enum VPSAPI {
+    /// Ice 嘅 VPS 狀態網址（Ice 要求寫入程式）；token 仍然要喺 widget 設定手動輸入。
+    static let defaultURL = URL(string: "https://n8n.itswong.site/status.json")!
+
+    /// widget 設定有填網址就用佢，留空就用預設。
+    static func statusURL(_ text: String?) -> URL? {
+        let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultURL : url(trimmed)
+    }
+
     /// 只收 https，並去走前後空白。
     static func url(_ text: String?) -> URL? {
         let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

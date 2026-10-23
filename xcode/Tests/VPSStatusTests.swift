@@ -52,5 +52,9 @@ final class VPSStatusTests: XCTestCase {
         XCTAssertNil(VPSAPI.url("example.com/status.json"))
         XCTAssertNil(VPSAPI.url(nil))
         XCTAssertEqual(VPSAPI.url("  https://example.com/status.json \n")?.host, "example.com")
+        XCTAssertEqual(VPSAPI.statusURL(nil), VPSAPI.defaultURL)
+        XCTAssertEqual(VPSAPI.statusURL("  "), VPSAPI.defaultURL)
+        XCTAssertEqual(VPSAPI.statusURL("https://example.com/status.json")?.host, "example.com")
+        XCTAssertNil(VPSAPI.statusURL("http://example.com/status.json"))
     }
 }

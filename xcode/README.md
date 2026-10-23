@@ -15,7 +15,7 @@ open iWidget.xcodeproj
 ## 2. 簽名
 1. 左邊揀專案 **iWidget** → 逐個 target（`iWidget`、`iWidgetExtension`）→ **Signing & Capabilities**。
 2. 兩個 target 都揀同一個 **Team**（你嘅 Apple ID；未登入就去 Xcode → Settings → Accounts 加）。
-3. 如果話 bundle id 被佔用，將 `com.iceninye.iwidget` 改做自己獨有嘅（例如加你個名），
+3. Bundle id 係 `com.iceninye.i-widget`（Extension：`com.iceninye.i-widget.widget`）。如果再被佔用，就改做自己獨有嘅（例如加你個名），
    Extension 要保持以 app id 開頭（`.widget` 結尾）。改喺 `project.yml` 再 `xcodegen generate` 最穩陣。
    亦可以喺 `project.yml` 填 `DEVELOPMENT_TEAM` 嘅 Team ID，重新產生專案後就唔使逐個揀。
 
@@ -29,7 +29,7 @@ open iWidget.xcodeproj
 主畫面長按 → 左上角 **+** → 搵 **i-widget** → 揀**大**尺寸加入（全部資料整合喺一個 widget）。
 加入後長按 widget →「編輯小工具」，填：
 - tml-roster 同步 token（更份）
-- VPS 狀態網址：`https://<你個網域>/status.json`
+- VPS 狀態網址：已預設 `https://n8n.itswong.site/status.json`，留空就得
 - VPS token（唔使打 `Bearer`）
 
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
