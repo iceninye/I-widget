@@ -29,7 +29,7 @@ open iWidget.xcodeproj
 主畫面長按 → 左上角 **+** → 搵 **i-widget** → 揀**大**尺寸加入（全部資料整合喺一個 widget）。
 加入後長按 widget →「編輯小工具」，填：
 - tml-roster 同步 token（更份）
-- VPS 狀態網址：`https://<你個網域>/status.json`
+- VPS 狀態網址：已預設 `https://n8n.itswong.site/status.json`，留空就得
 - VPS token（唔使打 `Bearer`）
 
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。

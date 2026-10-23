@@ -368,7 +368,7 @@ struct VPSLine: View {
                     .widgetAccentable()
                 Text("VPS").fontWeight(.bold)
                 if !vps.configured {
-                    Text("未設定（編輯小工具輸入網址同 token）").foregroundStyle(.secondary)
+                    Text("未設定（編輯小工具輸入 VPS token）").foregroundStyle(.secondary)
                 } else if let status = vps.status {
                     Text(VPSAPI.updatesText(status))
                         .foregroundStyle(status.security > 0 ? .red : (status.upgradable > 0 ? .orange : .secondary))
