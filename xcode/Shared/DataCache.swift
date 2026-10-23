@@ -25,3 +25,36 @@ enum Fetcher {
         return data
     }
 }
+
+extension DataCache {
+    /// 上次成功儲存嘅時間（`save(_:key:stamped:)` 先會記）。
+    static func savedAt(_ key: String) -> Date? {
+        load(Date.self, key: "\(key).at")
+    }
+
+    static func save<T: Encodable>(_ value: T, key: String, stamped now: Date) {
+        save(value, key: key)
+        save(now, key: "\(key).at")
+    }
+
+    /// 快取仲新鮮（`maxAge` 秒內存過）就直接用，唔使上網。
+    static func fresh<T: Decodable>(_ type: T.Type, key: String, maxAge: TimeInterval, now: Date) -> T? {
+        guard let at = savedAt(key), now.timeIntervalSince(at) < maxAge, at <= now else { return nil }
+        return load(type, key: key)
+    }
+}
+
+extension Fetcher {
+    /// 逐個來源試，第一個成功就用。
+    static func firstData(from urls: [URL], timeout: TimeInterval = 8) async throws -> Data {
+        var lastError: Error = URLError(.badURL)
+        for url in urls {
+            do {
+                return try await data(from: url, timeout: timeout)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+}
