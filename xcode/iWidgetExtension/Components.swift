@@ -108,6 +108,32 @@ struct DateHeader: View {
     }
 }
 
+/// 中尺寸：圖示 + 今日氣溫範圍 + 明日。
+struct WeatherLine: View {
+    let weather: WeatherSnapshot?
+
+    var body: some View {
+        if let weather {
+            HStack(spacing: 4) {
+                Image(systemName: WeatherCode.symbol(weather.today.code))
+                    .foregroundStyle(.cyan)
+                    .widgetAccentable()
+                Text(Formatting.tempRange(weather.today))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                if let tomorrow = weather.tomorrow {
+                    Text("明 \(Formatting.tempRange(tomorrow))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .font(.system(size: 12))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+    }
+}
+
 struct BatteryChip: View {
     let entry: StatsEntry
     var size: CGFloat = 14

@@ -6,6 +6,7 @@ import WidgetKit
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var stats = SystemStats.read()
+    @StateObject private var location = LocationAuth()
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,12 @@ struct ContentView: View {
                     )
                     LabeledContent("系統版本", value: stats.versionText)
                     LabeledContent("低耗電模式", value: stats.isLowPowerMode ? "已開啟" : "未開啟")
+                }
+                Section("天氣定位") {
+                    LabeledContent("定位授權", value: location.text)
+                    if !location.isAuthorised {
+                        Button("允許定位（使用 App 期間）") { location.request() }
+                    }
                 }
                 Section("加入 widget") {
                     Text("長按 Home Screen → 左上角 + → 搜尋「i-widget」→ 揀尺寸。鎖屏：自訂 → 加 widget。")

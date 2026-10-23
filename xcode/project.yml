@@ -31,6 +31,7 @@ targets:
       properties:
         CFBundleDisplayName: i-widget
         UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: 用你嘅大約位置查天氣預報，位置唔會上傳到自己嘅伺服器。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
     settings:
@@ -49,6 +50,7 @@ targets:
       path: iWidgetExtension/Info.plist
       properties:
         CFBundleDisplayName: i-widget
+        NSWidgetWantsLocation: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -67,6 +69,10 @@ targets:
       - path: Shared/ClockTimeline.swift
       - path: Shared/BatteryStyle.swift
       - path: Shared/RebootHint.swift
+      - path: Shared/WeatherModels.swift
+      - path: Shared/GoldModels.swift
+      - path: Shared/OSVersion.swift
+      - path: Shared/InfoFormatting.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.iwidget.tests

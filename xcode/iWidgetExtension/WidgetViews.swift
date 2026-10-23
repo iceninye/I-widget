@@ -52,6 +52,7 @@ struct MediumView: View {
                 DateHeader(date: entry.date, size: 14, lowPower: stats.isLowPowerMode, refresh: .icon)
                 Spacer(minLength: 0)
                 ClockText(date: entry.date, size: 48)
+                WeatherLine(weather: entry.info.weather)
             }
             VStack(spacing: 8) {
                 CompactStat(
@@ -80,10 +81,10 @@ struct LargeView: View {
     var body: some View {
         let stats = entry.stats
         let lowStorage = Formatting.isLowStorage(free: stats.freeBytes, total: stats.totalBytes)
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             DateHeader(date: entry.date, size: 15, lowPower: stats.isLowPowerMode, refresh: .full)
             Spacer(minLength: 0)
-            ClockText(date: entry.date, size: 80)
+            ClockText(date: entry.date, size: 56)
                 .frame(maxWidth: .infinity)
             Spacer(minLength: 0)
             StatCard(
@@ -109,8 +110,49 @@ struct LargeView: View {
                 value: entry.uptimeText + entry.rebootHint.suffix,
                 valueColor: entry.rebootHint.valueColor
             )
-            StatCard(symbol: "iphone.gen3", tint: .gray, title: "系統版本", value: stats.versionText)
+            StatCard(
+                symbol: "iphone.gen3",
+                tint: .gray,
+                title: "系統版本",
+                value: versionValue,
+                valueColor: versionColor
+            )
+            StatCard(
+                symbol: entry.info.weather.map { WeatherCode.symbol($0.today.code) } ?? "cloud.fill",
+                tint: .cyan,
+                title: "天氣",
+                value: weatherValue
+            )
+            StatCard(
+                symbol: "dollarsign.circle.fill",
+                tint: .yellow,
+                title: "黃金 USD/oz",
+                value: Formatting.gold(entry.info.gold?.usdPerOunce),
+                valueColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.info.updatedAt) ? .secondary : .primary
+            )
+            Text("資料更新於 \(Formatting.clock(entry.info.updatedAt))")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var versionValue: String {
+        switch entry.osStatus {
+        case .updateAvailable(let latest): return "\(entry.stats.versionText) → \(latest)"
+        case .upToDate: return "\(entry.stats.versionText) · 最新"
+        case .unknown: return entry.stats.versionText
+        }
+    }
+
+    private var versionColor: Color {
+        if case .updateAvailable = entry.osStatus { return .orange }
+        return .primary
+    }
+
+    private var weatherValue: String {
+        guard let weather = entry.info.weather else { return Formatting.missing }
+        let tomorrow = weather.tomorrow.map { " · 明 \(Formatting.tempRange($0))" } ?? ""
+        return "\(Formatting.degrees(weather.currentTemp)) · 今 \(Formatting.tempRange(weather.today))\(tomorrow)"
     }
 
     private var batteryValue: String {
