@@ -56,6 +56,12 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 快速二分法：`i_widget_safe.py` 係保證出到畫面嘅最小版本。
 如果佢正常但 `i_widget.py` 綠色，就係 `i_widget.py` 某個元件有問題。
 
+## 其他選擇：Scriptable 版
+
+Pyto 要喺 widget extension 入面行成個 CPython，記憶體緊、排版工具有限，所以另外寫咗
+[Scriptable 版](scriptable/README.md)（JavaScript）：真正嘅 stack 排版、真進度條、鎖屏 widget。
+取捨：Scriptable 讀唔到儲存空間、開機時間、低耗電模式。
+
 ## 安裝
 
 **用自動更新（建議）**
@@ -109,6 +115,8 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | `test_launcher.py` | 更新邏輯測試（72 項斷言） | 改 launcher 時 |
 | `test_widget.py` | widget 本體 smoke test（用 mock Pyto 砌齊四個尺寸） | 改 `i_widget.py` 時 |
 | `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
+| `scriptable/i-widget.js` | **Scriptable 版**（JavaScript），見 [scriptable/README.md](scriptable/README.md) | 改版面時 |
+| `scriptable/test-i-widget.js` | Scriptable 版測試（`node scriptable/test-i-widget.js`） | 改 Scriptable 版時 |
 | `i_widget_trace.py` | 讀出真機足跡同停用名單 | 除錯時 |
 | `i_widget_safe.py` | 保證出到畫面嘅最小版本（二分用） | 唔使 |
 | `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
