@@ -185,12 +185,81 @@ widget 只讀，唔入伺服器：
 
 每一步都要真機驗證，再將【知識】換成【量度】。
 
-## J. 要問 Ice 嘅嘢
+## J. 已確認嘅決定（Ice 回覆）
 
-1. 預算：會唔會付 Apple Developer Program（US$99／年）？決定 A 節同 Push／WeatherKit 能否用。
-2. 日曆：同意用 iPhone 系統日曆（EventKit）嗎？學校 Google 帳號喺 iPhone 加得入嗎？
-3. 「工作更份」資料現時喺邊度（日曆／App／Excel／PDF）？
-4. VPS：系統（Ubuntu／Debian／其他）、供應商、可否自行加 cron＋HTTPS endpoint？（唔好喺 repo 或對話貼密碼，之後我會教你喺 app 設定頁輸入。）
-5. 地區同天氣：固定香港某區，定要跟 GPS？
-6. 黃金：要國際現貨（USD/oz）定香港每両 HKD 參考價？
-7. iPhone 型號同 iOS 版本（用嚟核對 Clear 外觀同 widget 尺寸）。
+1. **唔付費**：唔用 TestFlight／Push／WeatherKit。安裝用 Xcode 每 7 日重裝，或 AltStore（見 A 節）。
+2. **日曆**：用 iPhone 系統日曆（EventKit），步驟見 K1。
+3. **工作更份**：Ice 話其他 thread 有資料，但我睇晒其他三個 thread、repo 同兩張 uploads 截圖（只係 app 同 widget 嘅畫面），**搵唔到更份資料來源**。暫時假設更份係系統日曆內嘅事件（K1 有設計），但仍要 Ice 確認（見 L）。
+4. **VPS**：Ubuntu，步驟見 K2。
+5. **天氣**：跟 GPS，定時更新。
+6. **黃金**：USD/oz，定時更新。
+7. **「即時更新」掣**：加喺 widget 適當位置，見 K3。
+
+### 現況（由 Ice 嘅真機截圖）
+Xcode 版已經喺 iOS 27.0.1 真機行得，顯示電量、儲存空間、開機時間、系統版本。
+目前 widget 係**純白不透明底**＋灰色卡，未配合 Liquid Glass Clear／Tinted；
+所以 C 節嘅外觀改動（去掉不透明底、用階層式顏色）係第一優先。
+
+## K. 實作步驟
+
+### K1. 日曆（EventKit）
+**你要做嘅（一次性）**
+1. iPhone：設定 → 日曆 → 帳號 → 加入帳號 → Google，用學校帳號登入，開啟「日曆」。個人／工作 Google 帳號都一樣加入。
+2. 如果登入後學校日曆冇出現或者被擋，係學校 Workspace 管理員限制，要問學校 IT；備選係日曆網頁版取「iCal 格式私人地址」（亦可能被關），到時我再做 iCal 版。
+3. 打開 i-widget app，按「允許日曆」（完整存取）。
+
+**我會做嘅**
+- app 同 extension 嘅 Info.plist 加 `NSCalendarsFullAccessUsageDescription`；用 `EKEventStore.requestFullAccessToEvents`。
+- 設定頁揀邊啲日曆係「工作」、邊啲係「學校」（按日曆名稱），唔需要任何 Google 憑證。
+- 今日：列出尚餘事件；明日：事件數量＋頭兩項。Timeline entry 設喺事件開始／結束時間，唔使靠 reload。
+- 「工作更份」：如果更份係日曆事件（例如標題「早更」「夜更」），顯示今日更份；如果唔係，要 Ice 講資料喺邊。
+
+### K2. Ubuntu VPS 狀態
+**喺 VPS 上（SSH 入去自己做，唔好將密碼貼出嚟）**
+1. 狀態腳本 `/usr/local/bin/vps-status.py`（只讀、唔含任何機密）：
+```python
+#!/usr/bin/env python3
+import json, os, subprocess, datetime
+def sh(c): return subprocess.run(c, shell=True, capture_output=True, text=True).stdout
+osr = dict(l.strip().split("=", 1) for l in open("/etc/os-release") if "=" in l)
+inst = [l for l in sh("apt-get -s dist-upgrade").splitlines() if l.startswith("Inst ")]
+out = {
+  "os": osr.get("PRETTY_NAME", "").strip('"'),
+  "kernel": os.uname().release,
+  "upgradable": len(inst),
+  "security": sum("security" in l.lower() for l in inst),
+  "reboot_required": os.path.exists("/var/run/reboot-required"),
+  "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+tmp = "/var/www/status/status.json.tmp"
+json.dump(out, open(tmp, "w"))
+os.replace(tmp, "/var/www/status/status.json")
+```
+2. `sudo mkdir -p /var/www/status && sudo chmod +x /usr/local/bin/vps-status.py`；用 root crontab 每小時行：`0 * * * * /usr/local/bin/vps-status.py`（`apt-get -s` 係模擬，唔會更新任何套件）。
+3. nginx（或 caddy）用 HTTPS 提供 `/var/www/status/status.json`，並要求 `Authorization: Bearer <長隨機 token>`（`openssl rand -hex 32` 產生）；token 只放喺伺服器設定同 iPhone。要有 TLS 證書（例如 Let's Encrypt）。
+4. 自己用 `curl -H "Authorization: Bearer …" https://你的網域/status.json` 測試。
+
+**我會做嘅**
+- app 設定頁輸入「狀態網址」同 token，存 Keychain／App Group；repo 唔放任何網址或 token。
+- widget 顯示 Ubuntu 版本、可更新數、安全更新數、需否重啟；失敗顯示「離線」＋最後成功時間。
+- 之後可再加「有冇新 LTS」（`do-release-upgrade -c`，需要 root，另議）。
+
+### K3. 「即時更新」掣
+- 用 iOS 17+ 互動 widget：`Button(intent: RefreshIntent())`，放喺 widget 右上角（時鐘旁）一個細圖示＋文字「即時更新」。
+- 按下後 intent 重新讀取全部資料（天氣、黃金、VPS、日曆）寫入 App Group 快取，並叫 `WidgetCenter.shared.reloadAllTimelines()`。
+- 注意：掣只係「馬上要求更新」，網絡慢或失敗時仍會顯示舊資料；每項資料旁會顯示「更新於 HH:mm」。唔係秒級串流，亦要受系統預算限制（見 B 節）。
+- 小 widget 位置有限：掣放喺日期列右邊；鎖屏 widget 唔支援互動掣，唔放。
+
+### K4. 天氣（GPS）
+- 加 `NSWidgetWantsLocation`（extension Info.plist）＋ `NSLocationWhenInUseUsageDescription`；app 先要求「使用 App 期間」授權，之後 widget 先可取位置（`isAuthorizedForWidgetUpdates`）。
+- 取到位置就寫入 App Group 快取；取唔到用上次位置。位置只用嚟查天氣，不上傳到自己嘅伺服器。
+- 天氣每 30 分鐘；今日天氣＋明日預報（最高／最低溫、降雨機率）。資料源：香港用天文台，其他地區用 Open-Meteo（見 D 節）。
+
+### K5. 黃金 USD/oz
+- 每 15 分鐘 reload，顯示現價、較上次變動、「更新於 HH:mm」；超過 1 小時轉灰。來源見 G 節，實作前先喺 Mac／iPhone 上核對該 API 免費額度。
+
+## L. 仍要問 Ice
+
+1. **工作更份**資料喺邊？（系統日曆事件／其他 App／Excel／PDF／手寫）如果係日曆，事件標題通常係點寫？
+2. 邊啲日曆係「工作」、邊啲係「學校」？（同步後我可以按日曆名篩選）
+3. VPS 係咪可以開一個 HTTPS 網域（有網域＋證書）？冇網域嘅話我改用 Tailscale 或其他方案。
