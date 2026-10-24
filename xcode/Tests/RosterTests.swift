@@ -177,13 +177,14 @@ final class RosterTests: XCTestCase {
         var plain = roster
         plain.overrides["2026-10-23"] = "1100101"
         plain.overrides["2026-10-25"] = "7091999"
+        plain.overrides["2026-10-26"] = "HC"
         let basic = ["1100101": DutyTime(on: 17_100, onPlace: "屯門", off: 42_300, offPlace: "錦上路", hours: 6.5)]
         let label = { (date: String, source: Roster) in
             DutyDay.make(roster: source, date: date, basic: basic, cards: [:], sheets: [], places: .empty)?.shortLabel
         }
         XCTAssertEqual(label("2026-10-23", plain), "死早")
         XCTAssertEqual(label("2026-10-24", roster), "休")
-        XCTAssertEqual(label("2026-10-26", roster), "待")
+        XCTAssertEqual(label("2026-10-26", plain), "待")
         XCTAssertEqual(label("2026-10-25", plain), "70")
     }
 
