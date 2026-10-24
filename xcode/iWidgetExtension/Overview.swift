@@ -73,6 +73,7 @@ struct OverviewEntry: TimelineEntry {
     let updatedAt: Date
     var batteryRate: Double? = nil
     var flips = FlipState()
+    var theme = WidgetTheme.classic
 
     func isFlipped(_ id: String) -> Bool { flips.isFlipped(id, at: date) }
 
@@ -129,7 +130,7 @@ struct OverviewProvider: AppIntentTimelineProvider {
         return OverviewEntry(
             date: now, stats: stats, battery: reading.estimate, info: .cached(now: now),
             schedule: .cached(token: configuration.rosterToken), vps: .cached(url: configuration.statusURL, token: configuration.vpsToken), updatedAt: now,
-            batteryRate: reading.rate, flips: FlipState.load()
+            batteryRate: reading.rate, flips: FlipState.load(), theme: WidgetTheme.load()
         )
     }
 
@@ -139,6 +140,7 @@ struct OverviewProvider: AppIntentTimelineProvider {
         let reading = Self.recordBattery(stats, now: now)
         var flips = FlipState.load()
         flips.prune(now: now)
+        let theme = WidgetTheme.load()
 
         // 剛剛撳咗資料格反轉：用快取即刻畫，唔使等上網。
         let justFlipped = DataCache.load(Date.self, key: "flipAt").map { now.timeIntervalSince($0) < 20 } ?? false
@@ -171,7 +173,7 @@ struct OverviewProvider: AppIntentTimelineProvider {
             OverviewEntry(
                 date: $0, stats: stats, battery: reading.estimate, info: loadedInfo, schedule: loadedSchedule,
                 vps: loadedVPS, updatedAt: justFlipped ? (DataCache.load(Date.self, key: "dataAt") ?? now) : now,
-                batteryRate: reading.rate, flips: flips
+                batteryRate: reading.rate, flips: flips, theme: theme
             )
         }
         return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
@@ -197,7 +199,8 @@ struct IWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: OverviewConfigIntent.self, provider: OverviewProvider()) { entry in
             OverviewView(entry: entry)
-                .containerBackground(for: .widget) { WidgetBackground() }
+                .environment(\.widgetTheme, entry.theme)
+                .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("i-widget")
         .description("更份、學校日程、天氣、黃金、電量、系統同 VPS，一個 widget 睇晒。")
