@@ -66,6 +66,37 @@ extension OverviewEntry {
         return [line("今日", weather.today), line("明日", weather.tomorrow), BackLine(label: "更新", value: clock(weather.fetchedAt))]
     }
 
+    var uvBack: [BackLine] {
+        guard let weather = info.weather else { return [BackLine(label: "紫外線", value: "未有資料")] }
+        func uv(_ day: WeatherDay?) -> String {
+            guard let value = day?.uvIndex else { return Formatting.missing }
+            return "\(Int(value.rounded())) \(UVLevel.text(value))"
+        }
+        func rain(_ day: WeatherDay?) -> String { day?.rainChance.map { "\($0)%" } ?? Formatting.missing }
+        return [
+            BackLine(label: "今日", value: "UV \(uv(weather.today)) · 雨 \(rain(weather.today))"),
+            BackLine(label: "明日", value: "UV \(uv(weather.tomorrow)) · 雨 \(rain(weather.tomorrow))"),
+            BackLine(label: "更新", value: clock(weather.fetchedAt)),
+        ]
+    }
+
+    var airBack: [BackLine] {
+        guard let air = info.air else { return [BackLine(label: "空氣", value: "未有資料")] }
+        return [
+            BackLine(label: "US AQI", value: "\(air.aqi) \(air.level)"),
+            BackLine(label: "PM2.5", value: air.pm25.map { String(format: "%.0f µg/m³", $0) } ?? Formatting.missing),
+            BackLine(label: "更新", value: clock(air.fetchedAt)),
+        ]
+    }
+
+    var fxBack: [BackLine] {
+        guard let fx = info.fx else { return [BackLine(label: "匯率", value: "未有資料")] }
+        func line(_ label: String, _ code: String) -> BackLine {
+            BackLine(label: label, value: fx.perHKD[code].map { String(format: "%.3f", $0) } ?? Formatting.missing)
+        }
+        return [line("人民幣", "CNY"), line("台幣", "TWD"), line("英鎊", "GBP")]
+    }
+
     var goldBack: [BackLine] {
         guard let price = info.gold?.usdPerOunce else { return [BackLine(label: "黃金", value: "未有資料")] }
         // 1 金衡盎司 = 31.1035 克；1 両 = 37.429 克

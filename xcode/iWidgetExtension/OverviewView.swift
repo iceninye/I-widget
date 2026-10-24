@@ -25,22 +25,24 @@ struct LargeOverview: View {
         GeometryReader { geometry in
             let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
             ViewThatFits(in: .vertical) {
-                stack(rows: rows, strip: true, tomorrow: true)
-                stack(rows: rows, strip: true, tomorrow: false)
-                stack(rows: rows, strip: false, tomorrow: true)
-                stack(rows: rows, strip: false, tomorrow: false)
+                stack(rows: rows, strip: true, tomorrow: true, extras: true)
+                stack(rows: rows, strip: true, tomorrow: true, extras: false)
+                stack(rows: rows, strip: true, tomorrow: false, extras: false)
+                stack(rows: rows, strip: false, tomorrow: true, extras: false)
+                stack(rows: rows, strip: false, tomorrow: false, extras: false)
             }
         }
     }
 
-    private func stack(rows: Int, strip: Bool, tomorrow: Bool) -> some View {
+    private func stack(rows: Int, strip: Bool, tomorrow: Bool, extras: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             TodayCard(entry: entry)
             if strip { WeekStrip(entry: entry) }
             if tomorrow { TomorrowLine(entry: entry) }
             SchoolSection(entry: entry, maxRows: rows)
+            InfoSection(entry: entry)
             Spacer(minLength: 0)
-            TileGrid(entry: entry)
+            TileGrid(entry: entry, extras: extras)
             VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
         }
     }
@@ -331,9 +333,63 @@ struct SchoolSection: View {
     }
 }
 
-/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS。
+/// 警告、屯馬綫狀況、本週概況：有事先顯眼，冇事就一行細字。
+struct InfoSection: View {
+    let entry: OverviewEntry
+
+    var body: some View {
+        let warnings = entry.info.warnings ?? []
+        let train = entry.info.train
+        let week = entry.weekSummary
+        if !warnings.isEmpty || train != nil || week != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if !warnings.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
+                            .widgetAccentable()
+                        ForEach(Array(warnings.prefix(3).enumerated()), id: \.offset) { _, warning in
+                            Badge(text: warning.text, color: warning.severe ? .red : .orange)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 11))
+                }
+                HStack(spacing: 6) {
+                    if let train {
+                        Image(systemName: "tram.fill")
+                            .foregroundStyle(train.state == .normal ? Color.green : .orange)
+                            .widgetAccentable()
+                        Text("屯馬綫 \(Self.trainText(train.state))")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(train.state == .normal ? Color.primary : .orange)
+                    }
+                    Spacer(minLength: 0)
+                    if let week {
+                        Text("本週 \(week.text)").foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    static func trainText(_ state: TrainState) -> String {
+        switch state {
+        case .normal: return "正常"
+        case .delayed: return "延誤"
+        case .special: return "特別安排"
+        }
+    }
+}
+
+/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS；有位再加一行紫外線、空氣、匯率。
 struct TileGrid: View {
     let entry: OverviewEntry
+    var extras = true
 
     var body: some View {
         let stats = entry.stats
@@ -385,7 +441,45 @@ struct TileGrid: View {
                     flipped: entry.isFlipped("ios"), back: entry.osBack
                 )
             }
+            if extras {
+                GridRow {
+                    uvTile
+                    airTile
+                    fxTile
+                }
+            }
         }
+    }
+
+    private var uvTile: some View {
+        let uv = entry.info.weather?.today.uvIndex
+        let tint: Color = (uv ?? 0) >= 8 ? .red : ((uv ?? 0) >= 6 ? .orange : .yellow)
+        return Tile(
+            id: "uv", symbol: "sun.max.trianglebadge.exclamationmark.fill", tint: tint,
+            value: uv.map { "UV \(Int($0.rounded()))" } ?? Formatting.missing,
+            caption: uv.map { UVLevel.text($0) } ?? "紫外線",
+            flipped: entry.isFlipped("uv"), back: entry.uvBack
+        )
+    }
+
+    private var airTile: some View {
+        let air = entry.info.air
+        return Tile(
+            id: "air", symbol: "leaf.fill", tint: (air?.isPoor ?? false) ? .orange : .green,
+            value: air.map { "AQI \($0.aqi)" } ?? Formatting.missing,
+            caption: air?.level ?? "空氣質素",
+            captionColor: (air?.isPoor ?? false) ? .orange : .secondary,
+            flipped: entry.isFlipped("air"), back: entry.airBack
+        )
+    }
+
+    private var fxTile: some View {
+        Tile(
+            id: "fx", symbol: "yensign.circle.fill", tint: .mint,
+            value: entry.info.fx?.jpy.map { String(format: "%.2f", $0) } ?? Formatting.missing,
+            caption: "日圓 / 港元",
+            flipped: entry.isFlipped("fx"), back: entry.fxBack
+        )
     }
 
     private var versionCaption: String {

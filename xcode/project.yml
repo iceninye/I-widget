@@ -80,6 +80,7 @@ targets:
       - path: Shared/DutyCards.swift
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
+      - path: Shared/LiveAlerts.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests
