@@ -201,6 +201,18 @@ struct IWidget: Widget {
         }
         .configurationDisplayName("i-widget")
         .description("更份、學校日程、天氣、黃金、電量、系統同 VPS，一個 widget 睇晒。")
-        .supportedFamilies([.systemLarge, .systemExtraLarge, .accessoryInline, .accessoryCircular, .accessoryRectangular])
+        .supportedFamilies(families)
+    }
+
+    /// iOS 27 嘅 iPhone 特大 widget（4×6）係 `.systemExtraLargePortrait`，要 Xcode 27（Swift 6.4）先有呢個 case；
+    /// 舊版 Xcode（例如 CI 嘅 26.x）會跳過，其餘尺寸照常。
+    private var families: [WidgetFamily] {
+        var list: [WidgetFamily] = [.systemLarge, .systemExtraLarge, .accessoryInline, .accessoryCircular, .accessoryRectangular]
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, *) {
+            list.append(.systemExtraLargePortrait)
+        }
+        #endif
+        return list
     }
 }
