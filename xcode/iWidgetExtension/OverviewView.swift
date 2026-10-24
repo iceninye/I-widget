@@ -110,6 +110,7 @@ struct TodayCard: View {
                         .minimumScaleFactor(0.7)
                     if let day { badges(day) }
                     Spacer(minLength: 2)
+                    ThemeButton()
                     RefreshButton(updatedAt: entry.updatedAt)
                 }
                 Button(intent: FlipIntent(tile: "today")) {
