@@ -211,6 +211,23 @@ final class RosterTests: XCTestCase {
         XCTAssertEqual(make("2026-10-26")?.title, "CL 假期")
     }
 
+    func testTodayChangesAtMidnightUnlessYesterdayShiftRunning() {
+        // 2026-10-24 夜更 15:34–00:04（放工 = 86 640 秒）
+        let off = { (date: String) -> Int? in date == "2026-10-24" ? 86_640 : nil }
+        XCTAssertEqual(Days.calendarDate(date("2026-10-24T15:59:00Z")), "2026-10-24")
+        XCTAssertEqual(Days.calendarDate(date("2026-10-24T16:00:00Z")), "2026-10-25")
+        // 23:30 仍然係 24 日
+        XCTAssertEqual(Days.today(date("2026-10-24T15:30:00Z"), off: off), "2026-10-24")
+        // 00:02 夜更未放工：仍然係 24 日
+        XCTAssertEqual(Days.today(date("2026-10-24T16:02:00Z"), off: off), "2026-10-24")
+        // 00:05 放咗工：轉 25 日
+        XCTAssertEqual(Days.today(date("2026-10-24T16:05:00Z"), off: off), "2026-10-25")
+        // 昨日冇更或者未知放工時間：00:00 就換日
+        XCTAssertEqual(Days.today(date("2026-10-24T16:02:00Z"), off: { _ in nil }), "2026-10-25")
+        // 04:00 之後一定係新一日
+        XCTAssertEqual(Days.today(date("2026-10-24T20:30:00Z"), off: off), "2026-10-25")
+    }
+
     func testServiceSecondDates() {
         let day = DutyDay(date: "2026-10-23", code: "X", kind: .duty, title: "X")
         XCTAssertEqual(day.moment(atServiceSecond: 0), date("2026-10-22T16:00:00Z"))
