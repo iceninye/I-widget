@@ -68,6 +68,27 @@ final class ICalendarTests: XCTestCase {
         XCTAssertEqual(kept.count, events.count)
     }
 
+    func testNextHolidayMergesConsecutiveDays() {
+        let today = dayStart("20261023")
+        func holiday(_ title: String, _ from: String, _ to: String, calendar: String = SchoolCalendars.holidayName) -> CalendarEvent {
+            CalendarEvent(title: title, start: dayStart(from), end: dayStart(to), allDay: true, calendar: calendar, rule: nil)
+        }
+        let list = [
+            holiday("今日放假", "20261023", "20261024"),
+            holiday("重陽節翌日", "20261026", "20261027"),
+            holiday("聖誕節", "20261225", "20261228"),
+            holiday("學校旅行", "20261101", "20261102", calendar: "事項"),
+        ]
+        let next = ICalendar.nextHoliday(of: list, after: today)
+        XCTAssertEqual(next?.title, "重陽節翌日")
+        XCTAssertEqual(next?.daysAway, 3)
+        XCTAssertEqual(next?.rangeText, "10/26")
+        XCTAssertNil(ICalendar.nextHoliday(of: [list[3]], after: today))
+        let christmas = ICalendar.nextHoliday(of: [list[2]], after: today)
+        XCTAssertEqual(christmas?.rangeText, "12/25–12/27")
+        XCTAssertNil(ICalendar.nextHoliday(of: [], after: today))
+    }
+
     func testSchoolCalendarURLEncodesAt() throws {
         let source = try XCTUnwrap(SchoolCalendars.sources.first)
         let url = try XCTUnwrap(SchoolCalendars.url(source))

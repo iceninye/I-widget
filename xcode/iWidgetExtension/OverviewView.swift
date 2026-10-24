@@ -316,6 +316,16 @@ struct SchoolSection: View {
             if rows.count > maxRows {
                 Text("另有 \(rows.count - maxRows) 項").font(.system(size: 10)).foregroundStyle(.secondary)
             }
+            if let holiday = entry.nextHoliday {
+                HStack(spacing: 5) {
+                    Image(systemName: "sun.max.fill").foregroundStyle(.orange).widgetAccentable()
+                    Text(holiday.rangeText).foregroundStyle(.secondary).monospacedDigit()
+                    Text(holiday.title).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text("\(holiday.daysAway) 日後").foregroundStyle(.secondary)
+                }
+                .font(.system(size: 11))
+            }
         }
         .padding(.horizontal, 4)
     }

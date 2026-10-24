@@ -34,10 +34,11 @@ enum SchoolCalendars {
     }
 
     static let cycleName = "循環周"
+    static let holidayName = "假期"
 
     static let sources = [
         Source(name: "事項", id: "skhsslmc.edu.hk_01rudpgarigvp0ivcbe83712hk@group.calendar.google.com"),
-        Source(name: "假期", id: "skhsslmc.edu.hk_5k7g1ubf9dqnlvn7fegnkuj3h0@group.calendar.google.com"),
+        Source(name: holidayName, id: "skhsslmc.edu.hk_5k7g1ubf9dqnlvn7fegnkuj3h0@group.calendar.google.com"),
         Source(name: "考試及統測", id: "skhsslmc.edu.hk_4j27jtnq3nf3difmm0pgh0t11c@group.calendar.google.com"),
         Source(name: cycleName, id: "skhsslmc.edu.hk_2cls6pqrhan0n4uvufp97uhhpk@group.calendar.google.com"),
     ]
@@ -45,6 +46,23 @@ enum SchoolCalendars {
     static func url(_ source: Source) -> URL? {
         let id = source.id.replacingOccurrences(of: "@", with: "%40")
         return URL(string: "https://calendar.google.com/calendar/ical/\(id)/public/basic.ics")
+    }
+}
+
+/// 下一個學校假期（連續日子合併成一項）。
+struct Holiday: Equatable {
+    var title: String
+    var first: Date
+    var last: Date
+    var daysAway: Int
+
+    /// 例如「12/25」或「12/25–12/27」。
+    var rangeText: String {
+        let calendar = ICalendar.hongKong
+        func text(_ date: Date) -> String {
+            "\(calendar.component(.month, from: date))/\(calendar.component(.day, from: date))"
+        }
+        return first == last ? text(first) : "\(text(first))–\(text(last))"
     }
 }
 
@@ -209,6 +227,24 @@ enum ICalendar {
         guard matches else { return nil }
         let start = dayStart.addingTimeInterval(event.start.timeIntervalSince(baseDay))
         return make(start, start.addingTimeInterval(event.end.timeIntervalSince(event.start)))
+    }
+
+    /// `dayStart`（今日 00:00）之後第 2 日起，`days` 日內第一個假期。今日同明日由日程行顯示，所以唔計。
+    static func nextHoliday(of events: [CalendarEvent], after dayStart: Date, within days: Int = 400, calendar: Calendar = hongKong) -> Holiday? {
+        let holidays = events.filter { $0.calendar == SchoolCalendars.holidayName }
+        guard !holidays.isEmpty else { return nil }
+        func titles(_ offset: Int) -> [String]? {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: dayStart) else { return nil }
+            return occurrences(of: holidays, onDayStarting: day, calendar: calendar).map(\.title)
+        }
+        for offset in 2...days {
+            guard let title = titles(offset)?.first(where: { !$0.isEmpty }),
+                  let first = calendar.date(byAdding: .day, value: offset, to: dayStart) else { continue }
+            var last = offset
+            while last < days, titles(last + 1)?.contains(title) == true { last += 1 }
+            return Holiday(title: title, first: first, last: calendar.date(byAdding: .day, value: last, to: dayStart) ?? first, daysAway: offset)
+        }
+        return nil
     }
 
     /// 只留今日前後嘅事件（重複事件照留），避免快取成年歷史。

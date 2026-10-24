@@ -188,6 +188,29 @@ final class RosterTests: XCTestCase {
         XCTAssertEqual(label("2026-10-25", plain), "70")
     }
 
+    func testExtraCodes() {
+        var plain = roster
+        plain.overrides["2026-10-23"] = "SLP"
+        plain.overrides["2026-10-24"] = "TRG"
+        plain.overrides["2026-10-25"] = "CP"
+        plain.overrides["2026-10-26"] = "CL"
+        let basic = ["TRG": DutyTime(on: 28_800, onPlace: "TAD", off: 54_000, offPlace: "TAD", hours: 7.5)]
+        let make = { (date: String) in
+            DutyDay.make(roster: plain, date: date, basic: basic, cards: [:], sheets: [], places: .empty)
+        }
+        let slp = make("2026-10-23")
+        XCTAssertEqual(slp?.kind, .duty)
+        XCTAssertEqual(slp?.times, "15:00 – 23:00")
+        XCTAssertEqual(slp?.hoursText, "7.5 小時")
+        XCTAssertEqual(slp?.shortLabel, "夜")
+        let trg = make("2026-10-24")
+        XCTAssertEqual(trg?.times, "08:00 – 15:00")
+        XCTAssertEqual(trg?.hoursText, "7 小時")
+        XCTAssertEqual(make("2026-10-25")?.kind, .leave)
+        XCTAssertEqual(make("2026-10-25")?.shortLabel, "假")
+        XCTAssertEqual(make("2026-10-26")?.title, "CL 假期")
+    }
+
     func testServiceSecondDates() {
         let day = DutyDay(date: "2026-10-23", code: "X", kind: .duty, title: "X")
         XCTAssertEqual(day.moment(atServiceSecond: 0), date("2026-10-22T16:00:00Z"))
