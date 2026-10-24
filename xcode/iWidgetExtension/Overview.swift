@@ -82,7 +82,8 @@ struct OverviewEntry: TimelineEntry {
     var batteryTone: BatteryTone { BatteryStyle.tone(level: stats.batteryLevel, charging: stats.isCharging) }
     var batterySymbol: String { BatteryStyle.symbol(level: stats.batteryLevel, charging: stats.isCharging) }
 
-    var serviceToday: String { Days.serviceDate(date) }
+    /// 今日：00:00 換日；昨日夜更未放工就仍然係昨日（同 tml-roster 一致）。
+    var serviceToday: String { Days.today(date) { schedule.duty(on: $0)?.off } }
     var serviceTomorrow: String { Days.add(serviceToday, 1) ?? serviceToday }
     var dutyToday: DutyDay? { schedule.duty(on: serviceToday) }
     var dutyTomorrow: DutyDay? { schedule.duty(on: serviceTomorrow) }
@@ -169,6 +170,14 @@ struct OverviewProvider: AppIntentTimelineProvider {
         }
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
+        // 昨日夜更放工嗰一刻，今日咭先轉去新一日
+        let service = Days.serviceDate(now)
+        for date in [Days.add(service, -1), service].compactMap({ $0 }) {
+            if let day = loadedSchedule.duty(on: date), let off = day.off, let at = day.moment(atServiceSecond: off),
+               at > now, at < now.addingTimeInterval(4 * 3_600) {
+                dates.append(at.addingTimeInterval(1))
+            }
+        }
         let calendar = ICalendar.hongKong
         for hour in [0, 4] {
             if let next = calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: 0), matchingPolicy: .nextTime),

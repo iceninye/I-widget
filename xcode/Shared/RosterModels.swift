@@ -55,6 +55,21 @@ enum Days {
         return string(number - index)
     }
 
+    /// 香港日曆日（00:00 換日）。
+    static func calendarDate(_ now: Date) -> String {
+        string(Int(((now.timeIntervalSince1970 + 8 * 3_600) / 86_400).rounded(.down)))
+    }
+
+    /// 「今日」：00:00 換日，同 tml-roster 今日卡一致；但 00:00–04:00 如果昨日嗰更仲未放工
+    /// （例如 15:34–00:04 夜更），就繼續當昨日。`off` 係某日嘅放工時間（由該日 00:00 起計嘅秒數，可以超過 86400）。
+    static func today(_ now: Date, off: (String) -> Int?) -> String {
+        let calendar = calendarDate(now)
+        let previous = serviceDate(now)
+        guard previous != calendar, let offSeconds = off(previous), let day = number(previous) else { return calendar }
+        let seconds = now.timeIntervalSince1970 - (Double(day) * 86_400 - 8 * 3_600)
+        return seconds < Double(offSeconds) ? previous : calendar
+    }
+
     /// 服務日：香港時間 04:00 轉日，凌晨收工嘅更仍然算前一日。
     static func serviceDate(_ now: Date) -> String {
         let local = now.timeIntervalSince1970 + 8 * 3_600

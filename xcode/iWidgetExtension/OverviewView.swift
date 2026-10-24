@@ -75,7 +75,10 @@ struct WeekStrip: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, minHeight: 15)
-                .background((day?.tint ?? .gray).opacity(day?.kind == .duty ? 0.9 : 0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .background(
+                    day?.gradient ?? LinearGradient(colors: [Color.gray.opacity(0.55)], startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
                 .widgetAccentable()
                 .overlay {
                     if isToday {

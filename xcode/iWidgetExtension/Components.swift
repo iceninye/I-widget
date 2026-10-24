@@ -38,12 +38,29 @@ extension ShiftClass {
 extension DutyDay {
     var tint: Color {
         switch kind {
-        case .rest: return Color(red: 0.24, green: 0.76, blue: 0.55)
+        case .rest: return Color(red: 0.90, green: 0.25, blue: 0.30)
         case .leave: return Color(red: 0.29, green: 0.62, blue: 0.88)
         case .pending: return Color(red: 0.89, green: 0.66, blue: 0.23)
         case .spare, .other: return shift?.color ?? .gray
         case .duty: return shift?.color ?? Color(red: 0.71, green: 0.28, blue: 0.12)
         }
+    }
+}
+
+extension DutyDay {
+    /// 七日色條用漸變：休息日係紅色漸變（同 tml-roster 假日卡一致），其他跟更類顏色。
+    var gradient: LinearGradient {
+        if kind == .rest {
+            return LinearGradient(
+                colors: [Color(red: 1.0, green: 0.45, blue: 0.42), Color(red: 0.78, green: 0.13, blue: 0.22)],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        let strength = kind == .duty ? 0.95 : 0.7
+        return LinearGradient(
+            colors: [tint.opacity(strength), tint.opacity(strength * 0.6)],
+            startPoint: .top, endPoint: .bottom
+        )
     }
 }
 
