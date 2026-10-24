@@ -95,6 +95,9 @@ final class ICalendarTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.hasSuffix("/public/basic.ics"))
         XCTAssertTrue(url.absoluteString.contains("%40group.calendar.google.com"))
         XCTAssertEqual(SchoolCalendars.sources.count, 4)
+        // 假期日曆 ID 同 tml-roster Worker 一致（舊 ID 5k7g… 回 404）
+        let holiday = try XCTUnwrap(SchoolCalendars.sources.first { $0.name == SchoolCalendars.holidayName })
+        XCTAssertTrue(holiday.id.contains("vk7g1ubf9dqnlvn7fegnkuj3h0"))
     }
 
     func testParseDateVariants() {
