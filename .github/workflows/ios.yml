@@ -19,7 +19,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Xcode 27 專用 runner image（macOS 27，arm64）；iOS 27 嘅新 SDK（例如特大 widget）要靠佢編譯
+    runs-on: xcode-27
     timeout-minutes: 30
     defaults:
       run:

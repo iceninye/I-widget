@@ -23,7 +23,7 @@ struct LargeOverview: View {
     /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起明日一行，再收 7 日色條。
     var body: some View {
         GeometryReader { geometry in
-            let rows = geometry.size.height > 420 ? 6 : 3
+            let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
             ViewThatFits(in: .vertical) {
                 stack(rows: rows, strip: true, tomorrow: true)
                 stack(rows: rows, strip: true, tomorrow: false)
