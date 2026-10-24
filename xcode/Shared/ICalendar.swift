@@ -38,7 +38,7 @@ enum SchoolCalendars {
 
     static let sources = [
         Source(name: "事項", id: "skhsslmc.edu.hk_01rudpgarigvp0ivcbe83712hk@group.calendar.google.com"),
-        Source(name: holidayName, id: "skhsslmc.edu.hk_5k7g1ubf9dqnlvn7fegnkuj3h0@group.calendar.google.com"),
+        Source(name: holidayName, id: "skhsslmc.edu.hk_vk7g1ubf9dqnlvn7fegnkuj3h0@group.calendar.google.com"),
         Source(name: "考試及統測", id: "skhsslmc.edu.hk_4j27jtnq3nf3difmm0pgh0t11c@group.calendar.google.com"),
         Source(name: cycleName, id: "skhsslmc.edu.hk_2cls6pqrhan0n4uvufp97uhhpk@group.calendar.google.com"),
     ]

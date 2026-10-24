@@ -5,6 +5,7 @@ struct WeatherDay: Codable, Equatable {
     var minTemp: Double
     var maxTemp: Double
     var rainChance: Int?
+    var uvIndex: Double?
 }
 
 struct WeatherSnapshot: Codable, Equatable {
@@ -15,7 +16,7 @@ struct WeatherSnapshot: Codable, Equatable {
 
     static let sample = WeatherSnapshot(
         currentTemp: 26.4,
-        today: WeatherDay(code: 3, minTemp: 24, maxTemp: 28, rainChance: 20),
+        today: WeatherDay(code: 3, minTemp: 24, maxTemp: 28, rainChance: 20, uvIndex: 6),
         tomorrow: WeatherDay(code: 61, minTemp: 23, maxTemp: 27, rainChance: 70),
         fetchedAt: Date()
     )
@@ -29,7 +30,7 @@ enum OpenMeteo {
             URLQueryItem(name: "latitude", value: String(format: "%.3f", latitude)),
             URLQueryItem(name: "longitude", value: String(format: "%.3f", longitude)),
             URLQueryItem(name: "current", value: "temperature_2m"),
-            URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
+            URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"),
             URLQueryItem(name: "timezone", value: "auto"),
             URLQueryItem(name: "forecast_days", value: "2"),
         ]
@@ -43,6 +44,7 @@ enum OpenMeteo {
             let temperature_2m_max: [Double?]
             let temperature_2m_min: [Double?]
             let precipitation_probability_max: [Double?]?
+            let uv_index_max: [Double?]?
         }
         let current: Current?
         let daily: Daily
@@ -63,7 +65,9 @@ enum OpenMeteo {
             if let chances = daily.precipitation_probability_max, index < chances.count, let value = chances[index] {
                 rain = Int(value.rounded())
             }
-            return WeatherDay(code: Int(code), minTemp: low, maxTemp: high, rainChance: rain)
+            var uv: Double?
+            if let values = daily.uv_index_max, index < values.count { uv = values[index] }
+            return WeatherDay(code: Int(code), minTemp: low, maxTemp: high, rainChance: rain, uvIndex: uv)
         }
 
         guard let today = day(0) else { throw URLError(.cannotParseResponse) }

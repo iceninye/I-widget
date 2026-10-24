@@ -93,6 +93,13 @@ struct OverviewEntry: TimelineEntry {
         schedule.school(dayStart: ICalendar.hongKong.date(byAdding: .day, value: 1, to: todayStart) ?? todayStart)
     }
 
+    /// 本週（服務日所在嘅星期一至日）概況；冇更表就 nil。
+    var weekSummary: WeekSummary? {
+        guard schedule.roster != nil, let monday = Days.mondayOf(serviceToday) else { return nil }
+        let days = (0..<7).compactMap { Days.add(monday, $0).flatMap { schedule.duty(on: $0) } }
+        return days.isEmpty ? nil : WeekSummary.make(days)
+    }
+
     var nextHoliday: Holiday? { schedule.nextHoliday(dayStart: todayStart) }
 
     static var sample: OverviewEntry {
