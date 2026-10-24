@@ -5,9 +5,9 @@ final class LiveAlertsTests: XCTestCase {
         let json = #"{"WRAIN":{"name":"暴雨警告信號","code":"WRAINR","actionCode":"ISSUE"},"WTCSGNL":{"name":"熱帶氣旋警告信號","code":"TC3","actionCode":"REISSUE"},"WHOT":{"name":"酷熱天氣警告","code":"WHOT","actionCode":"CANCEL"},"WTS":{"name":"雷暴警告","actionCode":"ISSUE"}}"#
         let warnings = try HKOWarnings.parse(Data(json.utf8))
         XCTAssertEqual(warnings, [
+            WeatherWarning(text: "紅色暴雨", severe: true),
             WeatherWarning(text: "三號風球", severe: false),
             WeatherWarning(text: "雷暴警告", severe: false),
-            WeatherWarning(text: "紅色暴雨", severe: true),
         ])
         XCTAssertEqual(try HKOWarnings.parse(Data("{}".utf8)), [])
         XCTAssertThrowsError(try HKOWarnings.parse(Data("[]".utf8)))
