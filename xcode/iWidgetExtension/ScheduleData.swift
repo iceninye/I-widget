@@ -165,7 +165,9 @@ struct ScheduleData {
                         guard let url = SchoolCalendars.url(source),
                               let data = try? await Fetcher.data(from: url, timeout: 12),
                               let text = String(data: data, encoding: .utf8), text.contains("BEGIN:VCALENDAR") else { return nil }
-                        return ICalendar.relevant(ICalendar.parse(text, calendar: source.name), around: now)
+                        // 假期要睇到下一個長假，保留一年幾；其他日曆只留 60 日
+                        let days = source.name == SchoolCalendars.holidayName ? 400 : 60
+                        return ICalendar.relevant(ICalendar.parse(text, calendar: source.name), around: now, days: days)
                     }
                     if let fetched {
                         DataCache.save(fetched, key: key, stamped: now)
@@ -196,6 +198,10 @@ struct ScheduleData {
             if day.on != nil { return day }
         }
         return nil
+    }
+
+    func nextHoliday(dayStart: Date) -> Holiday? {
+        ICalendar.nextHoliday(of: events, after: dayStart)
     }
 
     func school(dayStart: Date) -> SchoolDay {

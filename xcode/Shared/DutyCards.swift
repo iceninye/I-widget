@@ -96,6 +96,30 @@ enum DutyData {
     }
 }
 
+/// 其他代碼（Ice 2026-10-22 定，同 tml-roster `lib/tml-extra.js` 一致）。
+/// 開工日：工時（小時），部分有固定上下班（秒，由 00:00 起計）；假期：有薪工時（CL 係 0）。
+enum ExtraCodes {
+    struct Work: Equatable {
+        var hours: Double
+        var on: Int? = nil
+        var off: Int? = nil
+    }
+
+    private static func at(_ hour: Int, _ minute: Int = 0) -> Int { (hour * 60 + minute) * 60 }
+
+    static let work: [String: Work] = [
+        "SPH7": Work(hours: 7), "SPL7": Work(hours: 7), "SPT7": Work(hours: 7), "SPT75": Work(hours: 7.5),
+        "TRG": Work(hours: 7), "TRGK": Work(hours: 7), "TRGL": Work(hours: 7),
+        "SLP": Work(hours: 7.5, on: at(15), off: at(23)),
+        "SEP": Work(hours: 8, on: at(6, 45), off: at(15, 15)),
+        "JCC": Work(hours: 7),
+        "SPKE": Work(hours: 7.5, on: at(7), off: at(15)),
+        "SPKL": Work(hours: 7.5, on: at(15), off: at(23)),
+    ]
+
+    static let off: [String: Double] = ["CL": 0, "CP": 7, "GH": 7, "PH": 7, "SH": 7, "SL": 7, "WB": 7]
+}
+
 /// 站代號 → 中文名（`data/tml-network.json` 嘅 stations 同 places）。
 struct PlaceNames: Codable, Equatable {
     var stations: [String: String]
@@ -226,6 +250,12 @@ struct DutyDay: Equatable {
             return day
         }
 
+        if ExtraCodes.off[code] != nil {
+            day.kind = .leave
+            day.title = "\(code) 假期"
+            return day
+        }
+
         let isDuty = code.range(of: "^[0-9]{7}$", options: .regularExpression) != nil
         if isDuty {
             day.kind = .duty
@@ -258,6 +288,15 @@ struct DutyDay: Equatable {
                 day.offPlace = time.offPlace
                 day.hours = time.hours
             }
+        } else if let work = ExtraCodes.work[code] {
+            // 開工日代碼：有固定時間就用表，否則用官表 duty-basic（地點一律用官表嘅）
+            day.kind = .duty
+            let time = basic[code]
+            day.on = work.on ?? time?.on
+            day.off = work.off ?? time?.off
+            day.onPlace = time.map { places.name($0.onPlace) } ?? ""
+            day.offPlace = time.map { places.name($0.offPlace) } ?? ""
+            day.hours = work.hours
         } else if code.range(of: "^[HK]SP[0-9]?$", options: .regularExpression) != nil {
             day.kind = .spare
             if let time = basic[code] {

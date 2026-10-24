@@ -93,6 +93,8 @@ struct OverviewEntry: TimelineEntry {
         schedule.school(dayStart: ICalendar.hongKong.date(byAdding: .day, value: 1, to: todayStart) ?? todayStart)
     }
 
+    var nextHoliday: Holiday? { schedule.nextHoliday(dayStart: todayStart) }
+
     static var sample: OverviewEntry {
         let now = Date()
         let today = Days.serviceDate(now)
