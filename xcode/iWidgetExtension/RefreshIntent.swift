@@ -7,6 +7,8 @@ struct RefreshIntent: AppIntent {
     static var description = IntentDescription("即時重新讀取 widget 資料。")
 
     func perform() async throws -> some IntentResult {
+        // 即時更新要真係上網，唔好當成剛剛反轉格嗰次
+        DataCache.save(Date.distantPast, key: "flipAt")
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }

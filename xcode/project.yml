@@ -78,6 +78,7 @@ targets:
       - path: Shared/VPSStatus.swift
       - path: Shared/BatteryEstimate.swift
       - path: Shared/DutyCards.swift
+      - path: Shared/FlipState.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests

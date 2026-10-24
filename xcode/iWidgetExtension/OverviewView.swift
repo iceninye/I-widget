@@ -27,7 +27,7 @@ struct LargeOverview: View {
             SchoolSection(entry: entry)
             Spacer(minLength: 0)
             TileGrid(entry: entry)
-            VPSLine(vps: entry.vps)
+            VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
         }
     }
 }
@@ -59,15 +59,24 @@ struct TodayCard: View {
                     Spacer(minLength: 2)
                     RefreshButton(updatedAt: entry.updatedAt)
                 }
-                if !schedule.configured {
-                    message("未設定 tml-roster token：長按 widget →「編輯小工具」貼上。", .secondary)
-                } else if day == nil {
-                    message(schedule.rosterFailed ? "讀唔到更表，請檢查 token 同網絡。" : "更表未有今日資料。", .orange)
-                } else if let day, day.hasTimes {
-                    working(day)
-                } else if let day {
-                    resting(day)
+                Button(intent: FlipIntent(tile: "today")) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if !schedule.configured {
+                            message("未設定 tml-roster token：長按 widget →「編輯小工具」貼上。", .secondary)
+                        } else if day == nil {
+                            message(schedule.rosterFailed ? "讀唔到更表，請檢查 token 同網絡。" : "更表未有今日資料。", .orange)
+                        } else if entry.isFlipped("today") {
+                            BackFace(lines: entry.todayBack, size: 12)
+                        } else if let day, day.hasTimes {
+                            working(day)
+                        } else if let day {
+                            resting(day)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
         .overlay(alignment: .leading) {
@@ -268,41 +277,47 @@ struct TileGrid: View {
         Grid(horizontalSpacing: 6, verticalSpacing: 6) {
             GridRow {
                 Tile(
-                    symbol: entry.batterySymbol, tint: entry.batteryTone.color,
+                    id: "battery", symbol: entry.batterySymbol, tint: entry.batteryTone.color,
                     value: Formatting.percent(stats.batteryLevel),
                     caption: BatteryHistory.text(entry.battery) ?? "電量",
-                    fraction: stats.batteryLevel
+                    fraction: stats.batteryLevel,
+                    flipped: entry.isFlipped("battery"), back: entry.batteryBack
                 )
                 Tile(
-                    symbol: "internaldrive.fill", tint: lowStorage ? .red : .blue,
+                    id: "storage", symbol: "internaldrive.fill", tint: lowStorage ? .red : .blue,
                     value: Formatting.bytes(stats.freeBytes),
                     caption: "可用 / \(Formatting.bytes(stats.totalBytes))",
-                    fraction: Formatting.usedFraction(free: stats.freeBytes, total: stats.totalBytes)
+                    fraction: Formatting.usedFraction(free: stats.freeBytes, total: stats.totalBytes),
+                    flipped: entry.isFlipped("storage"), back: entry.storageBack
                 )
                 Tile(
-                    symbol: "clock.fill", tint: entry.rebootHint.tint,
+                    id: "uptime", symbol: "clock.fill", tint: entry.rebootHint.tint,
                     value: Formatting.uptime(stats.uptime(at: entry.date)),
                     caption: entry.rebootHint == .none ? "開機時間" : entry.rebootHint.suffix.replacingOccurrences(of: " · ", with: ""),
-                    captionColor: entry.rebootHint == .none ? .secondary : entry.rebootHint.tint
+                    captionColor: entry.rebootHint == .none ? .secondary : entry.rebootHint.tint,
+                    flipped: entry.isFlipped("uptime"), back: entry.uptimeBack
                 )
             }
             GridRow {
                 Tile(
-                    symbol: weather.map { WeatherCode.symbol($0.today.code) } ?? "cloud.fill", tint: .cyan,
+                    id: "weather", symbol: weather.map { WeatherCode.symbol($0.today.code) } ?? "cloud.fill", tint: .cyan,
                     value: Formatting.degrees(weather?.currentTemp),
-                    caption: weather.map { "\(Formatting.tempRange($0.today)) · 明 \(Formatting.tempRange($0.tomorrow))" } ?? "天氣"
+                    caption: weather.map { "\(Formatting.tempRange($0.today)) · 明 \(Formatting.tempRange($0.tomorrow))" } ?? "天氣",
+                    flipped: entry.isFlipped("weather"), back: entry.weatherBack
                 )
                 Tile(
-                    symbol: "dollarsign.circle.fill", tint: .yellow,
+                    id: "gold", symbol: "dollarsign.circle.fill", tint: .yellow,
                     value: Formatting.gold(entry.info.gold?.usdPerOunce),
                     caption: "黃金 USD/oz",
-                    captionColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.updatedAt) ? .orange : .secondary
+                    captionColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.updatedAt) ? .orange : .secondary,
+                    flipped: entry.isFlipped("gold"), back: entry.goldBack
                 )
                 Tile(
-                    symbol: "iphone.gen3", tint: .gray,
+                    id: "ios", symbol: "iphone.gen3", tint: .gray,
                     value: entry.stats.systemVersion,
                     caption: versionCaption,
-                    captionColor: versionColor
+                    captionColor: versionColor,
+                    flipped: entry.isFlipped("ios"), back: entry.osBack
                 )
             }
         }
@@ -322,70 +337,118 @@ struct TileGrid: View {
     }
 }
 
+/// 撳一下反轉去背面；再撳（或者 90 秒後）轉返正面。
+struct BackFace: View {
+    let lines: [BackLine]
+    var size: CGFloat = 10
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(lines) { line in
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(line.label).foregroundStyle(.secondary)
+                    Text(line.value).fontWeight(.semibold).monospacedDigit()
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .font(.system(size: size))
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+    }
+}
+
 struct Tile: View {
+    let id: String
     let symbol: String
     let tint: Color
     let value: String
     let caption: String
     var captionColor: Color = .secondary
     var fraction: Double?
+    let flipped: Bool
+    let back: [BackLine]
 
     var body: some View {
-        GlassCard(padding: 7) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 11))
-                        .foregroundStyle(tint)
-                        .widgetAccentable()
-                    Text(value)
-                        .font(.system(size: 14, weight: .bold))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-                Text(caption)
-                    .font(.system(size: 9))
-                    .foregroundStyle(captionColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                if let fraction {
-                    ProgressBar(fraction: fraction, tint: tint).frame(height: 3)
+        Button(intent: FlipIntent(tile: id)) {
+            GlassCard(tint: flipped ? tint : nil, padding: 7) {
+                if flipped {
+                    BackFace(lines: back)
+                        .frame(minHeight: 40, alignment: .topLeading)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: symbol)
+                                .font(.system(size: 11))
+                                .foregroundStyle(tint)
+                                .widgetAccentable()
+                            Text(value)
+                                .font(.system(size: 14, weight: .bold))
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                        }
+                        Text(caption)
+                            .font(.system(size: 9))
+                            .foregroundStyle(captionColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        if let fraction {
+                            ProgressBar(fraction: fraction, tint: tint).frame(height: 3)
+                        } else {
+                            Color.clear.frame(height: 3)
+                        }
+                    }
+                    .frame(minHeight: 40, alignment: .topLeading)
                 }
             }
         }
+        .buttonStyle(.plain)
     }
 }
 
 struct VPSLine: View {
     let vps: VPSState
+    let flipped: Bool
+    let back: [BackLine]
 
     var body: some View {
-        GlassCard(padding: 7) {
-            HStack(spacing: 6) {
-                Image(systemName: "server.rack")
-                    .foregroundStyle(vps.status.map { VPSAPI.health($0).color } ?? .secondary)
-                    .widgetAccentable()
-                Text("VPS").fontWeight(.bold)
-                if !vps.configured {
-                    Text("未設定（編輯小工具輸入 VPS token）").foregroundStyle(.secondary)
-                } else if let status = vps.status {
-                    Text(VPSAPI.updatesText(status))
-                        .foregroundStyle(status.security > 0 ? .red : (status.upgradable > 0 ? .orange : .secondary))
-                    if status.rebootRequired { Text("要重啟").foregroundStyle(.red) }
-                    Spacer(minLength: 2)
-                    service("Xray", status.xrayRunning)
-                    service("Hy2", status.hysteria2Listening)
-                    if vps.failed { Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange) }
+        Button(intent: FlipIntent(tile: "vps")) {
+            GlassCard(tint: flipped ? vps.status.map { VPSAPI.health($0).color } : nil, padding: 7) {
+                if flipped {
+                    BackFace(lines: back)
                 } else {
-                    Text("讀唔到狀態").foregroundStyle(.orange)
+                    front
                 }
-                if vps.status == nil { Spacer(minLength: 0) }
             }
-            .font(.system(size: 11))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
         }
+        .buttonStyle(.plain)
+    }
+
+    private var front: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "server.rack")
+                .foregroundStyle(vps.status.map { VPSAPI.health($0).color } ?? .secondary)
+                .widgetAccentable()
+            Text("VPS").fontWeight(.bold)
+            if !vps.configured {
+                Text("未設定（編輯小工具輸入 VPS token）").foregroundStyle(.secondary)
+            } else if let status = vps.status {
+                Text(VPSAPI.updatesText(status))
+                    .foregroundStyle(status.security > 0 ? .red : (status.upgradable > 0 ? .orange : .secondary))
+                if status.rebootRequired { Text("要重啟").foregroundStyle(.red) }
+                Spacer(minLength: 2)
+                service("Xray", status.xrayRunning)
+                service("Hy2", status.hysteria2Listening)
+                if vps.failed { Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange) }
+            } else {
+                Text("讀唔到狀態").foregroundStyle(.orange)
+            }
+            if vps.status == nil { Spacer(minLength: 0) }
+        }
+        .font(.system(size: 11))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
     }
 
     @ViewBuilder private func service(_ name: String, _ up: Bool?) -> some View {
