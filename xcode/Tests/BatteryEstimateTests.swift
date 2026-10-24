@@ -31,6 +31,12 @@ final class BatteryEstimateTests: XCTestCase {
         XCTAssertEqual(BatteryHistory.estimate([sample(0, 1.0, charging: true)], now: start), .full)
     }
 
+    func testPercentPerHour() {
+        let samples = [sample(0, 0.60), sample(60, 0.50)]
+        XCTAssertEqual(BatteryHistory.percentPerHour(samples, now: samples.last!.time) ?? 0, 10, accuracy: 0.01)
+        XCTAssertNil(BatteryHistory.percentPerHour([sample(0, 0.6)], now: start))
+    }
+
     func testNeedsEnoughChange() {
         let samples = [sample(0, 0.80), sample(60, 0.79)]
         XCTAssertEqual(BatteryHistory.estimate(samples, now: samples.last!.time), .learning)

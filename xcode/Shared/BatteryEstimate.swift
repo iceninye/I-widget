@@ -39,22 +39,31 @@ enum BatteryHistory {
         return Array(result.suffix(maxSamples))
     }
 
-    static func estimate(_ samples: [BatterySample], now: Date) -> BatteryEstimate {
-        guard let last = samples.last else { return .unknown }
-        if last.charging && last.level >= 0.995 { return .full }
-
+    /// 最近一段同一狀態嘅樣本計出嚟嘅電量變化速度（每秒，正數 = 放電時跌／充電時升）。樣本未夠就 nil。
+    static func rate(_ samples: [BatterySample], now: Date) -> Double? {
+        guard let last = samples.last else { return nil }
         // 最近一段同一狀態（全部充電或者全部冇充電）嘅樣本
         var segment: [BatterySample] = []
         for sample in samples.reversed() {
             guard sample.charging == last.charging, now.timeIntervalSince(sample.time) <= window else { break }
             segment.insert(sample, at: 0)
         }
-        guard let first = segment.first, segment.count >= 2 else { return .learning }
+        guard let first = segment.first, segment.count >= 2 else { return nil }
         let span = last.time.timeIntervalSince(first.time)
         let change = last.charging ? last.level - first.level : first.level - last.level
-        guard span >= minimumSpan, change >= minimumChange else { return .learning }
+        guard span >= minimumSpan, change >= minimumChange else { return nil }
+        return change / span
+    }
 
-        let perSecond = change / span
+    /// 每小時變化幾多個百分點（例如 6.5 = 每小時 6.5%）。
+    static func percentPerHour(_ samples: [BatterySample], now: Date) -> Double? {
+        rate(samples, now: now).map { $0 * 3_600 * 100 }
+    }
+
+    static func estimate(_ samples: [BatterySample], now: Date) -> BatteryEstimate {
+        guard let last = samples.last else { return .unknown }
+        if last.charging && last.level >= 0.995 { return .full }
+        guard let perSecond = rate(samples, now: now) else { return .learning }
         if last.charging {
             return .untilFull(min((1 - last.level) / perSecond, 24 * 3_600))
         }

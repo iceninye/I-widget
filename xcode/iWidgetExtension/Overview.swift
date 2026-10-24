@@ -71,6 +71,10 @@ struct OverviewEntry: TimelineEntry {
     let schedule: ScheduleData
     let vps: VPSState
     let updatedAt: Date
+    var batteryRate: Double? = nil
+    var flips = FlipState()
+
+    func isFlipped(_ id: String) -> Bool { flips.isFlipped(id, at: date) }
 
     var rebootHint: RebootHint { RebootHint.level(uptime: stats.uptime(at: date)) }
     var osStatus: OSVersionStatus { OSVersion.status(current: stats.systemVersion, latest: info.latestOS) }
@@ -121,20 +125,37 @@ struct OverviewProvider: AppIntentTimelineProvider {
         if context.isPreview { return .sample }
         let now = Date()
         let stats = SystemStats.read()
+        let reading = Self.recordBattery(stats, now: now)
         return OverviewEntry(
-            date: now, stats: stats, battery: Self.recordBattery(stats, now: now), info: .cached(now: now),
-            schedule: .cached(token: configuration.rosterToken), vps: .cached(url: configuration.statusURL, token: configuration.vpsToken), updatedAt: now
+            date: now, stats: stats, battery: reading.estimate, info: .cached(now: now),
+            schedule: .cached(token: configuration.rosterToken), vps: .cached(url: configuration.statusURL, token: configuration.vpsToken), updatedAt: now,
+            batteryRate: reading.rate, flips: FlipState.load()
         )
     }
 
     func timeline(for configuration: OverviewConfigIntent, in context: Context) async -> Timeline<OverviewEntry> {
         let now = Date()
         let stats = SystemStats.read()
-        let battery = Self.recordBattery(stats, now: now)
-        async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
-        async let schedule = ScheduleData.load(token: configuration.rosterToken, now: now)
-        async let vps = VPSState.load(url: configuration.statusURL, token: configuration.vpsToken, now: now)
-        let (loadedInfo, loadedSchedule, loadedVPS) = await (info, schedule, vps)
+        let reading = Self.recordBattery(stats, now: now)
+        var flips = FlipState.load()
+        flips.prune(now: now)
+
+        // 剛剛撳咗資料格反轉：用快取即刻畫，唔使等上網。
+        let justFlipped = DataCache.load(Date.self, key: "flipAt").map { now.timeIntervalSince($0) < 20 } ?? false
+        let loadedInfo: ExtraInfo
+        let loadedSchedule: ScheduleData
+        let loadedVPS: VPSState
+        if justFlipped {
+            loadedInfo = .cached(now: now)
+            loadedSchedule = .cached(token: configuration.rosterToken)
+            loadedVPS = .cached(url: configuration.statusURL, token: configuration.vpsToken)
+        } else {
+            async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
+            async let schedule = ScheduleData.load(token: configuration.rosterToken, now: now)
+            async let vps = VPSState.load(url: configuration.statusURL, token: configuration.vpsToken, now: now)
+            (loadedInfo, loadedSchedule, loadedVPS) = await (info, schedule, vps)
+            DataCache.save(now, key: "dataAt")
+        }
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
         let calendar = ICalendar.hongKong
@@ -144,22 +165,29 @@ struct OverviewProvider: AppIntentTimelineProvider {
                 dates.append(next)
             }
         }
+        // 反轉咗嘅格到時自動轉返正面
+        dates += flips.expiries(after: now).map { $0.addingTimeInterval(1) }
         let entries = dates.sorted().map {
-            OverviewEntry(date: $0, stats: stats, battery: battery, info: loadedInfo, schedule: loadedSchedule, vps: loadedVPS, updatedAt: now)
+            OverviewEntry(
+                date: $0, stats: stats, battery: reading.estimate, info: loadedInfo, schedule: loadedSchedule,
+                vps: loadedVPS, updatedAt: justFlipped ? (DataCache.load(Date.self, key: "dataAt") ?? now) : now,
+                batteryRate: reading.rate, flips: flips
+            )
         }
         return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
     }
 
     /// 記低今次電量，再用歷史估算剩餘時間。
-    static func recordBattery(_ stats: SystemStats, now: Date) -> BatteryEstimate {
+    static func recordBattery(_ stats: SystemStats, now: Date) -> (estimate: BatteryEstimate, rate: Double?) {
         var history = DataCache.load([BatterySample].self, key: "batteryHistory") ?? []
         if let level = stats.batteryLevel {
             let sample = BatterySample(time: now, level: level, charging: stats.isCharging || stats.isFullyCharged)
             history = BatteryHistory.appending(sample, to: history)
             DataCache.save(history, key: "batteryHistory")
         }
-        if stats.isFullyCharged { return .full }
-        return BatteryHistory.estimate(history, now: now)
+        let rate = BatteryHistory.percentPerHour(history, now: now)
+        if stats.isFullyCharged { return (.full, rate) }
+        return (BatteryHistory.estimate(history, now: now), rate)
     }
 }
 
