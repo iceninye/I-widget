@@ -157,6 +157,17 @@ struct DutyDay: Equatable {
     var hint: String?
     var isOverride = false
 
+    /// 7 日色條用嘅短標籤：更類（死早、早、中、夜、死夜）、休、假、待。
+    var shortLabel: String {
+        switch kind {
+        case .rest: return "休"
+        case .leave: return "假"
+        case .pending: return "待"
+        case .spare: return "備"
+        case .duty, .other: return shift?.rawValue ?? String(code.prefix(2))
+        }
+    }
+
     var hasTimes: Bool { on != nil && off != nil }
 
     var times: String? {

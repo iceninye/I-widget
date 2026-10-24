@@ -20,15 +20,68 @@ struct OverviewView: View {
 struct LargeOverview: View {
     let entry: OverviewEntry
 
+    /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起明日一行，再收 7 日色條。
     var body: some View {
+        GeometryReader { geometry in
+            let rows = geometry.size.height > 420 ? 6 : 3
+            ViewThatFits(in: .vertical) {
+                stack(rows: rows, strip: true, tomorrow: true)
+                stack(rows: rows, strip: true, tomorrow: false)
+                stack(rows: rows, strip: false, tomorrow: true)
+                stack(rows: rows, strip: false, tomorrow: false)
+            }
+        }
+    }
+
+    private func stack(rows: Int, strip: Bool, tomorrow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             TodayCard(entry: entry)
-            TomorrowLine(entry: entry)
-            SchoolSection(entry: entry)
+            if strip { WeekStrip(entry: entry) }
+            if tomorrow { TomorrowLine(entry: entry) }
+            SchoolSection(entry: entry, maxRows: rows)
             Spacer(minLength: 0)
             TileGrid(entry: entry)
             VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
         }
+    }
+}
+
+/// 未來 7 日更份色條：星期、日期、更類標籤，顏色跟 tml-roster 更類。
+struct WeekStrip: View {
+    let entry: OverviewEntry
+
+    var body: some View {
+        let today = entry.serviceToday
+        HStack(spacing: 3) {
+            ForEach(0..<7, id: \.self) { offset in
+                cell(Days.add(today, offset), isToday: offset == 0)
+            }
+        }
+    }
+
+    private func cell(_ date: String?, isToday: Bool) -> some View {
+        let day = date.flatMap { entry.schedule.duty(on: $0) }
+        let parts = (date ?? "").split(separator: "-").compactMap { Int($0) }
+        let weekday = date.flatMap { Days.weekdayIndex($0) }.map { weekdayNames[$0] } ?? "—"
+        let dayNumber = parts.count == 3 ? "\(parts[2])" : ""
+        return VStack(spacing: 2) {
+            Text("\(weekday)\(dayNumber)")
+                .font(.system(size: 9))
+                .foregroundStyle(isToday ? .primary : .secondary)
+                .lineLimit(1)
+            Text(day?.shortLabel ?? "—")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 15)
+                .background((day?.tint ?? .gray).opacity(day?.kind == .duty ? 0.9 : 0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .widgetAccentable()
+                .overlay {
+                    if isToday {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.primary, lineWidth: 1.5)
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -217,6 +270,7 @@ struct TomorrowLine: View {
 /// 學校：循環周 + 今日、明日活動（最多 3 行）。
 struct SchoolSection: View {
     let entry: OverviewEntry
+    var maxRows = 3
 
     private struct Row {
         var prefix: String
@@ -249,7 +303,7 @@ struct SchoolSection: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            ForEach(Array(rows.prefix(3).enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.prefix(maxRows).enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 5) {
                     Text(row.prefix).foregroundStyle(row.prefix == "今" ? .teal : .secondary)
                     Text(row.time).foregroundStyle(.secondary).monospacedDigit()
@@ -258,8 +312,8 @@ struct SchoolSection: View {
                 }
                 .font(.system(size: 11))
             }
-            if rows.count > 3 {
-                Text("另有 \(rows.count - 3) 項").font(.system(size: 10)).foregroundStyle(.secondary)
+            if rows.count > maxRows {
+                Text("另有 \(rows.count - maxRows) 項").font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 4)
