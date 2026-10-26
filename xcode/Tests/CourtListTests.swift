@@ -60,8 +60,9 @@ final class CourtListTests: XCTestCase {
             CourtCase(room: "C", judge: "", minutes: nil, caseNo: "3"),
         ])
         XCTAssertEqual(day.upcoming(afterMinute: nil).map(\.caseNo), ["1", "2", "3"])
-        XCTAssertEqual(day.upcoming(afterMinute: 600).map(\.caseNo), ["2"])
-        XCTAssertEqual(day.upcoming(afterMinute: 550).map(\.caseNo), ["1", "2"])
+        XCTAssertEqual(day.upcoming(afterMinute: 600).map(\.caseNo), ["2", "3"])
+        XCTAssertEqual(day.upcoming(afterMinute: 570).map(\.caseNo), ["2", "3"])
+        XCTAssertEqual(day.upcoming(afterMinute: 560).map(\.caseNo), ["1", "2", "3"])
     }
 
     func testURL() {

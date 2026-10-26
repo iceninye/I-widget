@@ -91,12 +91,16 @@ enum CourtList {
             guard !cells.isEmpty else { continue }
 
             if cells.contains(where: { $0.contains("案件編號") || $0.lowercased().contains("case no") }) {
-                columns = [:]
+                var found: [Column: Int] = [:]
                 for (index, text) in cells.enumerated() {
-                    if let column = column(for: text), columns[column] == nil { columns[column] = index }
+                    if let column = column(for: text), found[column] == nil { found[column] = index }
                 }
-                headerCount = cells.count
-                room = ""; judge = ""; minutes = nil
+                // 英文標題行（Case No. 等）認唔到幾多欄，唔好當成新表頭
+                if found.count >= 2 {
+                    columns = found
+                    headerCount = cells.count
+                    room = ""; judge = ""; minutes = nil
+                }
                 continue
             }
             guard columns[.caseNo] != nil else { continue }
