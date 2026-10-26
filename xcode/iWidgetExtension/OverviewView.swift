@@ -419,7 +419,7 @@ struct InfoSection: View {
                         Image(systemName: "tram.fill")
                             .foregroundStyle(train.state == .normal ? Color.green : .orange)
                             .widgetAccentable()
-                        Text("屯馬綫 \(Self.trainText(train.state))")
+                        Text("屯馬綫 \(train.state.text)")
                             .fontWeight(.semibold)
                             .foregroundStyle(train.state == .normal ? Color.primary : .orange)
                     }
@@ -430,14 +430,6 @@ struct InfoSection: View {
                 .minimumScaleFactor(0.7)
             }
             .padding(.horizontal, 4)
-        }
-    }
-
-    static func trainText(_ state: TrainState) -> String {
-        switch state {
-        case .normal: return "正常"
-        case .delayed: return "延誤"
-        case .special: return "特別安排"
         }
     }
 }
