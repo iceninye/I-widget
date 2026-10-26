@@ -1,49 +1,106 @@
 import SwiftUI
 import WidgetKit
 
-struct OverviewView: View {
+/// 今日咭 widget：今日咭、七日條、本週概況、明日、學校日程。
+struct TodayWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
 
     var body: some View {
         switch family {
         case .accessoryInline: InlineView(entry: entry)
-        case .accessoryCircular: CircularView(entry: entry)
         case .accessoryRectangular: RectangularView(entry: entry)
-        default: LargeOverview(entry: entry)
+        default: TodayLayout(entry: entry)
         }
     }
 }
 
-// MARK: - 主畫面（大）
-
-struct LargeOverview: View {
+/// 各項 info widget：天氣警告、屯馬綫、資料格、VPS。
+struct InfoWidgetView: View {
+    @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
 
-    /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起明日一行，再收 7 日色條。
+    var body: some View {
+        switch family {
+        case .accessoryCircular: CircularView(entry: entry)
+        default: InfoLayout(entry: entry)
+        }
+    }
+}
+
+// MARK: - 主畫面
+
+struct TodayLayout: View {
+    let entry: OverviewEntry
+
+    /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起學校，再收明日、本週概況、7 日色條。
     var body: some View {
         GeometryReader { geometry in
             let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
             ViewThatFits(in: .vertical) {
-                stack(rows: rows, strip: true, tomorrow: true, extras: true)
-                stack(rows: rows, strip: true, tomorrow: true, extras: false)
-                stack(rows: rows, strip: true, tomorrow: false, extras: false)
-                stack(rows: rows, strip: false, tomorrow: true, extras: false)
-                stack(rows: rows, strip: false, tomorrow: false, extras: false)
+                stack(rows: rows, strip: true, week: true, tomorrow: true, school: true)
+                stack(rows: rows, strip: true, week: true, tomorrow: true, school: false)
+                stack(rows: rows, strip: true, week: true, tomorrow: false, school: false)
+                stack(rows: rows, strip: true, week: false, tomorrow: false, school: false)
+                stack(rows: rows, strip: false, week: false, tomorrow: false, school: false)
             }
         }
     }
 
-    private func stack(rows: Int, strip: Bool, tomorrow: Bool, extras: Bool) -> some View {
+    private func stack(rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             TodayCard(entry: entry)
             if strip { WeekStrip(entry: entry) }
+            if week { WeekLine(entry: entry) }
             if tomorrow { TomorrowLine(entry: entry) }
-            SchoolSection(entry: entry, maxRows: rows)
+            if school { SchoolSection(entry: entry, maxRows: rows) }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+struct InfoLayout: View {
+    let entry: OverviewEntry
+
+    /// 位唔夠就先收起最底一行資料格（紫外線、空氣、匯率）。
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            stack(extras: true)
+            stack(extras: false)
+        }
+    }
+
+    private func stack(extras: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 5) {
+                Image(systemName: "square.grid.2x2.fill").foregroundStyle(.secondary).widgetAccentable()
+                Text("資訊").fontWeight(.semibold)
+                Spacer(minLength: 2)
+                ThemeButton()
+                RefreshButton(updatedAt: entry.updatedAt)
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 4)
             InfoSection(entry: entry)
             Spacer(minLength: 0)
             TileGrid(entry: entry, extras: extras)
             VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
+        }
+    }
+}
+
+/// 本週概況一行（跟 tml-roster「本週概況」）。
+struct WeekLine: View {
+    let entry: OverviewEntry
+
+    var body: some View {
+        if let week = entry.weekSummary {
+            Text("本週 \(week.text)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 4)
         }
     }
 }
@@ -336,15 +393,14 @@ struct SchoolSection: View {
     }
 }
 
-/// 警告、屯馬綫狀況、本週概況：有事先顯眼，冇事就一行細字。
+/// 警告、屯馬綫狀況：有事先顯眼。
 struct InfoSection: View {
     let entry: OverviewEntry
 
     var body: some View {
         let warnings = entry.info.warnings ?? []
         let train = entry.info.train
-        let week = entry.weekSummary
-        if !warnings.isEmpty || train != nil || week != nil {
+        if !warnings.isEmpty || train != nil {
             VStack(alignment: .leading, spacing: 4) {
                 if !warnings.isEmpty {
                     HStack(spacing: 5) {
@@ -363,28 +419,17 @@ struct InfoSection: View {
                         Image(systemName: "tram.fill")
                             .foregroundStyle(train.state == .normal ? Color.green : .orange)
                             .widgetAccentable()
-                        Text("屯馬綫 \(Self.trainText(train.state))")
+                        Text("屯馬綫 \(train.state.text)")
                             .fontWeight(.semibold)
                             .foregroundStyle(train.state == .normal ? Color.primary : .orange)
                     }
                     Spacer(minLength: 0)
-                    if let week {
-                        Text("本週 \(week.text)").foregroundStyle(.secondary)
-                    }
                 }
                 .font(.system(size: 11))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             }
             .padding(.horizontal, 4)
-        }
-    }
-
-    static func trainText(_ state: TrainState) -> String {
-        switch state {
-        case .normal: return "正常"
-        case .delayed: return "延誤"
-        case .special: return "特別安排"
         }
     }
 }

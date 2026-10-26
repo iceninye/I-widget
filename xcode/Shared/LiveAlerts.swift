@@ -40,6 +40,14 @@ enum HKOWarnings {
 
 enum TrainState: String, Codable {
     case normal, delayed, special
+
+    var text: String {
+        switch self {
+        case .normal: return "正常"
+        case .delayed: return "延誤"
+        case .special: return "特別安排"
+        }
+    }
 }
 
 struct TrainStatus: Codable, Equatable {
