@@ -124,7 +124,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
 
 /// iOS 27 嘅 iPhone 特大 widget（4×6）係 `.systemExtraLargePortrait`，要 Xcode 27（Swift 6.4）先有呢個 case；
 /// 舊版 Xcode（例如 CI 嘅 26.x）會跳過，其餘尺寸照常。
-private func withExtraLargePortrait(_ families: [WidgetFamily]) -> [WidgetFamily] {
+func withExtraLargePortrait(_ families: [WidgetFamily]) -> [WidgetFamily] {
     var list = families
     #if compiler(>=6.4)
     if #available(iOS 27.0, *) {

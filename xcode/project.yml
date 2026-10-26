@@ -82,6 +82,8 @@ targets:
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift
+      - path: Shared/CourtList.swift
+      - path: Shared/DataCache.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests
