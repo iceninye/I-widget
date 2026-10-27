@@ -49,7 +49,7 @@ final class CourtListTests: XCTestCase {
         let html = rows([
             ["時間", "申索编號", "申索人", "被申索人"],
             ["第 2 庭 Court No.2"],
-            ["審裁官 Presiding Officer : 王小明 審裁官"],
+            ["審裁官 Presiding Officer :", "王小明 審裁官"],
             ["9:30 am", "LBTC 100/2026", "甲", "乙"],
             ["10:00 am", "LBTC 101/2026", "丙", "丁"],
         ])
