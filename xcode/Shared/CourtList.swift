@@ -78,8 +78,15 @@ enum CourtList {
 
     private enum Column { case court, judge, time, caseNo }
 
-    /// 解析 view.jsp 嘅 HTML（Word 匯出嘅表格）。按欄位標題對位，唔靠固定欄序；
-    /// 法庭、法官、時間留空（合併儲存格）就沿用上一行。
+    private typealias Fields = (room: String?, judge: String?, time: String?, caseNo: String?)
+
+    /// 解析 view.jsp 嘅 HTML（Word 匯出嘅表格）。
+    ///
+    /// 已用真實頁面（DC、HCMC、LANDS、CACFI、FMC、LT、SMT、CRC、MCL 同七個裁判法院）驗證過嘅規則：
+    /// - 欄位按標題對位（表頭可以喺較早嘅 table）；格數齊全嘅行按欄讀。
+    /// - 有合併（缺格）嘅行按內容認：時間、案件編號、法庭、法官，其餘格唔使理。
+    /// - 法庭／法官／時間留空就沿用上一行；LT、SMT、MCL、裁判法院嘅法庭同法官喺橫幅行。
+    /// - 冇案件編號嘅行（批量傳票、「見附頁」）唔算聆訊，但時間照樣沿用。
     static func parse(_ html: String) -> [CourtCase] {
         var columns: [Column: Int] = [:]
         var headerCount = 0
@@ -87,46 +94,160 @@ enum CourtList {
         var room = "", judge = "", minutes: Int?
 
         for row in matches(rowPattern, in: html) {
-            let cells = matches(cellPattern, in: row).map(cleanText)
+            let raw = matches(cellPattern, in: row).map(cleanText)
+            let cells = raw.filter { !$0.isEmpty }
             guard !cells.isEmpty else { continue }
 
-            if cells.contains(where: { $0.contains("案件編號") || $0.lowercased().contains("case no") }) {
+            if cells.contains(where: isCaseHeader) {
                 var found: [Column: Int] = [:]
-                for (index, text) in cells.enumerated() {
+                for (index, text) in raw.enumerated() {
                     if let column = column(for: text), found[column] == nil { found[column] = index }
                 }
-                // 英文標題行（Case No. 等）認唔到幾多欄，唔好當成新表頭
+                // 英文標題行、裁判法院嘅單格標題認唔到幾多欄，唔好當成新表頭
                 if found.count >= 2 {
                     columns = found
-                    headerCount = cells.count
+                    headerCount = raw.count
                     room = ""; judge = ""; minutes = nil
                 }
                 continue
             }
-            guard columns[.caseNo] != nil else { continue }
 
-            // 前面嘅格因為 rowspan 冇出現時，由右對齊
-            let offset = max(headerCount - cells.count, 0)
-            func cell(_ column: Column) -> String? {
-                guard let index = columns[column], index - offset >= 0, index - offset < cells.count else { return nil }
-                return cells[index - offset]
+            let hasTime = cells.contains(where: isTimeCell)
+            let hasCase = cells.contains(where: isCaseCell)
+            if !hasTime && !hasCase {
+                if cells.count <= 3 { applyBanner(cells, room: &room, judge: &judge, minutes: &minutes) }
+                continue
             }
-            guard let caseNo = cell(.caseNo), caseNo.contains(where: \.isNumber) else { continue }
-            if let value = cell(.court), !value.isEmpty { room = value }
-            if let value = cell(.judge), !value.isEmpty { judge = value }
-            if let value = cell(.time), !value.isEmpty { minutes = parseTime(value) ?? minutes }
-            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: caseNo))
+
+            let fields: Fields
+            var positional = false
+            if columns[.caseNo] != nil, raw.count == headerCount {
+                func at(_ column: Column) -> String? {
+                    guard let index = columns[column], index < raw.count, !raw[index].isEmpty else { return nil }
+                    return raw[index]
+                }
+                fields = (at(.court), at(.judge), at(.time), at(.caseNo))
+                positional = true
+            } else {
+                fields = classify(cells, expectRoom: columns[.court] != nil, expectJudge: columns[.judge] != nil)
+            }
+
+            if let value = fields.room {
+                let text = roomText(value)
+                if text != room { minutes = nil }
+                room = text
+            }
+            if let value = fields.judge { judge = chinesePart(value) }
+            if let value = fields.time, let parsed = parseTime(value) { minutes = parsed }
+            guard let caseNo = fields.caseNo, !positional || caseNo.contains(where: \.isNumber) else { continue }
+            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo)))
         }
         return cases
     }
 
+    /// 格數唔齊（合併儲存格）嘅行：按內容認出時間、案件編號，必要時法庭同法官。
+    private static func classify(_ cells: [String], expectRoom: Bool, expectJudge: Bool) -> Fields {
+        var result: Fields = (nil, nil, nil, nil)
+        for cell in cells {
+            if result.time == nil, isTimeCell(cell) {
+                result.time = cell
+            } else if result.caseNo == nil, isCaseCell(cell) {
+                result.caseNo = cell
+            } else if expectRoom, result.room == nil, isRoomCell(cell) {
+                result.room = cell
+            } else if expectJudge, result.judge == nil, isJudgeCell(cell) {
+                result.judge = cell
+            }
+        }
+        return result
+    }
+
+    /// 橫幅行（≤3 格、冇時間冇案件編號）：`法庭 : 第42庭`、`第 1庭（1樓）`、`裁判官 Magistrate : | 某某裁判官`。
+    private static func applyBanner(_ cells: [String], room: inout String, judge: inout String, minutes: inout Int?) {
+        for cell in cells {
+            if cell.hasSuffix(":") || cell.hasSuffix("：") { continue }  // 標籤格，值喺下一格
+            if let value = labelled(cell, "法庭") {
+                room = roomText(value); minutes = nil
+            } else if let value = labelled(cell, "聆案官") ?? labelled(cell, "裁判官") {
+                judge = chinesePart(value)
+            } else if isRoomCell(cell) {
+                room = roomText(cell); minutes = nil
+            } else if isJudgeCell(cell) {
+                judge = chinesePart(cell)
+            }
+        }
+    }
+
+    /// `法庭 : 第42庭 (2字樓)` → `第42庭 (2字樓)`；冇冒號或冒號後面係空就 `nil`。
+    private static func labelled(_ cell: String, _ label: String) -> String? {
+        guard cell.hasPrefix(label), let colon = cell.firstIndex(where: { $0 == ":" || $0 == "：" }) else { return nil }
+        let value = cell[cell.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? nil : value
+    }
+
+    private static func isCaseHeader(_ text: String) -> Bool {
+        if ["案件編號", "案件號碼", "申索編號", "申索编號"].contains(where: text.contains) { return true }
+        let lower = text.lowercased()
+        return lower.contains("case no") || lower.contains("claim no")
+    }
+
     private static func column(for text: String) -> Column? {
-        if text.contains("案件編號") || text.lowercased().contains("case no") { return .caseNo }
+        if isCaseHeader(text) { return .caseNo }
         if text.contains("時間") { return .time }
         if ["法官", "聆案官", "裁判官", "審裁", "驗屍官", "司法"].contains(where: text.contains) { return .judge }
         if text.contains("法庭") || text.contains("法院") { return .court }
         return nil
     }
+
+    private static func isTimeCell(_ text: String) -> Bool {
+        text.count < 80 && firstMatch(timeCellPattern, in: text) != nil
+    }
+
+    private static func isCaseCell(_ text: String) -> Bool {
+        text.count < 80 && firstMatch(caseNoPattern, in: text) != nil
+    }
+
+    private static func isRoomCell(_ text: String) -> Bool {
+        firstMatch(roomPattern, in: text) != nil
+    }
+
+    private static func isJudgeCell(_ text: String) -> Bool {
+        guard text.count < 120, !text.hasPrefix("日期"), !text.contains("案件表") else { return false }
+        return ["法官", "聆案官", "審裁官", "裁判官", "審裁處成員"].contains(where: text.contains)
+    }
+
+    private static func roomText(_ text: String) -> String {
+        chinesePart(text)
+    }
+
+    /// 雙語儲存格只留中文部分：`第 5 庭 2 字樓 Court No.5 (2/F)` → `第 5 庭 2 字樓`。
+    static func chinesePart(_ text: String) -> String {
+        guard let range = text.range(of: "\\s(?:\\d+\\s+[A-Za-z]|\\d+(?:st|nd|rd|th)\\b|[A-Za-z])", options: .regularExpression) else { return text }
+        let cut = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+        return cut.isEmpty ? text : cut
+    }
+
+    /// 案件編號格有時夾住備註（死因庭：`CCDI-269/2022(MC) [5/7]# 沒有陪審員…`），只留案號；合併案件（多個案號）唔拆。
+    static func trimCaseNo(_ text: String) -> String {
+        guard let match = caseTrailPattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let rest = Range(match.range(at: 2), in: text), let head = Range(match.range(at: 1), in: text),
+              firstMatch(caseNoPattern, in: String(text[rest])) == nil else { return text }
+        return String(text[head])
+    }
+
+    private static func firstMatch(_ regex: NSRegularExpression, in text: String) -> NSTextCheckingResult? {
+        regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+    }
+
+    private static let timeCellPattern = try! NSRegularExpression(
+        pattern: "^(?:不早於)?(?:上午|下午)?\\s*(?:Not before\\s*)?(?:\\d{1,2}\\s*[:：]\\s*\\d{2}|\\d{1,2}\\s*時)",
+        options: .caseInsensitive
+    )
+    private static let caseNoPattern = try! NSRegularExpression(pattern: "[A-Z]{2,}[\\s-]*\\d+/\\d{4}")
+    private static let roomPattern = try! NSRegularExpression(pattern: "^第\\s*\\d+\\s*(?:法)?庭")
+    private static let caseTrailPattern = try! NSRegularExpression(
+        pattern: "^(.*?[A-Z]{2,}[\\s-]*\\d+/\\d{4}(?:\\([A-Z]+\\))?(?:\\s*\\[\\d+/\\d+(?:\\+\\d+)?\\]#*)?)\\s+(\\S.*)$"
+    )
 
     private static let rowPattern = try! NSRegularExpression(pattern: "<tr[\\s>].*?</tr>", options: [.caseInsensitive, .dotMatchesLineSeparators])
     private static let cellPattern = try! NSRegularExpression(pattern: "<t[dh][\\s>].*?</t[dh]>", options: [.caseInsensitive, .dotMatchesLineSeparators])

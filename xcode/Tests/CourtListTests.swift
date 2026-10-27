@@ -21,6 +21,57 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(cases[2].room, "第 5 庭")
     }
 
+    private func rows(_ rows: [[String]]) -> String {
+        "<table>" + rows.map { "<tr>" + $0.map { "<td><p>\($0)</p></td>" }.joined() + "</tr>" }.joined() + "</table>"
+    }
+
+    func testParseMagistrateBannersAndBatchRows() {
+        let html = rows([
+            ["法庭 Court :", "第 1 庭 Court No.1"],
+            ["裁判官 Magistrate :", "陳大文 裁判官"],
+            ["9:30 am", "TWS 1/2026", "某被告", "襲警", "答辯"],
+            ["", "TWS 2/2026", "另一被告", "盜竊", "訊問"],
+            ["", "傳票", "交通部", "12 件案件 Case(s)"],
+            ["法庭 Court :", "第 2 庭 Court No.2"],
+            ["10:00 am", "KCCC 5/2026", "被告", "傷人", "審訊"],
+        ])
+        let cases = CourtList.parse(html)
+        XCTAssertEqual(cases.map(\.caseNo), ["TWS 1/2026", "TWS 2/2026", "KCCC 5/2026"])
+        XCTAssertEqual(cases[0].room, "第 1 庭")
+        XCTAssertEqual(cases[0].judge, "陳大文 裁判官")
+        // 時間只喺同一組第一行出現，後續行沿用；換庭後重新計
+        XCTAssertEqual(cases[1].minutes, 570)
+        XCTAssertEqual(cases[2].room, "第 2 庭")
+        XCTAssertEqual(cases[2].minutes, 600)
+    }
+
+    func testParseLabourTribunalHeaderCaseNumber() {
+        let html = rows([
+            ["時間", "申索编號", "申索人", "被申索人"],
+            ["第 2 庭 Court No.2"],
+            ["審裁官 Presiding Officer : 王小明 審裁官"],
+            ["9:30 am", "LBTC 100/2026", "甲", "乙"],
+            ["10:00 am", "LBTC 101/2026", "丙", "丁"],
+        ])
+        let cases = CourtList.parse(html)
+        XCTAssertEqual(cases.count, 2)
+        XCTAssertEqual(cases[1].caseNo, "LBTC 101/2026")
+        XCTAssertEqual(cases[1].room, "第 2 庭")
+        XCTAssertEqual(cases[1].judge, "王小明 審裁官")
+        XCTAssertEqual(cases[1].minutes, 600)
+    }
+
+    func testTrimCaseNoDropsTrailingNoteButKeepsMergedCases() {
+        XCTAssertEqual(CourtList.trimCaseNo("CCDI-269/2022(MC) [5/7]# 沒有陪審員"), "CCDI-269/2022(MC) [5/7]#")
+        XCTAssertEqual(CourtList.trimCaseNo("DCCJ 1/2026"), "DCCJ 1/2026")
+        XCTAssertEqual(CourtList.trimCaseNo("DCCJ 1/2026 DCCJ 2/2026"), "DCCJ 1/2026 DCCJ 2/2026")
+    }
+
+    func testChinesePartCutsEnglishTail() {
+        XCTAssertEqual(CourtList.chinesePart("第 5 庭 2 字樓 Court No.5 (2/F)"), "第 5 庭 2 字樓")
+        XCTAssertEqual(CourtList.chinesePart("第 5 庭"), "第 5 庭")
+    }
+
     func testParseWithoutTableIsEmpty() {
         XCTAssertEqual(CourtList.parse("<html>找不到案件表</html>"), [])
     }
