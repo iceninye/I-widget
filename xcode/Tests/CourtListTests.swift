@@ -120,4 +120,32 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(CourtList.url(code: "CFA", dateCode: "26102026")?.absoluteString,
                        "https://e-services.judiciary.hk/dcl/view.jsp?lang=tc&date=26102026&court=CFA")
     }
+
+    func testListDateSkipsPublicHolidays() {
+        let calendar = ICalendar.hongKong
+        let monday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 26, hour: 9))!
+        // 星期一同星期二都係假期 → 星期三
+        let holidays: Set<String> = ["20261026", "20261027"]
+        XCTAssertEqual(CourtList.dateCode(CourtList.listDate(now: monday, holidays: holidays)), "28102026")
+    }
+
+    func testPublicHolidaysParse() {
+        let json = #"{"vcalendar":[{"vevent":[{"dtstart":["20261225",{"value":"DATE"}],"summary":"聖誕節"},{"dtstart":["20261226",{"value":"DATE"}]},{"summary":"x"}]}]}"#
+        XCTAssertEqual(PublicHolidays.parse(Data(json.utf8)), ["20261225", "20261226"])
+        XCTAssertEqual(PublicHolidays.parse(Data("oops".utf8)), [])
+    }
+
+    func testJudgeCellIgnoresRemarks() {
+        let html = """
+        <table><tr><td>法庭</td><td>時間</td><td>案件編號</td><td>備註</td></tr>
+        <tr><td>第1庭</td><td>9:30</td><td>DCCC 1/2026</td><td>案件由法官另行處理，押後至下星期</td></tr></table>
+        """
+        XCTAssertEqual(CourtList.parse(html).first?.judge, "")
+    }
+
+    func testDecodeFallsBackToBig5() {
+        XCTAssertEqual(CourtList.decode(Data("法庭".utf8)), "法庭")
+        let big5 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5_HKSCS_1999.rawValue)))
+        XCTAssertEqual(CourtList.decode("法庭".data(using: big5)!), "法庭")
+    }
 }

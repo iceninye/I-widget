@@ -65,7 +65,7 @@ struct CourtProvider: AppIntentTimelineProvider {
     func snapshot(for configuration: CourtConfigIntent, in context: Context) async -> CourtEntry {
         if context.isPreview { return .sample }
         let now = Date()
-        let day = CourtList.listDate(now: now)
+        let day = CourtList.listDate(now: now, holidays: PublicHolidays.cached())
         return CourtEntry(
             date: now, days: codes(configuration).map { CourtList.cached(code: $0, day: day) },
             listDate: day, updatedAt: now, theme: WidgetTheme.load()
@@ -74,7 +74,8 @@ struct CourtProvider: AppIntentTimelineProvider {
 
     func timeline(for configuration: CourtConfigIntent, in context: Context) async -> Timeline<CourtEntry> {
         let now = Date()
-        let day = CourtList.listDate(now: now)
+        let holidays = await withDeadline(12, fallback: PublicHolidays.cached()) { await PublicHolidays.load(now: now) }
+        let day = CourtList.listDate(now: now, holidays: holidays)
         let codes = codes(configuration)
         let cached = codes.map { CourtList.cached(code: $0, day: day) }
         let days = await withDeadline(20, fallback: cached) { await CourtList.loadAll(codes: codes, day: day, now: now) }
