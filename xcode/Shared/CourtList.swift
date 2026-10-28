@@ -213,7 +213,10 @@ enum CourtList {
 
     private static func isJudgeCell(_ text: String) -> Bool {
         guard text.count < 120, !text.hasPrefix("日期"), !text.contains("案件表") else { return false }
-        return ["法官", "聆案官", "審裁官", "裁判官", "審裁處成員"].contains(where: text.contains)
+        // 備註格都可能提到「法官」：只認短嘅中文部分，而且唔含句子標點
+        let zh = chinesePart(text)
+        guard zh.count <= 40, !zh.contains(where: { "，。；、".contains($0) }) else { return false }
+        return ["法官", "聆案官", "審裁官", "裁判官", "審裁處成員"].contains(where: zh.contains)
     }
 
     private static func roomText(_ text: String) -> String {
@@ -320,12 +323,13 @@ enum CourtList {
 
     // MARK: 日期
 
-    /// 要睇邊日嘅案件表：18:30 後（案件表大約嗰陣公布下一個工作天）轉去下一個工作天；週末睇星期一。
-    static func listDate(now: Date, calendar: Calendar = ICalendar.hongKong) -> Date {
+    /// 要睇邊日嘅案件表：18:30 後（案件表大約嗰陣公布下一個工作天）轉去下一個工作天；週末同公眾假期（`holidays`，`yyyyMMdd`）跳過。
+    static func listDate(now: Date, holidays: Set<String> = [], calendar: Calendar = ICalendar.hongKong) -> Date {
         var day = calendar.startOfDay(for: now)
         let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
         if minute >= 18 * 60 + 30 { day = calendar.date(byAdding: .day, value: 1, to: day) ?? day }
-        while [1, 7].contains(calendar.component(.weekday, from: day)) {
+        // 最多跳 30 日，免得假期資料有問題時死循環
+        for _ in 0..<30 where [1, 7].contains(calendar.component(.weekday, from: day)) || holidays.contains(PublicHolidays.key(day, calendar: calendar)) {
             day = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         }
         return day
@@ -370,7 +374,14 @@ enum CourtList {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count < 4_000_000 else {
             throw URLError(.badServerResponse)
         }
-        return String(decoding: data, as: UTF8.self)
+        return decode(data)
+    }
+
+    /// 優先 UTF-8；網站如果改用 Big5-HKSCS 就轉碼，最後先用寬鬆 UTF-8。
+    static func decode(_ data: Data) -> String {
+        if let text = String(data: data, encoding: .utf8) { return text }
+        let big5 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5_HKSCS_1999.rawValue)))
+        return String(data: data, encoding: big5) ?? String(decoding: data, as: UTF8.self)
     }
 
     private static func cacheKey(_ code: String, _ dateCode: String) -> String { "court.\(code).\(dateCode)" }
@@ -379,14 +390,19 @@ enum CourtList {
     static func load(code: String, day: Date, now: Date) async -> CourtDay {
         let dateCode = dateCode(day)
         let key = cacheKey(code, dateCode)
-        if let fresh = DataCache.fresh(CourtDay.self, key: key, maxAge: 10 * 60, now: now) { return fresh }
+        let cached = DataCache.load(CourtDay.self, key: key)
+        // 空結果（未公布或解析唔到）只信 3 分鐘，之後會再試
+        let maxAge: TimeInterval = (cached?.total ?? 0) == 0 ? 3 * 60 : 10 * 60
+        if let fresh = DataCache.fresh(CourtDay.self, key: key, maxAge: maxAge, now: now) { return fresh }
         if let url = url(code: code, dateCode: dateCode), let html = try? await fetch(url) {
             let cases = parse(html)
             let result = CourtDay(code: code, dateCode: dateCode, total: cases.count, cases: Array(cases.prefix(300)))
+            // 今次空但之前有資料：保留舊嘅，唔好蓋走
+            if cases.isEmpty, let cached, cached.total > 0 { return cached }
             DataCache.save(result, key: key, stamped: now)
             return result
         }
-        return DataCache.load(CourtDay.self, key: key) ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+        return cached ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
     }
 
     static func cached(code: String, day: Date) -> CourtDay {
@@ -394,13 +410,22 @@ enum CourtList {
         return DataCache.load(CourtDay.self, key: cacheKey(code, dateCode)) ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
     }
 
-    static func loadAll(codes: [String], day: Date, now: Date) async -> [CourtDay] {
+    /// 同時最多 `limit` 個請求，對網站同電量都友善啲。
+    static func loadAll(codes: [String], day: Date, now: Date, limit: Int = 3) async -> [CourtDay] {
         await withTaskGroup(of: (Int, CourtDay).self) { group in
-            for (index, code) in codes.enumerated() {
+            var results: [(Int, CourtDay)] = []
+            var next = 0
+            func addNext() {
+                guard next < codes.count else { return }
+                let (index, code) = (next, codes[next])
+                next += 1
                 group.addTask { (index, await load(code: code, day: day, now: now)) }
             }
-            var results: [(Int, CourtDay)] = []
-            for await item in group { results.append(item) }
+            for _ in 0..<min(limit, codes.count) { addNext() }
+            for await item in group {
+                results.append(item)
+                addNext()
+            }
             return results.sorted { $0.0 < $1.0 }.map(\.1)
         }
     }
