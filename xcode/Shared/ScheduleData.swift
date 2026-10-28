@@ -38,7 +38,7 @@ struct ScheduleData {
         )
     }
 
-    static func load(token: String?, now: Date) async -> ScheduleData {
+    static func load(token: String?, now: Date, includeSchool: Bool = true) async -> ScheduleData {
         async let roster = withDeadline(12, fallback: (DataCache.load(Roster.self, key: "roster"), true)) {
             await loadRoster(token: token)
         }
@@ -51,7 +51,7 @@ struct ScheduleData {
         async let places = withDeadline(10, fallback: DataCache.load(PlaceNames.self, key: "places") ?? .empty) {
             await loadPlaces(now: now)
         }
-        async let school = loadSchool(now: now)
+        async let school = includeSchool ? loadSchool(now: now) : (events: [], failed: [])
 
         let (rosterResult, sheetList) = await (roster, sheets)
         let cards = await withDeadline(8, fallback: DataCache.load([String: DutyCard].self, key: "dutyCards") ?? [:]) {
@@ -149,6 +149,20 @@ struct ScheduleData {
     }
 
     // MARK: 學校日曆
+
+    static func cachedSchool() -> ScheduleData {
+        var schedule = ScheduleData.empty
+        schedule.events = SchoolCalendars.sources.flatMap { DataCache.load([CalendarEvent].self, key: schoolKey($0)) ?? [] }
+        return schedule
+    }
+
+    static func schoolOnly(now: Date) async -> ScheduleData {
+        let school = await loadSchool(now: now)
+        var schedule = ScheduleData.empty
+        schedule.events = school.events
+        schedule.schoolFailed = school.failed
+        return schedule
+    }
 
     private static func schoolKey(_ source: SchoolCalendars.Source) -> String { "school.\(source.name)" }
 

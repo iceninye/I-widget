@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// 天文台現正生效嘅警告。
 struct WeatherWarning: Codable, Equatable {
@@ -79,51 +82,107 @@ enum MTRStatus {
 }
 
 struct AirQuality: Codable, Equatable {
-    var aqi: Int
-    var pm25: Double?
+    var index: String
+    var level: String
+    var station: String
+    /// EPD RSS item publication time; no finer observation timestamp is supplied.
+    var observedAt: Date?
     var fetchedAt: Date
 
-    static let sample = AirQuality(aqi: 42, pm25: 11, fetchedAt: Date())
+    var isPoor: Bool { index == "10+" || (Int(index) ?? 0) >= 7 }
 
-    /// US AQI 分級。
-    var level: String {
-        switch aqi {
-        case ..<51: return "良好"
-        case ..<101: return "一般"
-        case ..<151: return "敏感族群不宜"
-        case ..<201: return "不健康"
-        case ..<301: return "非常不健康"
-        default: return "危險"
-        }
+    func isStale(at now: Date) -> Bool {
+        guard let observedAt else { return true }
+        return observedAt > now || now.timeIntervalSince(observedAt) >= 90 * 60
     }
 
-    var isPoor: Bool { aqi > 100 }
+    static let sample = AirQuality(index: "4", level: "中", station: "中西區（一般監測站）", observedAt: Date(), fetchedAt: Date())
 }
 
-/// Open-Meteo 空氣質素：免費、免 key，跟位置。
-enum OpenMeteoAir {
-    static func url(latitude: Double, longitude: Double) -> URL? {
-        var components = URLComponents(string: "https://air-quality-api.open-meteo.com/v1/air-quality")
-        components?.queryItems = [
-            URLQueryItem(name: "latitude", value: String(format: "%.3f", latitude)),
-            URLQueryItem(name: "longitude", value: String(format: "%.3f", longitude)),
-            URLQueryItem(name: "current", value: "us_aqi,pm2_5"),
-        ]
-        return components?.url
-    }
+enum EPDAQHI {
+    static let url = URL(string: "https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_ind_rss_ChT.xml")!
+    static let station = "中西區"
+    static let cacheKey = "epd.aqhi.central-western.general.v1"
 
-    private struct Response: Decodable {
-        struct Current: Decodable {
-            let us_aqi: Double?
-            let pm2_5: Double?
+    static func riskLevel(_ index: String) -> String? {
+        switch index {
+        case "1", "2", "3": return "低"
+        case "4", "5", "6": return "中"
+        case "7": return "高"
+        case "8", "9", "10": return "甚高"
+        case "10+": return "嚴重"
+        default: return nil
         }
-        let current: Current?
     }
 
-    static func parse(_ data: Data, now: Date = Date()) throws -> AirQuality {
-        let response = try JSONDecoder().decode(Response.self, from: data)
-        guard let aqi = response.current?.us_aqi else { throw URLError(.cannotParseResponse) }
-        return AirQuality(aqi: Int(aqi.rounded()), pm25: response.current?.pm2_5, fetchedAt: now)
+    static func parse(_ data: Data, station: String = station, now: Date = Date()) throws -> AirQuality {
+        guard data.count <= 1_000_000,
+              let xml = String(data: data, encoding: .utf8),
+              !xml.localizedCaseInsensitiveContains("<!DOCTYPE"),
+              !xml.localizedCaseInsensitiveContains("<!ENTITY") else { throw URLError(.cannotParseResponse) }
+        let reader = RSSReader()
+        let parser = XMLParser(data: data)
+        parser.shouldResolveExternalEntities = false
+        parser.delegate = reader
+        guard parser.parse(), reader.isRSS else { throw URLError(.cannotParseResponse) }
+        let pattern = "^" + NSRegularExpression.escapedPattern(for: station)
+            + #"\s*-\s*一般監測站\s*[:：]\s*(10\+|10|[1-9])\s+(低|中|高|甚高|嚴重)(?:\s|$)"#
+        let regex = try NSRegularExpression(pattern: pattern)
+        for item in reader.items where item.title == station {
+            let text = item.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let indexRange = Range(match.range(at: 1), in: text),
+                  let riskRange = Range(match.range(at: 2), in: text) else { continue }
+            let index = String(text[indexRange])
+            guard let level = riskLevel(index), level == String(text[riskRange]) else { continue }
+            let formatter = HKODate.formatter("EEE, dd MMM yyyy HH:mm:ss Z")
+            return AirQuality(index: index, level: level, station: "\(station)（一般監測站）",
+                              observedAt: formatter.date(from: item.pubDate), fetchedAt: now)
+        }
+        throw URLError(.cannotParseResponse)
+    }
+
+    private final class RSSReader: NSObject, XMLParserDelegate {
+        struct Item {
+            var title = ""
+            var description = ""
+            var pubDate = ""
+        }
+        var items: [Item] = []
+        var isRSS = false
+        private var path: [String] = []
+        private var item: Item?
+        private var text = ""
+
+        func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
+            path.append(elementName)
+            if path == ["rss"] { isRSS = true }
+            if path == ["rss", "channel", "item"] { item = Item() }
+            text = ""
+        }
+
+        func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
+        func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+            text += String(data: CDATABlock, encoding: .utf8) ?? ""
+        }
+
+        func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+            if path.count == 4, Array(path.prefix(3)) == ["rss", "channel", "item"] {
+                let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                switch elementName {
+                case "title": item?.title = value
+                case "description": item?.description = value
+                case "pubDate": item?.pubDate = value
+                default: break
+                }
+            }
+            if path == ["rss", "channel", "item"], let item {
+                items.append(item)
+                self.item = nil
+            }
+            path.removeLast()
+            text = ""
+        }
     }
 }
 

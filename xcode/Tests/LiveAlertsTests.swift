@@ -25,14 +25,91 @@ final class LiveAlertsTests: XCTestCase {
         XCTAssertThrowsError(try MTRStatus.parse(Data(#"{"status":2}"#.utf8)))
     }
 
-    func testAirQuality() throws {
-        let air = try OpenMeteoAir.parse(Data(#"{"current":{"us_aqi":42.4,"pm2_5":11.2}}"#.utf8))
-        XCTAssertEqual(air.aqi, 42)
-        XCTAssertEqual(air.level, "良好")
+    private func aqhiItem(station: String = "中西區", type: String = "一般監測站", index: String = "4", risk: String = "中", time: String = "Wed, 28 Oct 2026 22:30:00 +0800") -> String {
+        "<item><title>\(station)</title><pubDate>\(time)</pubDate><description><![CDATA[\(station) - \(type): \(index) \(risk) - 2026年10月28日 (星期三)]]></description></item>"
+    }
+
+    private func rss(_ items: String) -> Data {
+        Data("<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel>\(items)</channel></rss>".utf8)
+    }
+
+    func testAQHIUsesNamedGeneralStationNotMaximum() throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let data = rss(aqhiItem(station: "屯門", index: "10+", risk: "嚴重")
+                       + aqhiItem() + aqhiItem(station: "中環", type: "路邊監測站", index: "10", risk: "甚高"))
+        let air = try EPDAQHI.parse(data, now: now)
+        XCTAssertEqual(air.index, "4")
+        XCTAssertEqual(air.level, "中")
+        XCTAssertEqual(air.station, "中西區（一般監測站）")
         XCTAssertFalse(air.isPoor)
-        XCTAssertEqual(AirQuality(aqi: 120, pm25: nil, fetchedAt: Date()).level, "敏感族群不宜")
-        XCTAssertTrue(AirQuality(aqi: 120, pm25: nil, fetchedAt: Date()).isPoor)
-        XCTAssertThrowsError(try OpenMeteoAir.parse(Data(#"{"current":{}}"#.utf8)))
+        XCTAssertEqual(air.observedAt, HKODate.iso("2026-10-28T22:30:00+08:00"))
+        XCTAssertEqual(air.fetchedAt, now)
+        XCTAssertNotEqual(air.observedAt, air.fetchedAt)
+        XCTAssertNotEqual(EPDAQHI.cacheKey, "air")
+    }
+
+    func testAQHIRiskBoundariesAndTenPlus() throws {
+        for (index, risk, poor) in [("1", "低", false), ("3", "低", false), ("4", "中", false),
+                                     ("6", "中", false), ("7", "高", true), ("8", "甚高", true),
+                                     ("10", "甚高", true), ("10+", "嚴重", true)] {
+            let air = try EPDAQHI.parse(rss(aqhiItem(index: index, risk: risk)))
+            XCTAssertEqual(air.index, index)
+            XCTAssertEqual(air.level, risk)
+            XCTAssertEqual(air.isPoor, poor)
+        }
+        XCTAssertNil(EPDAQHI.riskLevel("0"))
+        XCTAssertNil(EPDAQHI.riskLevel("11"))
+    }
+
+    func testAQHIRejectsMissingMalformedAndRoadsideData() throws {
+        for item in ["", aqhiItem(station: "屯門"), aqhiItem(type: "路邊監測站"),
+                     aqhiItem(index: "-"), aqhiItem(index: "0"), aqhiItem(index: "11"),
+                     aqhiItem(index: "4.5"), aqhiItem(index: "10+garbage", risk: "嚴重"),
+                     aqhiItem(index: "4", risk: "低")] {
+            XCTAssertThrowsError(try EPDAQHI.parse(rss(item)))
+        }
+        for value in ["", "<rss><channel>", "<html>upstream unavailable</html>",
+                      "{\"current\":{\"us_aqi\":42}}", "<!DOCTYPE rss [<!ENTITY x '4'>]><rss/>"] {
+            XCTAssertThrowsError(try EPDAQHI.parse(Data(value.utf8)))
+        }
+        XCTAssertNil(try EPDAQHI.parse(rss(aqhiItem(time: "invalid"))).observedAt)
+    }
+
+    func testAQHIRSSSupportsEscapedDescriptionAndBOM() throws {
+        let item = aqhiItem(index: "10+", risk: "嚴重")
+            .replacingOccurrences(of: "<![CDATA[", with: "")
+            .replacingOccurrences(of: "]]>", with: "")
+            .replacingOccurrences(of: "10+", with: "10&#43;")
+        let data = Data([0xEF, 0xBB, 0xBF]) + rss(item)
+        XCTAssertEqual(try EPDAQHI.parse(data).index, "10+")
+    }
+
+    func testAQHIFreshnessUsesPublicationRatherThanDownloadTime() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var air = AirQuality(index: "4", level: "中", station: "中西區", observedAt: now, fetchedAt: now)
+        XCTAssertFalse(air.isStale(at: now.addingTimeInterval(5399)))
+        XCTAssertTrue(air.isStale(at: now.addingTimeInterval(5400)))
+        XCTAssertTrue(air.isStale(at: now.addingTimeInterval(-1)))
+        air.observedAt = now.addingTimeInterval(-7200)
+        XCTAssertTrue(air.isStale(at: now))
+        air.observedAt = nil
+        XCTAssertTrue(air.isStale(at: now))
+    }
+
+    func testLiveConditionsExpireWithinPrecomputedTimeline() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var info = ExtraInfo.sample
+        info.warnings = []
+        info.warningsFetchedAt = now
+        info.train = TrainStatus(state: .delayed, message: "", fetchedAt: now)
+        XCTAssertEqual(info.currentWarnings(at: now.addingTimeInterval(1799)), [])
+        XCTAssertNotNil(info.currentTrain(at: now.addingTimeInterval(1799)))
+        XCTAssertNil(info.currentWarnings(at: now.addingTimeInterval(1800)))
+        XCTAssertNil(info.currentTrain(at: now.addingTimeInterval(1800)))
+        XCTAssertNil(info.currentWarnings(at: now.addingTimeInterval(-1)))
+        XCTAssertNil(info.currentTrain(at: now.addingTimeInterval(-1)))
+        info.warningsFetchedAt = nil
+        XCTAssertNil(info.currentWarnings(at: now))
     }
 
     func testUVLevels() {
@@ -43,11 +120,12 @@ final class LiveAlertsTests: XCTestCase {
         XCTAssertEqual(UVLevel.text(12), "極高")
     }
 
-    func testUVInWeatherParse() throws {
-        let json = #"{"current":{"temperature_2m":26},"daily":{"weather_code":[1,2],"temperature_2m_max":[28,29],"temperature_2m_min":[24,25],"precipitation_probability_max":[10,20],"uv_index_max":[6.4,7.1]}}"#
-        let snapshot = try OpenMeteo.parse(Data(json.utf8))
-        XCTAssertEqual(snapshot.today.uvIndex, 6.4)
-        XCTAssertEqual(snapshot.tomorrow?.uvIndex, 7.1)
+    func testCurrentUVIsNotAForecastMaximum() throws {
+        let json = #"{"icon":[51],"uvindex":{"data":[{"place":"京士柏","value":6.4,"desc":"高"}],"recordDesc":"過去一小時"}}"#
+        let current = try HKOWeather.parseCurrent(Data(json.utf8))
+        let snapshot = try XCTUnwrap(HKOWeather.snapshot(current: current, forecast: nil))
+        XCTAssertEqual(snapshot.uvIndex, 6.4)
+        XCTAssertTrue(snapshot.forecast.isEmpty)
     }
 
     func testExchangeRates() throws {

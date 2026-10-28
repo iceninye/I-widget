@@ -1,7 +1,6 @@
 import SwiftUI
 import WidgetKit
 
-/// 今日咭 widget：今日咭、七日條、本週概況、明日、學校日程。
 struct TodayWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
@@ -15,7 +14,6 @@ struct TodayWidgetView: View {
     }
 }
 
-/// 各項 info widget：天氣警告、屯馬綫、資料格、VPS。
 struct InfoWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
@@ -28,665 +26,281 @@ struct InfoWidgetView: View {
     }
 }
 
-// MARK: - 主畫面
-
 struct TodayLayout: View {
     let entry: OverviewEntry
 
-    /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起學校，再收明日、本週概況、7 日色條。
     var body: some View {
-        GeometryReader { geometry in
-            let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
-            ViewThatFits(in: .vertical) {
-                stack(rows: rows, strip: true, week: true, tomorrow: true, school: true)
-                stack(rows: rows, strip: true, week: true, tomorrow: true, school: false)
-                stack(rows: rows, strip: true, week: true, tomorrow: false, school: false)
-                stack(rows: rows, strip: true, week: false, tomorrow: false, school: false)
-                stack(rows: rows, strip: false, week: false, tomorrow: false, school: false)
+        ViewThatFits(in: .vertical) {
+            VStack(alignment: .leading, spacing: 7) {
+                TodayCard(entry: entry)
+                Link(destination: AppRoute.today.url) {
+                    HStack {
+                        Text("明日 · \(entry.dutyTomorrow?.title ?? "未有資料")").lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("詳情").foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+            }
+            TodayCard(entry: entry)
+        }
+    }
+}
+
+struct TodayCard: View {
+    let entry: OverviewEntry
+
+    var body: some View {
+        let day = entry.dutyToday
+        GlassCard(tint: day?.tint, padding: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Text(day?.title ?? "今日更份").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    if day?.isOverride == true { Badge(text: "改更", color: .orange) }
+                    Spacer(minLength: 2)
+                    ThemeButton()
+                    RefreshButton(updatedAt: entry.updatedAt)
+                }
+                Link(destination: AppRoute.today.url) {
+                    if !entry.schedule.configured {
+                        Text("長按編輯小工具，設定更表 token。")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                    } else if let day {
+                        if day.hasTimes {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                                    Text(day.times ?? "")
+                                        .font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                                        .lineLimit(1).minimumScaleFactor(0.85)
+                                    Spacer(minLength: 0)
+                                    countdown(day)
+                                }
+                                ShiftBar(day: day, now: entry.date).frame(height: 5)
+                                Text([day.route, day.hoursText].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(day.code).font(.system(size: 26, weight: .semibold)).foregroundStyle(day.tint)
+                                if let next = entry.schedule.nextDuty(after: day.date) {
+                                    Text("下一更 \(next.date) · \(next.on.map(DutyDay.clock) ?? "")")
+                                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
+                    } else {
+                        Text(entry.schedule.rosterFailed ? "更表未能更新，撳入去查看。" : "今日未有更份資料。")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                .buttonStyle(.plain)
             }
         }
     }
 
-    private func stack(rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            TodayCard(entry: entry)
-            if strip { WeekStrip(entry: entry) }
-            if week { WeekLine(entry: entry) }
-            if tomorrow { TomorrowLine(entry: entry) }
-            if school { SchoolSection(entry: entry, maxRows: rows) }
-            Spacer(minLength: 0)
+    @ViewBuilder private func countdown(_ day: DutyDay) -> some View {
+        if let on = day.on.flatMap(day.moment(atServiceSecond:)),
+           let off = day.off.flatMap(day.moment(atServiceSecond:)) {
+            if entry.date < off {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(entry.date < on ? "返工" : "放工").foregroundStyle(.secondary)
+                    Text(entry.date < on ? on : off, style: .relative).monospacedDigit()
+                }
+                .font(.system(size: 11)).lineLimit(1)
+            } else {
+                Text("已到落班時間").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
         }
+    }
+}
+
+struct ShiftBar: View {
+    let day: DutyDay
+    let now: Date
+
+    var body: some View {
+        let start = day.on.flatMap(day.moment(atServiceSecond:))
+        let end = day.off.flatMap(day.moment(atServiceSecond:))
+        let fraction: Double = {
+            guard let start, let end, end > start else { return 0 }
+            return now.timeIntervalSince(start) / end.timeIntervalSince(start)
+        }()
+        ProgressBar(fraction: fraction, tint: day.tint)
+            .accessibilityLabel("更份進度")
+            .accessibilityValue(Formatting.percent(min(max(fraction, 0), 1)))
     }
 }
 
 struct InfoLayout: View {
     let entry: OverviewEntry
 
-    /// 位唔夠就先收起最底一行資料格（紫外線、空氣、匯率）。
     var body: some View {
         ViewThatFits(in: .vertical) {
-            stack(extras: true)
-            stack(extras: false)
+            stack(compact: false)
+            stack(compact: true)
         }
     }
 
-    private func stack(extras: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private func stack(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
-                Image(systemName: "square.grid.2x2.fill").foregroundStyle(.secondary).widgetAccentable()
-                Text("資訊").fontWeight(.semibold)
-                Spacer(minLength: 2)
+                Label("各項資訊", systemImage: "square.grid.2x2")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
                 ThemeButton()
                 RefreshButton(updatedAt: entry.updatedAt)
             }
-            .font(.system(size: 12))
-            .padding(.horizontal, 4)
             InfoSection(entry: entry)
-            Spacer(minLength: 0)
-            TileGrid(entry: entry, extras: extras)
-            VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
-        }
-    }
-}
-
-/// 本週概況一行（跟 tml-roster「本週概況」）。
-struct WeekLine: View {
-    let entry: OverviewEntry
-
-    var body: some View {
-        if let week = entry.weekSummary {
-            Text("本週 \(week.text)")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.horizontal, 4)
-        }
-    }
-}
-
-/// 未來 7 日更份色條：星期、日期、更類標籤，顏色跟 tml-roster 更類。
-struct WeekStrip: View {
-    let entry: OverviewEntry
-
-    var body: some View {
-        let today = entry.serviceToday
-        HStack(spacing: 3) {
-            ForEach(0..<7, id: \.self) { offset in
-                cell(Days.add(today, offset), isToday: offset == 0)
+            weather
+            environment
+            SchoolSection(entry: entry, compact: compact)
+            HStack(spacing: 12) {
+                Link(destination: AppRoute.finance.url) { Label("財經", systemImage: "chart.line.uptrend.xyaxis") }
+                Link(destination: AppRoute.device.url) { Label("裝置", systemImage: "iphone") }
+                Spacer(minLength: 0)
+                Link(destination: AppRoute.info.url) { Label("全部", systemImage: "chevron.right") }
             }
+            .font(.system(size: 12))
+            .buttonStyle(.plain)
+            .frame(minHeight: 24)
+            Spacer(minLength: 0)
         }
     }
 
-    private func cell(_ date: String?, isToday: Bool) -> some View {
-        let day = date.flatMap { entry.schedule.duty(on: $0) }
-        let parts = (date ?? "").split(separator: "-").compactMap { Int($0) }
-        let weekday = date.flatMap { Days.weekdayIndex($0) }.map { weekdayNames[$0] } ?? "—"
-        let dayNumber = parts.count == 3 ? "\(parts[2])" : ""
-        return VStack(spacing: 2) {
-            Text("\(weekday)\(dayNumber)")
-                .font(.system(size: 9))
-                .foregroundStyle(isToday ? .primary : .secondary)
-                .lineLimit(1)
-            Text(day?.shortLabel ?? "—")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 15)
-                .background(
-                    day?.gradient ?? LinearGradient(colors: [Color.gray.opacity(0.55)], startPoint: .top, endPoint: .bottom),
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                )
-                .widgetAccentable()
-                .overlay {
-                    if isToday {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.primary, lineWidth: 1.5)
-                    }
-                }
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
-
-private func shortDate(_ date: String) -> String {
-    let parts = date.split(separator: "-").compactMap { Int($0) }
-    let weekday = Days.weekdayIndex(date).map { weekdayNames[$0] } ?? ""
-    return parts.count == 3 ? "\(weekday) \(parts[1])/\(parts[2])" : date
-}
-
-/// 今日咭：參考 tml-roster 今日卡：更份、組別／更類、上落班時間、04:00–04:00 進度條、
-/// 地點・用膳・工時、返工／放工倒數；休息日就顯示下一更。
-struct TodayCard: View {
-    let entry: OverviewEntry
-
-    var body: some View {
-        let schedule = entry.schedule
-        let day = entry.dutyToday
-        GlassCard(tint: day?.tint, padding: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(day?.title ?? "今日更份")
-                        .font(.system(size: 15, weight: .bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    if let day { badges(day) }
-                    Spacer(minLength: 2)
-                    ThemeButton()
-                    RefreshButton(updatedAt: entry.updatedAt)
-                }
-                Button(intent: FlipIntent(tile: "today")) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        if !schedule.configured {
-                            message("未設定 tml-roster token：長按 widget →「編輯小工具」貼上。", .secondary)
-                        } else if day == nil {
-                            message(schedule.rosterFailed ? "讀唔到更表，請檢查 token 同網絡。" : "更表未有今日資料。", .orange)
-                        } else if entry.isFlipped("today") {
-                            BackFace(lines: entry.todayBack, size: 12)
-                        } else if let day, day.hasTimes {
-                            working(day)
-                        } else if let day {
-                            resting(day)
+    private var weather: some View {
+        let weather = entry.info.weather
+        let stale = Formatting.isStale(weather?.observedAt, now: entry.date)
+        return Link(destination: AppRoute.weather.url) {
+            GlassCard(padding: 7) {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(weather?.station ?? "香港天文台")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(Formatting.degrees(weather?.currentTemp))
+                                .font(.system(size: 27, weight: .semibold)).monospacedDigit()
+                            Text(weather?.currentCode.map(WeatherCode.text) ?? "未有實況")
+                                .font(.system(size: 12)).lineLimit(1)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .overlay(alignment: .leading) {
-            if let day {
-                RoundedRectangle(cornerRadius: 2).fill(day.tint).frame(width: 4).padding(.vertical, 10)
-                    .widgetAccentable()
-            }
-        }
-    }
-
-    @ViewBuilder private func badges(_ day: DutyDay) -> some View {
-        if let group = day.group { Badge(text: group) }
-        if let sheet = day.datedSheet { Badge(text: sheet, color: .orange) }
-        if day.isOverride { Badge(text: "改", color: .orange) }
-    }
-
-    private func message(_ text: String, _ color: Color) -> some View {
-        Text(text).font(.system(size: 11)).foregroundStyle(color).lineLimit(2)
-    }
-
-    @ViewBuilder private func working(_ day: DutyDay) -> some View {
-        HStack(alignment: .lastTextBaseline) {
-            Text(day.times ?? "")
-                .font(.system(size: 26, weight: .heavy))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Spacer(minLength: 4)
-            countdown(day)
-        }
-        ShiftBar(day: day, now: entry.date)
-            .frame(height: 6)
-        Text([day.route, day.mealText, day.hoursText].compactMap { $0 }.joined(separator: " · "))
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-        if let hint = day.hint {
-            Text(hint).font(.system(size: 10)).foregroundStyle(.orange).lineLimit(1).minimumScaleFactor(0.7)
-        }
-    }
-
-    /// 返工前倒數返工；返緊工倒數放工；放咗工就顯示下一更。系統計時字，自己會更新。
-    @ViewBuilder private func countdown(_ day: DutyDay) -> some View {
-        if let on = day.on.flatMap(day.moment(atServiceSecond:)),
-           let off = day.off.flatMap(day.moment(atServiceSecond:)) {
-            if entry.date < on {
-                timer("返工", on)
-            } else if entry.date < off {
-                timer("放工", off)
-            } else if let next = entry.schedule.nextDuty(after: day.date), let at = next.on.flatMap(next.moment(atServiceSecond:)) {
-                timer("下一更", at)
-            } else {
-                Text("已放工").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func timer(_ label: String, _ date: Date) -> some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
-            Text(date, style: .relative)
-                .font(.system(size: 12, weight: .semibold))
-                .monospacedDigit()
-                .multilineTextAlignment(.trailing)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-        }
-        .frame(maxWidth: 110, alignment: .trailing)
-    }
-
-    @ViewBuilder private func resting(_ day: DutyDay) -> some View {
-        Text(day.code).font(.system(size: 24, weight: .heavy)).foregroundStyle(day.tint).widgetAccentable()
-        if let next = entry.schedule.nextDuty(after: day.date) {
-            Text("下一更 \(shortDate(next.date)) · \(next.title) \(next.on.map(DutyDay.clock) ?? "")")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-    }
-}
-
-/// 04:00 至翌日 04:00 嘅一條時間軸，標出更份同而家。
-struct ShiftBar: View {
-    @Environment(\.widgetRenderingMode) private var mode
-    let day: DutyDay
-    let now: Date
-
-    var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            let position: (Double) -> CGFloat = { seconds in CGFloat(min(1, max(0, (seconds - 14_400) / 86_400))) * width }
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.secondary.opacity(0.22))
-                if let on = day.on, let off = day.off {
-                    Capsule()
-                        .fill(mode == .fullColor ? day.tint : Color.primary)
-                        .frame(width: max(4, position(Double(off)) - position(Double(on))))
-                        .offset(x: position(Double(on)))
-                        .widgetAccentable()
-                }
-                if let start = day.moment(atServiceSecond: 0) {
-                    let seconds = now.timeIntervalSince(start)
-                    if seconds >= 14_400 && seconds <= 14_400 + 86_400 {
-                        Circle()
-                            .fill(Color.primary)
-                            .frame(width: 9, height: 9)
-                            .offset(x: position(seconds) - 4.5)
+                    Spacer(minLength: 4)
+                    VStack(alignment: .trailing, spacing: 5) {
+                        Image(systemName: weather?.currentCode.map(WeatherCode.symbol) ?? "cloud")
+                            .font(.system(size: 22)).foregroundStyle(.blue).widgetAccentable()
+                        Text(stale ? "資料較舊／未更新" : weather?.observedAt.map { Formatting.clock($0, calendar: ICalendar.hongKong) } ?? "未更新")
+                            .font(.system(size: 11)).foregroundStyle(stale ? Color.orange : .secondary).lineLimit(1)
                     }
                 }
             }
         }
+        .buttonStyle(.plain)
     }
-}
 
-struct TomorrowLine: View {
-    let entry: OverviewEntry
-
-    var body: some View {
-        if let day = entry.dutyTomorrow {
-            HStack(spacing: 6) {
-                Text("明日").foregroundStyle(.secondary)
-                Circle().fill(day.tint).frame(width: 6, height: 6).widgetAccentable()
-                Text(day.title).fontWeight(.semibold)
-                if let times = day.times { Text(times).monospacedDigit() }
-                if let route = day.route { Text(route).foregroundStyle(.secondary) }
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 12))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .padding(.horizontal, 4)
+    private var environment: some View {
+        let air = entry.info.air
+        let weather = entry.info.weather
+        let uv = weather?.uvIndex
+        return HStack(spacing: 8) {
+            metric("AQHI · 中西區", value: air.map { "\($0.index) · \($0.level)" } ?? "未有資料", symbol: "leaf",
+                   warning: air?.isPoor ?? false, date: air?.observedAt, stale: air?.isStale(at: entry.date) ?? true)
+            metric("紫外線 · 京士柏", value: uv.map { String(format: "%.1f · %@", $0, UVLevel.text($0)) } ?? "未提供", symbol: "sun.max",
+                   warning: (uv ?? 0) >= 8, date: weather?.observedAt, stale: Formatting.isStale(weather?.observedAt, now: entry.date))
         }
     }
-}
 
-/// 學校：循環周 + 今日、明日活動（最多 3 行）。
-struct SchoolSection: View {
-    let entry: OverviewEntry
-    var maxRows = 3
-
-    private struct Row {
-        var prefix: String
-        var time: String
-        var title: String
-    }
-
-    var body: some View {
-        let today = entry.schoolToday
-        let tomorrow = entry.schoolTomorrow
-        let rows: [Row] = today.items.map { Row(prefix: "今", time: $0.allDay ? "全日" : Formatting.clock($0.start), title: $0.title) }
-            + tomorrow.items.map { Row(prefix: "明", time: $0.allDay ? "全日" : Formatting.clock($0.start), title: $0.title) }
-        let failed = entry.schedule.schoolFailed
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                Image(systemName: "graduationcap.fill").foregroundStyle(.teal).widgetAccentable()
-                Text("學校").fontWeight(.semibold)
-                if let cycle = today.cycle.first { Badge(text: cycle, color: .teal) }
-                if let next = tomorrow.cycle.first { Text("明 \(next)").foregroundStyle(.secondary) }
-                Spacer(minLength: 0)
-                if !failed.isEmpty {
-                    Text("\(failed.joined(separator: "、")) 讀唔到").foregroundStyle(.orange)
+    private func metric(_ label: String, value: String, symbol: String, warning: Bool, date: Date?, stale: Bool) -> some View {
+        Link(destination: AppRoute.weather.url) {
+            GlassCard(padding: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(label, systemImage: symbol).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(value).font(.system(size: 14, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(warning ? Color.orange : .primary).lineLimit(1)
+                    Text(date.map { "\(stale ? "舊資料" : "資料") \(Formatting.clock($0, calendar: ICalendar.hongKong))" } ?? "時間未提供")
+                        .font(.system(size: 11)).foregroundStyle(stale ? Color.orange : .secondary).lineLimit(1)
+                        .accessibilityLabel("資料時間 \(Formatting.sourceTime(date))\(stale ? "，未有最新資料" : "")")
                 }
-            }
-            .font(.system(size: 11))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            if rows.isEmpty {
-                Text(failed.count == SchoolCalendars.sources.count ? "學校日曆暫時讀唔到。" : "今明兩日冇學校活動。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(Array(rows.prefix(maxRows).enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 5) {
-                    Text(row.prefix).foregroundStyle(row.prefix == "今" ? .teal : .secondary)
-                    Text(row.time).foregroundStyle(.secondary).monospacedDigit()
-                    Text(row.title).lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 11))
-            }
-            if rows.count > maxRows {
-                Text("另有 \(rows.count - maxRows) 項").font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            if let holiday = entry.nextHoliday {
-                HStack(spacing: 5) {
-                    Image(systemName: "sun.max.fill").foregroundStyle(.orange).widgetAccentable()
-                    Text(holiday.rangeText).foregroundStyle(.secondary).monospacedDigit()
-                    Text(holiday.title).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text("\(holiday.daysAway) 日後").foregroundStyle(.secondary)
-                }
-                .font(.system(size: 11))
             }
         }
-        .padding(.horizontal, 4)
+        .buttonStyle(.plain)
     }
 }
 
-/// 警告、屯馬綫狀況：有事先顯眼。
 struct InfoSection: View {
     let entry: OverviewEntry
 
     var body: some View {
-        let warnings = entry.info.warnings ?? []
-        let train = entry.info.train
-        if !warnings.isEmpty || train != nil {
-            VStack(alignment: .leading, spacing: 4) {
-                if !warnings.isEmpty {
-                    HStack(spacing: 5) {
+        Link(destination: AppRoute.weather.url) {
+            HStack(spacing: 5) {
+                if let warnings = entry.info.currentWarnings(at: entry.date) {
+                    if warnings.isEmpty {
+                        Image(systemName: "checkmark.shield").foregroundStyle(.secondary)
+                        Text("上次查詢未有警告")
+                    } else {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
-                            .widgetAccentable()
-                        ForEach(Array(warnings.prefix(3).enumerated()), id: \.offset) { _, warning in
-                            Badge(text: warning.text, color: warning.severe ? .red : .orange)
-                        }
-                        Spacer(minLength: 0)
+                        Text(warnings.map(\.text).joined(separator: " · "))
+                            .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
                     }
-                    .font(.system(size: 11))
+                } else {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.secondary)
+                    Text("最新警告未能確認")
                 }
-                HStack(spacing: 6) {
-                    if let train {
-                        Image(systemName: "tram.fill")
-                            .foregroundStyle(train.state == .normal ? Color.green : .orange)
-                            .widgetAccentable()
-                        Text("屯馬綫 \(train.state.text)")
-                            .fontWeight(.semibold)
-                            .foregroundStyle(train.state == .normal ? Color.primary : .orange)
-                    }
-                    Spacer(minLength: 0)
+                Spacer(minLength: 0)
+                if let train = entry.info.currentTrain(at: entry.date), train.state != .normal {
+                    Image(systemName: "tram.fill").foregroundStyle(.orange)
+                    Text(train.state.text).foregroundStyle(.orange)
                 }
-                .font(.system(size: 11))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
             }
-            .padding(.horizontal, 4)
+            .font(.system(size: 12)).lineLimit(2)
         }
+        .buttonStyle(.plain)
     }
 }
 
-/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS；有位再加一行紫外線、空氣、匯率。
-struct TileGrid: View {
+struct SchoolSection: View {
     let entry: OverviewEntry
-    var extras = true
+    var compact = false
 
     var body: some View {
-        let stats = entry.stats
-        let lowStorage = Formatting.isLowStorage(free: stats.freeBytes, total: stats.totalBytes)
-        let weather = entry.info.weather
-        Grid(horizontalSpacing: 6, verticalSpacing: 6) {
-            GridRow {
-                Tile(
-                    id: "battery", symbol: entry.batterySymbol, tint: entry.batteryTone.color,
-                    value: Formatting.percent(stats.batteryLevel),
-                    caption: BatteryHistory.text(entry.battery) ?? "電量",
-                    fraction: stats.batteryLevel,
-                    flipped: entry.isFlipped("battery"), back: entry.batteryBack
-                )
-                Tile(
-                    id: "storage", symbol: "internaldrive.fill", tint: lowStorage ? .red : .blue,
-                    value: Formatting.bytes(stats.freeBytes),
-                    caption: "可用 / \(Formatting.bytes(stats.totalBytes))",
-                    fraction: Formatting.usedFraction(free: stats.freeBytes, total: stats.totalBytes),
-                    flipped: entry.isFlipped("storage"), back: entry.storageBack
-                )
-                Tile(
-                    id: "uptime", symbol: "clock.fill", tint: entry.rebootHint.tint,
-                    value: Formatting.uptime(stats.uptime(at: entry.date)),
-                    caption: entry.rebootHint == .none ? "開機時間" : entry.rebootHint.suffix.replacingOccurrences(of: " · ", with: ""),
-                    captionColor: entry.rebootHint == .none ? .secondary : entry.rebootHint.tint,
-                    flipped: entry.isFlipped("uptime"), back: entry.uptimeBack
-                )
-            }
-            GridRow {
-                Tile(
-                    id: "weather", symbol: weather.map { WeatherCode.symbol($0.today.code) } ?? "cloud.fill", tint: .cyan,
-                    value: Formatting.degrees(weather?.currentTemp),
-                    caption: weather.map { "\(Formatting.tempRange($0.today)) · 明 \(Formatting.tempRange($0.tomorrow))" } ?? "天氣",
-                    flipped: entry.isFlipped("weather"), back: entry.weatherBack
-                )
-                Tile(
-                    id: "gold", symbol: "dollarsign.circle.fill", tint: .yellow,
-                    value: Formatting.gold(entry.info.gold?.usdPerOunce),
-                    caption: "黃金 USD/oz",
-                    captionColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.updatedAt) ? .orange : .secondary,
-                    flipped: entry.isFlipped("gold"), back: entry.goldBack
-                )
-                Tile(
-                    id: "ios", symbol: "iphone.gen3", tint: .gray,
-                    value: entry.stats.systemVersion,
-                    caption: versionCaption,
-                    captionColor: versionColor,
-                    flipped: entry.isFlipped("ios"), back: entry.osBack
-                )
-            }
-            if extras {
-                GridRow {
-                    uvTile
-                    airTile
-                    fxTile
-                }
-            }
-        }
-    }
-
-    private var uvTile: some View {
-        let uv = entry.info.weather?.today.uvIndex
-        let tint: Color = (uv ?? 0) >= 8 ? .red : ((uv ?? 0) >= 6 ? .orange : .yellow)
-        return Tile(
-            id: "uv", symbol: "sun.max.trianglebadge.exclamationmark.fill", tint: tint,
-            value: uv.map { "UV \(Int($0.rounded()))" } ?? Formatting.missing,
-            caption: uv.map { UVLevel.text($0) } ?? "紫外線",
-            flipped: entry.isFlipped("uv"), back: entry.uvBack
-        )
-    }
-
-    private var airTile: some View {
-        let air = entry.info.air
-        return Tile(
-            id: "air", symbol: "leaf.fill", tint: (air?.isPoor ?? false) ? .orange : .green,
-            value: air.map { "AQI \($0.aqi)" } ?? Formatting.missing,
-            caption: air?.level ?? "空氣質素",
-            captionColor: (air?.isPoor ?? false) ? .orange : .secondary,
-            flipped: entry.isFlipped("air"), back: entry.airBack
-        )
-    }
-
-    private var fxTile: some View {
-        Tile(
-            id: "fx", symbol: "yensign.circle.fill", tint: .mint,
-            value: entry.info.fx?.jpy.map { String(format: "%.2f", $0) } ?? Formatting.missing,
-            caption: "日圓 / 港元",
-            flipped: entry.isFlipped("fx"), back: entry.fxBack
-        )
-    }
-
-    private var versionCaption: String {
-        switch entry.osStatus {
-        case .updateAvailable(let latest): return "可更新 \(latest)"
-        case .upToDate: return "iOS 最新"
-        case .unknown: return "iOS"
-        }
-    }
-
-    private var versionColor: Color {
-        if case .updateAvailable = entry.osStatus { return .orange }
-        return .secondary
-    }
-}
-
-/// 撳一下反轉去背面；再撳（或者 90 秒後）轉返正面。
-struct BackFace: View {
-    let lines: [BackLine]
-    var size: CGFloat = 10
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(lines) { line in
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(line.label).foregroundStyle(.secondary)
-                    Text(line.value).fontWeight(.semibold).monospacedDigit()
+        Link(destination: AppRoute.school.url) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: "graduationcap").foregroundStyle(.teal).widgetAccentable()
+                    Text("學校").fontWeight(.semibold)
+                    if let cycle = entry.schoolToday.cycle.first { Text(cycle).foregroundStyle(.secondary) }
                     Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
                 }
-            }
-        }
-        .font(.system(size: size))
-        .lineLimit(1)
-        .minimumScaleFactor(0.6)
-    }
-}
-
-struct Tile: View {
-    let id: String
-    let symbol: String
-    let tint: Color
-    let value: String
-    let caption: String
-    var captionColor: Color = .secondary
-    var fraction: Double?
-    let flipped: Bool
-    let back: [BackLine]
-
-    var body: some View {
-        Button(intent: FlipIntent(tile: id)) {
-            GlassCard(tint: flipped ? tint : nil, padding: 7) {
-                if flipped {
-                    BackFace(lines: back)
-                        .frame(minHeight: 40, alignment: .topLeading)
-                } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Image(systemName: symbol)
-                                .font(.system(size: 11))
-                                .foregroundStyle(tint)
-                                .widgetAccentable()
-                            Text(value)
-                                .font(.system(size: 14, weight: .bold))
-                                .monospacedDigit()
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.6)
-                        }
-                        Text(caption)
-                            .font(.system(size: 9))
-                            .foregroundStyle(captionColor)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        if let fraction {
-                            ProgressBar(fraction: fraction, tint: tint).frame(height: 3)
-                        } else {
-                            Color.clear.frame(height: 3)
-                        }
+                if !compact {
+                    if !entry.schedule.schoolFailed.isEmpty {
+                        Text("部分日曆未能更新").foregroundStyle(.orange)
+                    } else if let item = entry.schoolToday.items.first {
+                        Text("今 · \(item.title)").foregroundStyle(.secondary)
+                    } else if let item = entry.schoolTomorrow.items.first {
+                        Text("明 · \(item.title)").foregroundStyle(.secondary)
+                    } else {
+                        Text("今明日未有已載入活動").foregroundStyle(.secondary)
                     }
-                    .frame(minHeight: 40, alignment: .topLeading)
                 }
             }
+            .font(.system(size: 12)).lineLimit(1)
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
     }
 }
-
-struct VPSLine: View {
-    let vps: VPSState
-    let flipped: Bool
-    let back: [BackLine]
-
-    var body: some View {
-        Button(intent: FlipIntent(tile: "vps")) {
-            GlassCard(tint: flipped ? vps.status.map { VPSAPI.health($0).color } : nil, padding: 7) {
-                if flipped {
-                    BackFace(lines: back)
-                } else {
-                    front
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var front: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "server.rack")
-                .foregroundStyle(vps.status.map { VPSAPI.health($0).color } ?? .secondary)
-                .widgetAccentable()
-            Text("VPS").fontWeight(.bold)
-            if !vps.configured {
-                Text("未設定（編輯小工具輸入 VPS token）").foregroundStyle(.secondary)
-            } else if let status = vps.status {
-                Text(VPSAPI.updatesText(status))
-                    .foregroundStyle(status.security > 0 ? .red : (status.upgradable > 0 ? .orange : .secondary))
-                if status.rebootRequired { Text("要重啟").foregroundStyle(.red) }
-                Spacer(minLength: 2)
-                service("Xray", status.xrayRunning)
-                service("Hy2", status.hysteria2Listening)
-                if vps.failed { Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange) }
-            } else {
-                Text("讀唔到狀態").foregroundStyle(.orange)
-            }
-            if vps.status == nil { Spacer(minLength: 0) }
-        }
-        .font(.system(size: 11))
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-    }
-
-    @ViewBuilder private func service(_ name: String, _ up: Bool?) -> some View {
-        if let up {
-            HStack(spacing: 2) {
-                Image(systemName: up ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundStyle(up ? .green : .red)
-                    .widgetAccentable()
-                Text(name)
-            }
-        }
-    }
-}
-
-// MARK: - 鎖定畫面
 
 struct InlineView: View {
     let entry: OverviewEntry
-
     var body: some View {
-        if let day = entry.dutyToday, let times = day.times {
-            Text("\(day.title) \(times)")
-        } else {
-            Text("\(entry.dutyToday?.title ?? "i-widget") · \(Formatting.percent(entry.stats.batteryLevel))")
-        }
+        Text([entry.dutyToday?.title ?? "今日更份", entry.dutyToday?.times].compactMap { $0 }.joined(separator: " · "))
     }
 }
 
 struct CircularView: View {
     let entry: OverviewEntry
-
     var body: some View {
         Gauge(value: entry.stats.batteryLevel ?? 0) {
             Image(systemName: entry.batterySymbol)
@@ -699,23 +313,12 @@ struct CircularView: View {
 
 struct RectangularView: View {
     let entry: OverviewEntry
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(entry.dutyToday?.title ?? "今日更份")
-                .font(.system(size: 13, weight: .bold))
-                .widgetAccentable()
-            if let times = entry.dutyToday?.times {
-                Text(times).font(.system(size: 15, weight: .semibold)).monospacedDigit()
-            }
-            HStack(spacing: 4) {
-                Image(systemName: entry.batterySymbol)
-                Text(Formatting.percent(entry.stats.batteryLevel))
-                if let text = BatteryHistory.text(entry.battery) { Text(text) }
-            }
-            .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 3) {
+            Text(entry.dutyToday?.title ?? "今日更份").font(.headline).widgetAccentable()
+            if let times = entry.dutyToday?.times { Text(times).font(.body.weight(.semibold)).monospacedDigit() }
+            Text("撳入查看更份詳情").font(.caption).foregroundStyle(.secondary)
         }
         .lineLimit(1)
-        .minimumScaleFactor(0.7)
     }
 }

@@ -22,75 +22,132 @@ enum CourtChoice: String, AppEnum {
     ]
 }
 
-/// 法院 widget 嘅設定：揀最多 4 個法院。
 struct CourtConfigIntent: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "法院設定"
-    static var description = IntentDescription("揀要睇嘅法院，最多 4 個。")
+    static var description = IntentDescription("預設顯示全部法院，每頁三個；可自行選擇法院。自動翻頁約每十分鐘一次，實際時間由系統安排。")
 
-    @Parameter(title: "法院", default: [.dc, .allmag, .cfa])
+    @Parameter(title: "法院（留空顯示全部）", default: [])
     var courts: [CourtChoice]
+
+    @Parameter(title: "每十分鐘自動翻頁", default: true)
+    var autoRotate: Bool
+}
+
+struct CourtPageIntent: AppIntent {
+    static var title: LocalizedStringResource = "翻閱法院案件表"
+
+    @Parameter(title: "設定") var configurationKey: String
+    @Parameter(title: "目前頁") var currentPage: Int
+    @Parameter(title: "方向") var direction: Int
+    @Parameter(title: "頁數") var pageCount: Int
+
+    init() {}
+
+    init(configurationKey: String, currentPage: Int, direction: Int, pageCount: Int) {
+        self.configurationKey = configurationKey
+        self.currentPage = currentPage
+        self.direction = direction
+        self.pageCount = pageCount
+    }
+
+    func perform() async throws -> some IntentResult {
+        let page = CourtPaging.normalized(currentPage + (direction < 0 ? -1 : 1), count: pageCount)
+        DataCache.save(CourtPageState(page: page, anchoredAt: Date()), key: configurationKey)
+        WidgetCenter.shared.reloadTimelines(ofKind: "IWidgetCourt")
+        return .result()
+    }
 }
 
 struct CourtEntry: TimelineEntry {
     let date: Date
-    let days: [CourtDay]
+    let summaries: [CourtSummary]
     let listDate: Date
-    let updatedAt: Date
+    let updatedAt: Date?
     let theme: WidgetTheme
+    let page: Int
+    let pageCount: Int
+    let configurationKey: String
 
-    static let sample = CourtEntry(
-        date: Date(),
-        days: [
-            CourtDay(code: "DC", dateCode: "", total: 42, cases: [
+    static var sample: CourtEntry {
+        let now = Date()
+        let day = CourtList.listDate(now: now)
+        let summaries = ["DC", "CFA", "LANDS"].map { code in
+            CourtSummary(day: CourtDay(code: code, dateCode: CourtList.dateCode(day), total: 2, cases: [
                 CourtCase(room: "第 3 庭", judge: "法官", minutes: 570, caseNo: "DCCJ 1/2026"),
-                CourtCase(room: "第 5 庭", judge: "法官", minutes: 600, caseNo: "DCCC 2/2026"),
-            ]),
-        ],
-        listDate: Date(), updatedAt: Date(), theme: .classic
-    )
+                CourtCase(room: "第 5 庭", judge: "法官", minutes: 900, caseNo: "DCCC 2/2026"),
+            ], metadata: CourtMetadata(fetchedAt: now)), at: now, listDate: day)
+        }
+        return CourtEntry(date: now, summaries: summaries, listDate: day, updatedAt: now, theme: .classic,
+                          page: 0, pageCount: 7, configurationKey: "court.preview")
+    }
 }
 
-/// 法院案件表：每 30 分鐘重讀（各法院各自有 10 分鐘快取），中間每 10 分鐘一個 entry，「下一庭」會自己前進。
 struct CourtProvider: AppIntentTimelineProvider {
-    static let maxCourts = 4
-
     func placeholder(in context: Context) -> CourtEntry { .sample }
 
-    private func codes(_ configuration: CourtConfigIntent) -> [String] {
-        var seen = Set<String>()
-        let unique = configuration.courts.map(\.rawValue).filter { seen.insert($0).inserted }
-        return Array(unique.prefix(Self.maxCourts))
+    private func state(for key: String, now: Date) -> CourtPageState {
+        if let saved = DataCache.load(CourtPageState.self, key: key) { return saved }
+        let state = CourtPageState(anchoredAt: now)
+        DataCache.save(state, key: key)
+        return state
+    }
+
+    private func entry(at date: Date, days: [CourtDay], listDate: Date, state: CourtPageState,
+                       key: String, autoRotate: Bool, theme: WidgetTheme) -> CourtEntry {
+        let count = CourtPaging.pageCount(for: days.count)
+        let page = state.page(at: date, count: count, autoRotate: autoRotate)
+        let visible = CourtPaging.indices(page: page, courtCount: days.count).map { days[$0] }
+        return CourtEntry(date: date, summaries: visible.map { CourtSummary(day: $0, at: date, listDate: listDate) },
+                          listDate: listDate, updatedAt: visible.compactMap(\.metadata.fetchedAt).min(), theme: theme,
+                          page: page, pageCount: count, configurationKey: key)
     }
 
     func snapshot(for configuration: CourtConfigIntent, in context: Context) async -> CourtEntry {
         if context.isPreview { return .sample }
         let now = Date()
         let day = CourtList.listDate(now: now)
-        return CourtEntry(
-            date: now, days: codes(configuration).map { CourtList.cached(code: $0, day: day) },
-            listDate: day, updatedAt: now, theme: WidgetTheme.load()
-        )
+        let codes = CourtCatalog.selection(configuration.courts.map(\.rawValue))
+        let key = CourtPaging.configurationKey(codes: codes, autoRotate: configuration.autoRotate)
+        return entry(at: now, days: codes.map { CourtList.cached(code: $0, day: day) }, listDate: day,
+                     state: state(for: key, now: now), key: key, autoRotate: configuration.autoRotate, theme: WidgetTheme.load())
     }
 
     func timeline(for configuration: CourtConfigIntent, in context: Context) async -> Timeline<CourtEntry> {
-        let now = Date()
-        let day = CourtList.listDate(now: now)
-        let codes = codes(configuration)
+        let started = Date()
+        let day = CourtList.listDate(now: started)
+        let codes = CourtCatalog.selection(configuration.courts.map(\.rawValue))
+        let key = CourtPaging.configurationKey(codes: codes, autoRotate: configuration.autoRotate)
+        let pageState = state(for: key, now: started)
+        // 翻頁即用檔案快取；正常更新保留各法院獨立成功／失敗結果。
+        let justPaged = started.timeIntervalSince(pageState.anchoredAt) < 10
         let cached = codes.map { CourtList.cached(code: $0, day: day) }
-        let days = await withDeadline(20, fallback: cached) { await CourtList.loadAll(codes: codes, day: day, now: now) }
+        let days: [CourtDay]
+        if justPaged, cached.contains(where: { $0.metadata.fetchedAt != nil }) {
+            days = cached
+        } else {
+            let page = pageState.page(at: started, count: CourtPaging.pageCount(for: codes.count), autoRotate: configuration.autoRotate)
+            let visibleCodes = CourtPaging.indices(page: page, courtCount: codes.count).map { codes[$0] }
+            days = await CourtList.loadAll(codes: codes, day: day, now: started, timeout: 20, visibleCodes: visibleCodes)
+        }
+        let now = Date()
         let theme = WidgetTheme.load()
-
-        var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
-        // 18:30 轉去下一個工作天嘅案件表
-        let calendar = ICalendar.hongKong
-        if let next = calendar.nextDate(after: now, matching: DateComponents(hour: 18, minute: 30), matchingPolicy: .nextTime),
-           next < now.addingTimeInterval(2 * 3_600) {
-            dates.append(next)
+        var byDate = [CourtList.dateCode(day): days]
+        let entries = CourtPaging.dates(now: now, state: pageState, autoRotate: configuration.autoRotate).map { date in
+            let targetDay = CourtList.listDate(now: date)
+            let dateCode = CourtList.dateCode(targetDay)
+            if byDate[dateCode] == nil {
+                byDate[dateCode] = codes.map { CourtList.cached(code: $0, day: targetDay) }
+            }
+            return entry(at: date, days: byDate[dateCode] ?? [], listDate: targetDay, state: pageState,
+                         key: key, autoRotate: configuration.autoRotate, theme: theme)
         }
-        let entries = dates.sorted().map {
-            CourtEntry(date: $0, days: days, listDate: day, updatedAt: now, theme: theme)
+        var refresh = now.addingTimeInterval(justPaged ? 10 : 30 * 60)
+        if CourtList.dateCode(CourtList.listDate(now: now)) != CourtList.dateCode(day) {
+            refresh = now.addingTimeInterval(1)
+        } else if let boundary = ICalendar.hongKong.nextDate(after: now, matching: DateComponents(hour: 18, minute: 30), matchingPolicy: .nextTime) {
+            refresh = min(refresh, boundary)
         }
-        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
+        return Timeline(entries: entries, policy: .after(refresh))
     }
 }
 
@@ -104,7 +161,7 @@ struct CourtWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("法院案件表")
-        .description("司法機構法庭日誌：各法院案件數同下一庭（唔顯示訴訟各方）。")
+        .description("全部法院已解析排期，每頁三個。按箭嘴翻頁，按法院開啟案號搜尋；附件請看官方原頁。")
         .supportedFamilies(withExtraLargePortrait([.systemLarge, .systemExtraLarge]))
     }
 }
@@ -113,74 +170,119 @@ struct CourtWidgetView: View {
     let entry: CourtEntry
     @Environment(\.widgetFamily) private var family
 
-    private var minute: Int? { CourtList.minuteOfDay(now: entry.date, listDate: entry.listDate) }
-
-    /// 所有法院合共畫幾多行聆訊。
-    private var rowBudget: Int { family == .systemLarge ? 10 : 24 }
+    private var routeDate: String { CourtList.isoDate(entry.listDate) }
 
     var body: some View {
-        let rows = max(1, rowBudget / max(entry.days.count, 1))
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: "building.columns.fill").foregroundStyle(.secondary)
-                Text("法院 \(CourtList.dayText(entry.listDate, now: entry.date))")
-                    .font(.system(size: 13, weight: .bold))
+                Link(destination: AppRoute.court(code: nil, date: routeDate).url) {
+                    Label("法院案件表", systemImage: "building.columns.fill")
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .buttonStyle(.plain)
                 Spacer(minLength: 0)
                 ThemeButton()
-                RefreshButton(updatedAt: entry.updatedAt)
+                if let updatedAt = entry.updatedAt {
+                    RefreshButton(updatedAt: updatedAt)
+                        .accessibilityLabel("本頁最早成功讀取時間；重新整理")
+                } else {
+                    Button(intent: RefreshIntent()) { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("重新讀取案件表")
+                }
             }
-            if entry.days.isEmpty {
-                Text("長按 widget →「編輯小工具」揀法院")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(entry.days, id: \.code) { day in
-                CourtSection(day: day, minute: minute, rows: rows)
+            Text("排期 \(CourtList.dayText(entry.listDate, now: entry.date))")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            ForEach(entry.summaries, id: \.code) { summary in
+                Link(destination: AppRoute.court(code: summary.code, date: routeDate).url) {
+                    CourtSection(summary: summary, date: entry.date, rows: family == .systemLarge ? 1 : 2)
+                }
+                .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                pageButton(direction: -1, image: "chevron.left", label: "上一頁")
+                Text("\(entry.page + 1) / \(entry.pageCount)").monospacedDigit()
+                pageButton(direction: 1, image: "chevron.right", label: "下一頁")
+                Spacer(minLength: 0)
+                Text("附件請看原頁").lineLimit(1)
+                    .accessibilityLabel(CourtList.sourceNotice)
+            }
+            .font(.system(size: 11)).foregroundStyle(.secondary)
         }
+        .widgetURL(AppRoute.court(code: nil, date: routeDate).url)
+    }
+
+    private func pageButton(direction: Int, image: String, label: String) -> some View {
+        Button(intent: CourtPageIntent(configurationKey: entry.configurationKey, currentPage: entry.page,
+                                      direction: direction, pageCount: entry.pageCount)) {
+            Image(systemName: image).frame(width: 28, height: 24).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(entry.pageCount <= 1)
+        .accessibilityLabel(label)
     }
 }
 
 private struct CourtSection: View {
-    let day: CourtDay
-    let minute: Int?
+    let summary: CourtSummary
+    let date: Date
     let rows: Int
 
     var body: some View {
-        let upcoming = day.upcoming(afterMinute: minute)
         GlassCard(padding: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(day.name).font(.system(size: 12, weight: .semibold))
-                    if day.error {
-                        Badge(text: "讀取失敗", color: .orange)
-                    } else if day.total == 0 {
-                        Badge(text: "未有案件表")
-                    } else {
-                        Badge(text: "\(day.total) 宗", color: .blue)
-                    }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(CourtCatalog.name(summary.code)).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                     Spacer(minLength: 0)
-                    if let next = upcoming.first {
-                        Text("下一庭 \(next.timeText)")
-                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(statusText)
+                        .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(statusColor.opacity(0.18), in: Capsule())
+                        .widgetAccentable()
+                        .accessibilityLabel(summary.metadata.label(total: summary.total, error: summary.error, at: date))
                 }
-                ForEach(Array(upcoming.prefix(max(rows - 1, 1)).enumerated()), id: \.offset) { _, item in
-                    HStack(spacing: 6) {
-                        Text(item.timeText).monospacedDigit().frame(width: 38, alignment: .leading)
-                        Text(item.room).lineLimit(1).frame(width: 52, alignment: .leading)
+                ForEach(Array(summary.rows.prefix(rows).enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 5) {
+                        Text(item.timeText).monospacedDigit()
+                        Text(item.room).lineLimit(1)
                         Text(item.caseNo).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text(item.judge).lineLimit(1).foregroundStyle(.secondary)
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                 }
-                if !day.error, day.total > 0, upcoming.isEmpty {
-                    Text("今日聆訊已完").font(.system(size: 10)).foregroundStyle(.secondary)
+                if summary.rows.isEmpty {
+                    Text(emptyText).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                        .accessibilityLabel(summary.metadata.failure ?? emptyText)
                 }
+                Text(freshnessText).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
+    }
+
+    private var statusColor: Color {
+        summary.error || summary.metadata.isStale(at: date) ? .orange : .blue
+    }
+
+    private var statusText: String {
+        if summary.error { return summary.metadata.fetchedAt == nil ? "讀取失敗" : "更新失敗・舊資料" }
+        if summary.metadata.source == .unavailable { return "未確認" }
+        if summary.metadata.isStale(at: date) { return "快取待更新" }
+        return summary.metadata.source == .officialNoList ? "官方未提供" : "解析 \(summary.total) 宗"
+    }
+
+    private var emptyText: String {
+        if summary.error { return "未能更新案件表，按此查看詳情" }
+        if summary.metadata.source == .officialNoList { return "原頁未提供；不代表沒有聆訊" }
+        if summary.unknownTimeCount > 0 { return "未有較後排期；\(summary.unknownTimeCount) 宗時間未列" }
+        return "未有較後已解析排期；非即時庭況"
+    }
+
+    private var freshnessText: String {
+        guard let fetched = summary.metadata.fetchedAt else { return "未讀取成功・公布未提供" }
+        let calendar = ICalendar.hongKong
+        let stamp = "\(calendar.component(.month, from: fetched))/\(calendar.component(.day, from: fetched)) \(Formatting.clock(fetched))"
+        return "讀取 \(stamp)・\(summary.metadata.publishedAt == nil ? "公布未提供" : "公布時間見詳情")"
     }
 }

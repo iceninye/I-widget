@@ -1,7 +1,7 @@
 import Foundation
 
 /// 司法機構「法庭日誌」嘅一個案件表（view.jsp 嘅法院代碼）。
-struct CourtInfo: Equatable {
+struct CourtInfo: Equatable, Sendable {
     let code: String
     let name: String
 }
@@ -30,13 +30,26 @@ enum CourtCatalog {
         CourtInfo(code: "CRC", name: "死因裁判法庭"),
     ]
 
+    static let magistrateCodes: Set<String> = ["ETNMAG", "KCMAG", "KTMAG", "WKMAG", "STMAG", "FLMAG", "TMMAG"]
+    static let allCodes = all.map(\.code).filter { $0 != "ALLMAG" }
+
+    static func selection(_ codes: [String]) -> [String] {
+        guard !codes.isEmpty else { return allCodes }
+        let known = Set(all.map(\.code))
+        var seen = Set<String>()
+        let unique = codes.filter { known.contains($0) && seen.insert($0).inserted }
+        guard seen.contains("ALLMAG") else { return unique }
+        if magistrateCodes.isSubset(of: seen) { return unique.filter { $0 != "ALLMAG" } }
+        return unique.filter { !magistrateCodes.contains($0) }
+    }
+
     static func name(_ code: String) -> String {
         all.first { $0.code == code }?.name ?? code
     }
 }
 
 /// 一個聆訊。刻意唔載入訴訟各方：網頁話明個人資料不可再用，所以只留法庭、時間、案件編號同法官。
-struct CourtCase: Codable, Equatable {
+struct CourtCase: Codable, Equatable, Sendable {
     var room: String
     var judge: String
     var minutes: Int?
@@ -48,17 +61,42 @@ struct CourtCase: Codable, Equatable {
     }
 }
 
-/// 一個法院一日嘅案件表。`error` 代表讀取失敗而且冇快取。
-struct CourtDay: Codable, Equatable {
+enum CourtSourceStatus: String, Codable, Sendable {
+    case parsed, officialNoList, unavailable
+}
+
+struct CourtMetadata: Codable, Equatable, Sendable {
+    var source: CourtSourceStatus = .parsed
+    var publishedAt: Date? = nil
+    var fetchedAt: Date? = nil
+    var attemptedAt: Date? = nil
+    var failure: String? = nil
+
+    func isStale(at now: Date) -> Bool {
+        guard let fetchedAt else { return true }
+        return failure != nil || now < fetchedAt || now.timeIntervalSince(fetchedAt) >= 600
+    }
+
+    func label(total: Int, error: Bool, at now: Date) -> String {
+        if error { return fetchedAt == nil ? "讀取失敗" : "更新失敗・舊資料" }
+        if source == .unavailable { return "案件表未能確認" }
+        if isStale(at: now) { return "快取・待更新" }
+        return source == .officialNoList ? "官方未提供案件表" : "已解析 \(total) 宗"
+    }
+}
+
+/// `error` 亦會標記更新失敗後保留嘅舊快取；唔代表當日冇聆訊。
+struct CourtDay: Codable, Equatable, Sendable {
     var code: String
     var dateCode: String
     var total: Int
     var cases: [CourtCase]
     var error = false
+    var metadata = CourtMetadata()
 
     var name: String { CourtCatalog.name(code) }
 
-    /// 仲未完嘅聆訊（開始後 20 分鐘內當仲進行緊）；`now` 為當日分鐘數，`nil` 代表唔係今日，全部都算。
+    /// 只列時間嚴格晚於目前分鐘嘅排期；未知時間唔當作即將開庭。
     func upcoming(afterMinute now: Int?) -> [CourtCase] {
         let sorted = cases.enumerated().sorted { lhs, rhs in
             switch (lhs.element.minutes, rhs.element.minutes) {
@@ -69,7 +107,77 @@ struct CourtDay: Codable, Equatable {
             }
         }.map(\.element)
         guard let now else { return sorted }
-        return sorted.filter { ($0.minutes ?? Int.max) >= now - 20 }
+        return sorted.filter { $0.minutes.map { $0 > now } ?? false }
+    }
+}
+
+/// Timeline 只保留可見兩行及數量／來源狀態，唔複製整份案件表。
+struct CourtSummary: Equatable, Sendable {
+    let code: String
+    let dateCode: String
+    let total: Int
+    let rows: [CourtCase]
+    let unknownTimeCount: Int
+    let error: Bool
+    let metadata: CourtMetadata
+
+    init(day: CourtDay, at date: Date, listDate: Date) {
+        code = day.code
+        dateCode = day.dateCode
+        total = day.total
+        rows = Array(day.upcoming(afterMinute: CourtList.minuteOfDay(now: date, listDate: listDate)).prefix(2))
+        unknownTimeCount = day.cases.filter { $0.minutes == nil }.count
+        error = day.error
+        metadata = day.metadata
+    }
+}
+
+struct CourtPageState: Codable, Equatable, Sendable {
+    var page: Int = 0
+    var anchoredAt: Date
+
+    func page(at date: Date, count: Int, autoRotate: Bool) -> Int {
+        let steps = autoRotate ? Int(max(0, date.timeIntervalSince(anchoredAt)) / CourtPaging.interval) : 0
+        return CourtPaging.normalized(page + steps, count: count)
+    }
+}
+
+enum CourtPaging {
+    static let courtsPerPage = 3
+    static let interval: TimeInterval = 600
+
+    static func pageCount(for courtCount: Int) -> Int {
+        max(1, (max(0, courtCount) + courtsPerPage - 1) / courtsPerPage)
+    }
+
+    static func normalized(_ page: Int, count: Int) -> Int {
+        let count = max(1, count)
+        return ((page % count) + count) % count
+    }
+
+    static func indices(page: Int, courtCount: Int) -> Range<Int> {
+        let start = normalized(page, count: pageCount(for: courtCount)) * courtsPerPage
+        return start..<min(start + courtsPerPage, max(0, courtCount))
+    }
+
+    static func configurationKey(codes: [String], autoRotate: Bool) -> String {
+        "court.pages.v1.\(CourtCatalog.selection(codes).joined(separator: ".")).\(autoRotate)"
+    }
+
+    static func dates(now: Date, state: CourtPageState, autoRotate: Bool) -> [Date] {
+        let horizon = now.addingTimeInterval(12 * interval)
+        let elapsed = max(0, now.timeIntervalSince(state.anchoredAt))
+        let next = autoRotate ? state.anchoredAt.addingTimeInterval((floor(elapsed / interval) + 1) * interval)
+            : now.addingTimeInterval(interval)
+        var dates = [now]
+        for index in 0..<12 {
+            let date = next.addingTimeInterval(Double(index) * interval)
+            if date < horizon { dates.append(date) }
+        }
+        let calendar = ICalendar.hongKong
+        if let boundary = calendar.nextDate(after: now, matching: DateComponents(hour: 18, minute: 30), matchingPolicy: .nextTime),
+           boundary < horizon { dates.append(boundary) }
+        return Array(Set(dates)).sorted()
     }
 }
 
@@ -120,14 +228,12 @@ enum CourtList {
             }
 
             let fields: Fields
-            var positional = false
             if columns[.caseNo] != nil, raw.count == headerCount {
                 func at(_ column: Column) -> String? {
                     guard let index = columns[column], index < raw.count, !raw[index].isEmpty else { return nil }
                     return raw[index]
                 }
                 fields = (at(.court), at(.judge), at(.time), at(.caseNo))
-                positional = true
             } else {
                 fields = classify(cells, expectRoom: columns[.court] != nil, expectJudge: columns[.judge] != nil)
             }
@@ -139,7 +245,7 @@ enum CourtList {
             }
             if let value = fields.judge { judge = chinesePart(value) }
             if let value = fields.time, let parsed = parseTime(value) { minutes = parsed }
-            guard let caseNo = fields.caseNo, !positional || caseNo.contains(where: \.isNumber) else { continue }
+            guard let caseNo = fields.caseNo, firstMatch(caseNoPattern, in: caseNo) != nil else { continue }
             cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo)))
         }
         return cases
@@ -229,10 +335,7 @@ enum CourtList {
 
     /// 案件編號格有時夾住備註（死因庭：`CCDI-269/2022(MC) [5/7]# 沒有陪審員…`），只留案號；合併案件（多個案號）唔拆。
     static func trimCaseNo(_ text: String) -> String {
-        guard let match = caseTrailPattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let rest = Range(match.range(at: 2), in: text), let head = Range(match.range(at: 1), in: text),
-              firstMatch(caseNoPattern, in: String(text[rest])) == nil else { return text }
-        return String(text[head])
+        matches(caseIdentifierPattern, in: text).joined(separator: " ")
     }
 
     private static func firstMatch(_ regex: NSRegularExpression, in text: String) -> NSTextCheckingResult? {
@@ -245,8 +348,8 @@ enum CourtList {
     )
     private static let caseNoPattern = try! NSRegularExpression(pattern: "[A-Z]{2,}[\\s-]*\\d+/\\d{4}")
     private static let roomPattern = try! NSRegularExpression(pattern: "^第\\s*\\d+\\s*(?:法)?庭")
-    private static let caseTrailPattern = try! NSRegularExpression(
-        pattern: "^(.*?[A-Z]{2,}[\\s-]*\\d+/\\d{4}(?:\\([A-Z]+\\))?(?:\\s*\\[\\d+/\\d+(?:\\+\\d+)?\\]#*)?)\\s+(\\S.*)$"
+    private static let caseIdentifierPattern = try! NSRegularExpression(
+        pattern: "[A-Z]{2,}[\\s-]*\\d+/\\d{4}(?:\\([A-Z]+\\))?(?:\\s*\\[\\d+/\\d+(?:\\+\\d+)?\\]#*)?"
     )
 
     private static let rowPattern = try! NSRegularExpression(pattern: "<tr[\\s>].*?</tr>", options: [.caseInsensitive, .dotMatchesLineSeparators])
@@ -337,6 +440,20 @@ enum CourtList {
         return String(format: "%02d%02d%04d", parts.day ?? 0, parts.month ?? 0, parts.year ?? 0)
     }
 
+    static func isoDate(_ day: Date, calendar: Calendar = ICalendar.hongKong) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    static func date(fromISO value: String, calendar: Calendar = ICalendar.hongKong) -> Date? {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
+              let date = calendar.date(from: DateComponents(year: year, month: month, day: day)),
+              isoDate(date, calendar: calendar) == value else { return nil }
+        return date
+    }
+
     /// 當日分鐘數；唔係今日就 `nil`。
     static func minuteOfDay(now: Date, listDate: Date, calendar: Calendar = ICalendar.hongKong) -> Int? {
         guard calendar.isDate(now, inSameDayAs: listDate) else { return nil }
@@ -360,48 +477,220 @@ enum CourtList {
     /// 網站要瀏覽器嘅 User-Agent，否則回 404。
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
-    private static func fetch(_ url: URL) async throws -> String {
-        var request = URLRequest(url: url, timeoutInterval: 12)
+    private static func fetch(_ url: URL, timeout: TimeInterval) async throws -> String {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://e-services.judiciary.hk/dcl/index.jsp?lang=tc", forHTTPHeaderField: "Referer")
         request.setValue("zh-HK,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count < 4_000_000 else {
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count < 4_000_000,
+              let html = String(data: data, encoding: .utf8) else {
             throw URLError(.badServerResponse)
         }
-        return String(decoding: data, as: UTF8.self)
+        return html
     }
 
-    private static func cacheKey(_ code: String, _ dateCode: String) -> String { "court.\(code).\(dateCode)" }
+    static let sourceNotice = "只顯示公開網頁中已解析的排期；附件、批量案件或未識別內容可能未列出。並非完整出庭紀錄，請以司法機構原頁及附件為準。不顯示訴訟各方。"
 
-    /// 10 分鐘內嘅快取直接用；讀取失敗就用舊快取，冇快取先標記 error。
-    static func load(code: String, day: Date, now: Date) async -> CourtDay {
-        let dateCode = dateCode(day)
-        let key = cacheKey(code, dateCode)
-        if let fresh = DataCache.fresh(CourtDay.self, key: key, maxAge: 10 * 60, now: now) { return fresh }
-        if let url = url(code: code, dateCode: dateCode), let html = try? await fetch(url) {
-            let cases = parse(html)
-            let result = CourtDay(code: code, dateCode: dateCode, total: cases.count, cases: Array(cases.prefix(300)))
-            DataCache.save(result, key: key, stamped: now)
+    enum LoadError: Error { case unrecognizedPage, mismatchedDate }
+
+    static func document(_ html: String, code: String, day: Date, fetchedAt: Date) throws -> CourtDay {
+        let excluded = try! NSRegularExpression(pattern: "<!--.*?-->|<(script|style)\\b[^>]*>.*?</\\1>", options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let content = replace(excluded, in: html, with: "")
+        // 只驗證明確標示嘅案件表日期，唔用案件行或頁尾日期推斷。
+        let labelledDate = try! NSRegularExpression(pattern: "(?:案件表日期|聆訊日期|Hearing Date|List Date)\\s*[:：]?\\s*(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})", options: .caseInsensitive)
+        let text = cleanText(content)
+        if let match = firstMatch(labelledDate, in: text) {
+            let ns = text as NSString
+            let sourceCode = String(format: "%02d%02d%04d", Int(ns.substring(with: match.range(at: 1))) ?? 0,
+                                    Int(ns.substring(with: match.range(at: 2))) ?? 0, Int(ns.substring(with: match.range(at: 3))) ?? 0)
+            guard sourceCode == dateCode(day) else { throw LoadError.mismatchedDate }
+        }
+        let cases = parse(content)
+        let noListStatements: Set<String> = [
+            "沒有案件表", "未有案件表", "暫無案件表", "沒有此日期的案件表", "此日期並無案件表", "找不到案件表",
+            "no court list", "no court list available", "no daily cause list available"
+        ]
+        let messages = try! NSRegularExpression(pattern: "<(p|div|td|th|center|body)\\b[^>]*>[^<]+</\\1>", options: .caseInsensitive)
+        let explicitNoList = matches(messages, in: content).contains {
+            noListStatements.contains(cleanText($0).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "。.!！ ")))
+        }
+        guard !cases.isEmpty || explicitNoList else { throw LoadError.unrecognizedPage }
+        return CourtDay(code: code, dateCode: dateCode(day), total: cases.count, cases: cases,
+                        metadata: CourtMetadata(source: cases.isEmpty ? .officialNoList : .parsed,
+                                                fetchedAt: fetchedAt, attemptedAt: fetchedAt))
+    }
+
+    static func failed(_ cached: CourtDay, message: String, at now: Date) -> CourtDay {
+        var result = cached
+        result.error = true
+        result.metadata.failure = message
+        result.metadata.attemptedAt = now
+        return result
+    }
+
+    /// 完整案件表存檔，唔再讀取舊版已截斷嘅 UserDefaults 快取。
+    static func load(code: String, day: Date, now: Date, forceReload: Bool = false, timeout: TimeInterval = 12) async -> CourtDay {
+        let saved = cached(code: code, day: day)
+        if !forceReload, !saved.error, !saved.metadata.isStale(at: now) { return saved }
+        guard !Task.isCancelled, timeout > 0 else {
+            return failed(saved, message: "本次更新未完成", at: now)
+        }
+        // 開始請求就記低輪次；即使首次失敗、逾時或 extension 被終止，下次亦會輪到其他法院。
+        var attempted = saved
+        attempted.metadata.attemptedAt = Date()
+        try? CourtFileCache.save(attempted)
+        do {
+            guard CourtCatalog.all.contains(where: { $0.code == code }), let url = url(code: code, dateCode: dateCode(day)) else {
+                throw URLError(.badURL)
+            }
+            let html = try await fetch(url, timeout: timeout)
+            try Task.checkCancellation()
+            let result = try document(html, code: code, day: day, fetchedAt: Date())
+            try Task.checkCancellation()
+            try? CourtFileCache.save(result)
+            return result
+        } catch {
+            let message: String
+            switch error {
+            case LoadError.unrecognizedPage: message = "未能識別案件表；請查看官方原頁及附件"
+            case LoadError.mismatchedDate: message = "來源案件表日期不符；未套用其他日期資料"
+            default: message = Task.isCancelled ? "更新已取消" : "未能讀取官方案件表，請稍後重試"
+            }
+            let result = failed(attempted, message: message, at: attempted.metadata.attemptedAt ?? now)
+            if !Task.isCancelled { try? CourtFileCache.save(result) }
             return result
         }
-        return DataCache.load(CourtDay.self, key: key) ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
     }
 
     static func cached(code: String, day: Date) -> CourtDay {
         let dateCode = dateCode(day)
-        return DataCache.load(CourtDay.self, key: cacheKey(code, dateCode)) ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+        return CourtFileCache.load(code: code, dateCode: dateCode)
+            ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true,
+                        metadata: CourtMetadata(source: .unavailable, failure: "未取得此日期的案件表"))
     }
 
-    static func loadAll(codes: [String], day: Date, now: Date) async -> [CourtDay] {
-        await withTaskGroup(of: (Int, CourtDay).self) { group in
-            for (index, code) in codes.enumerated() {
-                group.addTask { (index, await load(code: code, day: day, now: now)) }
+    /// 未嘗試嘅法院先行，其後按最後成功／嘗試時間排序；失敗亦消耗一輪，避免反覆重試而餓死後排。
+    /// 可見法院優先，但每三個位置留一個畀其他法院；可見頁全數卡住亦有背景請求可以推進。
+    static func loadOrder(cached: [CourtDay], visibleCodes: [String] = []) -> [Int] {
+        let visible = Set(visibleCodes)
+        let fair = cached.indices.sorted { lhs, rhs in
+            func servicedAt(_ index: Int) -> Date {
+                let metadata = cached[index].metadata
+                return max(metadata.fetchedAt ?? .distantPast, metadata.attemptedAt ?? .distantPast)
             }
-            var results: [(Int, CourtDay)] = []
-            for await item in group { results.append(item) }
-            return results.sorted { $0.0 < $1.0 }.map(\.1)
+            let a = servicedAt(lhs), b = servicedAt(rhs)
+            return a == b ? lhs < rhs : a < b
         }
+        let priority = fair.filter { visible.contains(cached[$0].code) }
+        let background = fair.filter { !visible.contains(cached[$0].code) }
+        var result: [Int] = []
+        var front = 0, back = 0
+        while front < priority.count || back < background.count {
+            for _ in 0..<2 where front < priority.count {
+                result.append(priority[front])
+                front += 1
+            }
+            if back < background.count {
+                result.append(background[back])
+                back += 1
+            }
+        }
+        return result
+    }
+
+    /// 最多三個請求；逐個回報，但輸出仍按原有選擇順序。timeout 係整批實際時間，唔係連線閒置上限。
+    static func loadAll(codes: [String], day: Date, now: Date, forceReload: Bool = false,
+                        timeout: TimeInterval? = nil, visibleCodes: [String] = [],
+                        onLoaded: (@Sendable (CourtDay) async -> Void)? = nil) async -> [CourtDay] {
+        let saved = CourtCatalog.selection(codes).map { cached(code: $0, day: day) }
+        return await loadAll(cached: saved, now: now, timeout: timeout, visibleCodes: visibleCodes, onLoaded: onLoaded) { code in
+            await load(code: code, day: day, now: now, forceReload: forceReload)
+        }
+    }
+
+    /// 可注入支援取消嘅 loader，離線測試排隊／逾時；正式使用 URLSession.data(for:) 隨 task 取消請求。
+    static func loadAll(cached: [CourtDay], now: Date, timeout: TimeInterval? = nil, visibleCodes: [String] = [],
+                        onLoaded: (@Sendable (CourtDay) async -> Void)? = nil,
+                        loader: @escaping @Sendable (String) async -> CourtDay) async -> [CourtDay] {
+        let clock = ContinuousClock()
+        let deadline = timeout.map { clock.now.advanced(by: .seconds(max(0, $0))) }
+        let order = loadOrder(cached: cached, visibleCodes: visibleCodes)
+        // 獨立計時 task 取消整個 worker，唔使等 onLoaded 返回先取消在途 URLSession 請求。
+        return await withTaskGroup(of: [CourtDay]?.self) { race in
+            race.addTask {
+                await withTaskGroup(of: (Int, CourtDay).self) { group in
+                    var next = 0
+                    var results: [Int: CourtDay] = [:]
+                    func canEnqueue() -> Bool {
+                        !Task.isCancelled && (deadline.map { clock.now < $0 } ?? true)
+                    }
+                    func enqueue(_ index: Int) {
+                        group.addTask { (index, await loader(cached[index].code)) }
+                    }
+                    while next < min(3, order.count), canEnqueue() {
+                        enqueue(order[next])
+                        next += 1
+                    }
+                    for await (index, result) in group {
+                        results[index] = result
+                        if !Task.isCancelled { await onLoaded?(result) }
+                        if next < order.count, canEnqueue() {
+                            enqueue(order[next])
+                            next += 1
+                        }
+                    }
+                    return cached.indices.map { index in
+                        results[index] ?? failed(cached[index], message: "本次更新未完成", at: now)
+                    }
+                }
+            }
+            if let deadline {
+                race.addTask {
+                    try? await clock.sleep(until: deadline)
+                    return nil
+                }
+            }
+            while let result = await race.next() {
+                // 正常完成亦要取消 timer，唔可以等足剩餘 deadline 先離開 task group。
+                race.cancelAll()
+                if let result { return result }
+            }
+            return cached
+        }
+    }
+}
+
+/// App 同 extension 各自沙盒嘅完整快取；唔需要改 App Group 設定。
+enum CourtFileCache {
+    static var directory: URL {
+        (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("CourtSchedules-v1", isDirectory: true)
+    }
+
+    private static func file(code: String, dateCode: String, directory: URL) -> URL? {
+        guard CourtCatalog.all.contains(where: { $0.code == code }), dateCode.count == 8,
+              dateCode.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return directory.appendingPathComponent("\(code)-\(dateCode).json")
+    }
+
+    private static func isCacheable(_ value: CourtDay) -> Bool {
+        value.total == value.cases.count && (value.metadata.fetchedAt != nil
+            || (value.error && value.metadata.source == .unavailable && value.cases.isEmpty && value.metadata.attemptedAt != nil))
+    }
+
+    static func load(code: String, dateCode: String, directory: URL = Self.directory) -> CourtDay? {
+        guard let file = file(code: code, dateCode: dateCode, directory: directory),
+              let data = try? Data(contentsOf: file), let value = try? JSONDecoder().decode(CourtDay.self, from: data),
+              value.code == code, value.dateCode == dateCode, isCacheable(value) else { return nil }
+        return value
+    }
+
+    static func save(_ value: CourtDay, directory: URL = Self.directory) throws {
+        guard let file = file(code: value.code, dateCode: value.dateCode, directory: directory),
+              isCacheable(value) else { throw URLError(.cannotWriteToFile) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(value).write(to: file, options: .atomic)
     }
 }

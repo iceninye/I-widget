@@ -26,7 +26,7 @@ struct InfoConfigIntent: WidgetConfigurationIntent {
 
 /// 今日咭同資訊兩個 widget 共用嘅 provider：每 30 分鐘重讀一次（一日 48 次，喺 WidgetKit 預算內）；
 /// 中間每 10 分鐘一個 entry，等開機時間、更份進度條同香港午夜／04:00 轉日都會自己更新。
-/// 倒數用系統計時字，唔使 entry。今日咭只讀更份同學校日程，資訊只讀天氣、黃金、VPS 等，各自慳流量。
+/// 倒數用系統計時字，唔使 entry。今日咭只讀更份，資訊獨立讀學校日程同環境資料。
 struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelineProvider {
     enum Part { case today, info }
 
@@ -49,7 +49,8 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         let reading = Self.recordBattery(stats, now: now)
         return OverviewEntry(
             date: now, stats: stats, battery: reading.estimate, info: .cached(now: now),
-            schedule: .cached(token: config.rosterToken), vps: .cached(url: config.statusURL, token: config.vpsToken), updatedAt: now,
+            schedule: part == .today ? .cached(token: config.rosterToken) : .cachedSchool(),
+            vps: .cached(url: config.statusURL, token: config.vpsToken), updatedAt: now,
             batteryRate: reading.rate, flips: FlipState.load(), theme: WidgetTheme.load()
         )
     }
@@ -66,16 +67,17 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         // 剛剛撳咗資料格反轉：用快取即刻畫，唔使等上網。
         let justFlipped = DataCache.load(Date.self, key: "flipAt").map { now.timeIntervalSince($0) < 20 } ?? false
         var loadedInfo = ExtraInfo.cached(now: now)
-        var loadedSchedule = ScheduleData.cached(token: config.rosterToken)
+        var loadedSchedule = part == .today ? ScheduleData.cached(token: config.rosterToken) : ScheduleData.cachedSchool()
         var loadedVPS = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         if !justFlipped {
             switch part {
             case .today:
-                loadedSchedule = await ScheduleData.load(token: config.rosterToken, now: now)
+                loadedSchedule = await ScheduleData.load(token: config.rosterToken, now: now, includeSchool: false)
             case .info:
                 async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
                 async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now)
-                (loadedInfo, loadedVPS) = await (info, vps)
+                async let school = ScheduleData.schoolOnly(now: now)
+                (loadedInfo, loadedVPS, loadedSchedule) = await (info, vps, school)
             }
             DataCache.save(now, key: "dataAt")
         }
@@ -144,12 +146,13 @@ struct IWidget: Widget {
             provider: OverviewProvider<OverviewConfigIntent>(part: .today) { .init(rosterToken: $0.rosterToken) }
         ) { entry in
             TodayWidgetView(entry: entry)
+                .widgetURL(AppRoute.today.url)
                 .environment(\.widgetTheme, entry.theme)
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("今日咭")
-        .description("今日更份、未來 7 日、本週概況、明日同學校日程。")
-        .supportedFamilies(withExtraLargePortrait([.systemMedium, .systemLarge, .systemExtraLarge, .accessoryInline, .accessoryRectangular]))
+        .description("中尺寸今日更份、上下班時間及明日摘要；撳入查看更份詳情。")
+        .supportedFamilies([.systemMedium, .accessoryInline, .accessoryRectangular])
     }
 }
 
@@ -163,11 +166,12 @@ struct InfoWidget: Widget {
             provider: OverviewProvider<InfoConfigIntent>(part: .info) { .init(statusURL: $0.statusURL, vpsToken: $0.vpsToken) }
         ) { entry in
             InfoWidgetView(entry: entry)
+                .widgetURL(AppRoute.info.url)
                 .environment(\.widgetTheme, entry.theme)
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("各項資訊")
-        .description("天氣警告、屯馬綫、電量、儲存、天氣、黃金、系統版本同 VPS。")
+        .description("香港天氣、AQHI、學校日程；撳入查看預報、財經及裝置詳情。")
         .supportedFamilies(withExtraLargePortrait([.systemLarge, .systemExtraLarge, .accessoryCircular]))
     }
 }

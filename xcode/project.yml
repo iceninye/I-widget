@@ -30,6 +30,10 @@ targets:
       path: iWidget/Info.plist
       properties:
         CFBundleDisplayName: i-widget
+        CFBundleURLTypes:
+          - CFBundleURLName: com.iceninye.i-widget
+            CFBundleURLSchemes:
+              - iwidget
         UILaunchScreen: {}
         NSLocationWhenInUseUsageDescription: 用你嘅大約位置查天氣預報，位置唔會上傳到自己嘅伺服器。
         UISupportedInterfaceOrientations:
@@ -71,6 +75,7 @@ targets:
       - path: Shared/BatteryStyle.swift
       - path: Shared/RebootHint.swift
       - path: Shared/WeatherModels.swift
+      - path: Shared/EnvironmentModels.swift
       - path: Shared/GoldModels.swift
       - path: Shared/OSVersion.swift
       - path: Shared/InfoFormatting.swift
@@ -82,8 +87,10 @@ targets:
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift
+      - path: Shared/ExtraInfo.swift
       - path: Shared/CourtList.swift
       - path: Shared/DataCache.swift
+      - path: Shared/AppRoute.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests

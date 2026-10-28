@@ -1,109 +1,238 @@
 import Foundation
 
 struct WeatherDay: Codable, Equatable {
+    var date: String
     var code: Int
     var minTemp: Double
     var maxTemp: Double
-    var rainChance: Int?
-    var uvIndex: Double?
+    var rainChance: String?
+    var wind: String
+    var summary: String
 }
 
 struct WeatherSnapshot: Codable, Equatable {
     var currentTemp: Double?
-    var today: WeatherDay
-    var tomorrow: WeatherDay?
+    var currentCode: Int?
+    var humidity: Double?
+    var uvIndex: Double?
+    var station: String
+    var observedAt: Date?
+    var forecast: [WeatherDay]
+    var forecastUpdatedAt: Date?
     var fetchedAt: Date
 
-    static let sample = WeatherSnapshot(
-        currentTemp: 26.4,
-        today: WeatherDay(code: 3, minTemp: 24, maxTemp: 28, rainChance: 20, uvIndex: 6),
-        tomorrow: WeatherDay(code: 61, minTemp: 23, maxTemp: 27, rainChance: 70),
-        fetchedAt: Date()
-    )
-}
-
-/// Open-Meteo：免費、免 key（非商業用途）。今日同明日各一行。
-enum OpenMeteo {
-    static func url(latitude: Double, longitude: Double) -> URL? {
-        var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")
-        components?.queryItems = [
-            URLQueryItem(name: "latitude", value: String(format: "%.3f", latitude)),
-            URLQueryItem(name: "longitude", value: String(format: "%.3f", longitude)),
-            URLQueryItem(name: "current", value: "temperature_2m"),
-            URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"),
-            URLQueryItem(name: "timezone", value: "auto"),
-            URLQueryItem(name: "forecast_days", value: "2"),
-        ]
-        return components?.url
+    func day(on date: Date) -> WeatherDay? {
+        let key = HKODate.dayKey(date)
+        return forecast.first { $0.date == key }
     }
 
-    private struct Response: Decodable {
-        struct Current: Decodable { let temperature_2m: Double? }
-        struct Daily: Decodable {
-            let weather_code: [Double?]
-            let temperature_2m_max: [Double?]
-            let temperature_2m_min: [Double?]
-            let precipitation_probability_max: [Double?]?
-            let uv_index_max: [Double?]?
-        }
-        let current: Current?
-        let daily: Daily
-    }
-
-    static func parse(_ data: Data, now: Date = Date()) throws -> WeatherSnapshot {
-        let response = try JSONDecoder().decode(Response.self, from: data)
-        let daily = response.daily
-
-        func day(_ index: Int) -> WeatherDay? {
-            guard index < daily.weather_code.count,
-                  index < daily.temperature_2m_max.count,
-                  index < daily.temperature_2m_min.count,
-                  let code = daily.weather_code[index],
-                  let high = daily.temperature_2m_max[index],
-                  let low = daily.temperature_2m_min[index] else { return nil }
-            var rain: Int?
-            if let chances = daily.precipitation_probability_max, index < chances.count, let value = chances[index] {
-                rain = Int(value.rounded())
-            }
-            var uv: Double?
-            if let values = daily.uv_index_max, index < values.count { uv = values[index] }
-            return WeatherDay(code: Int(code), minTemp: low, maxTemp: high, rainChance: rain, uvIndex: uv)
-        }
-
-        guard let today = day(0) else { throw URLError(.cannotParseResponse) }
-        return WeatherSnapshot(currentTemp: response.current?.temperature_2m, today: today, tomorrow: day(1), fetchedAt: now)
+    static var sample: WeatherSnapshot {
+        let now = Date()
+        return WeatherSnapshot(
+            currentTemp: 26, currentCode: 51, humidity: 71, uvIndex: 6,
+            station: HKOWeather.station, observedAt: now,
+            forecast: [WeatherDay(date: HKODate.dayKey(now), code: 51, minTemp: 25, maxTemp: 29,
+                                  rainChance: "低", wind: "東風4至5級。", summary: "部分時間有陽光。")],
+            forecastUpdatedAt: now, fetchedAt: now
+        )
     }
 }
 
-/// WMO 天氣代碼 → SF Symbol 同中文。
+// Current and forecast are cached independently; a failed endpoint cannot erase the other.
+struct HKOCurrentWeather: Codable, Equatable {
+    var currentTemp: Double?
+    var currentCode: Int?
+    var humidity: Double?
+    var uvIndex: Double?
+    var station: String
+    var observedAt: Date?
+    var fetchedAt: Date
+}
+
+struct HKOForecast: Codable, Equatable {
+    var days: [WeatherDay]
+    var updatedAt: Date?
+    var fetchedAt: Date
+}
+
+enum HKODate {
+    static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Hong_Kong")!
+        return calendar
+    }
+
+    static func formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = format
+        formatter.isLenient = false
+        return formatter
+    }
+
+    static func dayKey(_ date: Date) -> String { formatter("yyyy-MM-dd").string(from: date) }
+
+    static func parse(_ value: String?, format: String) -> Date? {
+        guard let value else { return nil }
+        let formatter = formatter(format)
+        guard let date = formatter.date(from: value), formatter.string(from: date) == value else { return nil }
+        return date
+    }
+
+    static func iso(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: value)
+    }
+}
+
+enum HKOWeather {
+    static let station = "香港天文台"
+    static let currentURL = URL(string: "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=tc")!
+    static let forecastURL = URL(string: "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=tc")!
+    static let currentCacheKey = "hko.rhrread.observatory.v1"
+    static let forecastCacheKey = "hko.fnd9day.v1"
+
+    private struct Measurement: Decodable {
+        var place: String
+        var value: Double?
+    }
+
+    private struct Readings: Decodable {
+        var data: [Measurement]
+        var recordTime: String?
+    }
+
+    private struct CurrentResponse: Decodable {
+        var temperature: Readings?
+        var humidity: Readings?
+        var icon: [Int]?
+        var uvindex: Readings?
+
+        enum CodingKeys: String, CodingKey { case temperature, humidity, icon, uvindex }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            temperature = try values.decodeIfPresent(Readings.self, forKey: .temperature)
+            humidity = try values.decodeIfPresent(Readings.self, forKey: .humidity)
+            icon = try values.decodeIfPresent([Int].self, forKey: .icon)
+            // HKO publishes an empty string at night, not a zero UV reading.
+            uvindex = try? values.decode(Readings.self, forKey: .uvindex)
+        }
+    }
+
+    static func parseCurrent(_ data: Data, now: Date = Date()) throws -> HKOCurrentWeather {
+        let response = try JSONDecoder().decode(CurrentResponse.self, from: data)
+        let temperature = response.temperature?.data.first { $0.place == station }?.value
+        let humidity = response.humidity?.data.first { $0.place == station }?.value
+        let uv = response.uvindex?.data.first { $0.place == "京士柏" }?.value
+        let code = response.icon?.first
+        guard temperature != nil || humidity != nil || code != nil else { throw URLError(.cannotParseResponse) }
+        return HKOCurrentWeather(
+            currentTemp: temperature, currentCode: code,
+            humidity: humidity.flatMap { (0...100).contains($0) ? $0 : nil },
+            uvIndex: uv.flatMap { $0 >= 0 ? $0 : nil }, station: station,
+            observedAt: HKODate.iso(response.temperature?.recordTime) ?? HKODate.iso(response.humidity?.recordTime),
+            fetchedAt: now
+        )
+    }
+
+    static func parseForecast(_ data: Data, now: Date = Date()) throws -> HKOForecast {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = root["weatherForecast"] as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
+        struct Row: Decodable {
+            struct Temperature: Decodable { var value: Double }
+            var forecastDate: String
+            var ForecastIcon: Int
+            var forecastMintemp: Temperature
+            var forecastMaxtemp: Temperature
+            var forecastWind: String
+            var forecastWeather: String
+        }
+        var days: [WeatherDay] = []
+        for row in rows {
+            guard let rowData = try? JSONSerialization.data(withJSONObject: row),
+                  let value = try? JSONDecoder().decode(Row.self, from: rowData),
+                  let date = HKODate.parse(value.forecastDate, format: "yyyyMMdd"),
+                  value.forecastMintemp.value <= value.forecastMaxtemp.value else { continue }
+            let key = HKODate.dayKey(date)
+            guard !days.contains(where: { $0.date == key }) else { continue }
+            let psr = (row["PSR"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // PSR is categorical. Do not invent a percentage from a category.
+            let categories = ["低", "中低", "中", "中高", "高"]
+            days.append(WeatherDay(date: key, code: value.ForecastIcon,
+                                   minTemp: value.forecastMintemp.value, maxTemp: value.forecastMaxtemp.value,
+                                   rainChance: psr.flatMap { categories.contains($0) ? $0 : nil },
+                                   wind: value.forecastWind, summary: value.forecastWeather))
+        }
+        guard !days.isEmpty else { throw URLError(.cannotParseResponse) }
+        return HKOForecast(days: days.sorted { $0.date < $1.date }, updatedAt: HKODate.iso(root["updateTime"] as? String), fetchedAt: now)
+    }
+
+    static func snapshot(current: HKOCurrentWeather?, forecast: HKOForecast?) -> WeatherSnapshot? {
+        guard let fetchedAt = [current?.fetchedAt, forecast?.fetchedAt].compactMap({ $0 }).max() else { return nil }
+        return WeatherSnapshot(currentTemp: current?.currentTemp, currentCode: current?.currentCode,
+                               humidity: current?.humidity, uvIndex: current?.uvIndex,
+                               station: current?.station ?? station, observedAt: current?.observedAt,
+                               forecast: forecast?.days ?? [], forecastUpdatedAt: forecast?.updatedAt, fetchedAt: fetchedAt)
+    }
+}
+
+/// HKO icon numbers, not WMO weather codes.
 enum WeatherCode {
     static func symbol(_ code: Int) -> String {
         switch code {
-        case 0, 1: return "sun.max.fill"
-        case 2: return "cloud.sun.fill"
-        case 3: return "cloud.fill"
-        case 45, 48: return "cloud.fog.fill"
-        case 51, 53, 55, 56, 57: return "cloud.drizzle.fill"
-        case 61, 63, 66, 80, 81: return "cloud.rain.fill"
-        case 65, 67, 82: return "cloud.heavyrain.fill"
-        case 71, 73, 75, 77, 85, 86: return "cloud.snow.fill"
-        case 95, 96, 99: return "cloud.bolt.rain.fill"
-        default: return "cloud.fill"
+        case 50: return "sun.max.fill"
+        case 51, 52: return "cloud.sun.fill"
+        case 53, 54: return "cloud.sun.rain.fill"
+        case 60, 61: return "cloud.fill"
+        case 62: return "cloud.drizzle.fill"
+        case 63: return "cloud.rain.fill"
+        case 64: return "cloud.heavyrain.fill"
+        case 65: return "cloud.bolt.rain.fill"
+        case 70...75: return "moon.stars.fill"
+        case 76, 77: return "cloud.moon.fill"
+        case 80: return "wind"
+        case 81: return "sun.haze.fill"
+        case 82: return "humidity.fill"
+        case 83, 84: return "cloud.fog.fill"
+        case 85: return "sun.haze.fill"
+        case 90, 91: return "thermometer.sun.fill"
+        case 92, 93: return "thermometer.snowflake"
+        default: return "questionmark.circle"
         }
     }
 
     static func text(_ code: Int) -> String {
         switch code {
-        case 0: return "晴"
-        case 1: return "大致晴朗"
-        case 2: return "部分多雲"
-        case 3: return "多雲"
-        case 45, 48: return "霧"
-        case 51, 53, 55, 56, 57: return "毛毛雨"
-        case 61, 63, 66, 80, 81: return "有雨"
-        case 65, 67, 82: return "大雨"
-        case 71, 73, 75, 77, 85, 86: return "有雪"
-        case 95, 96, 99: return "雷暴"
+        case 50: return "陽光充沛"
+        case 51: return "間有陽光"
+        case 52: return "短暫陽光"
+        case 53: return "間有陽光幾陣驟雨"
+        case 54: return "短暫陽光有驟雨"
+        case 60: return "多雲"
+        case 61: return "密雲"
+        case 62: return "微雨"
+        case 63: return "雨"
+        case 64: return "大雨"
+        case 65: return "雷暴"
+        case 70...75: return "天色良好"
+        case 76: return "大致多雲"
+        case 77: return "天色大致良好"
+        case 80: return "大風"
+        case 81: return "乾燥"
+        case 82: return "潮濕"
+        case 83: return "霧"
+        case 84: return "薄霧"
+        case 85: return "煙霞"
+        case 90: return "熱"
+        case 91: return "暖"
+        case 92: return "涼"
+        case 93: return "冷"
         default: return "天氣不明"
         }
     }

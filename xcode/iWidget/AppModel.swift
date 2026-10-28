@@ -1,8 +1,6 @@
 import Foundation
 import SwiftUI
 
-/// App 內嘅設定同資料預覽。Widget 嘅設定存喺各自嘅 widget 入面，免費簽名冇 App Group 可以共用，
-/// 所以 app 要另外填一次 token，先預覽到更份同 VPS；唔填都睇到其他資料。
 enum AppSettings {
     static let rosterToken = "settings.rosterToken"
     static let vpsToken = "settings.vpsToken"

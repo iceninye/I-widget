@@ -1,7 +1,6 @@
-import CoreLocation
 import Foundation
 
-/// 要靠網絡或者定位先有嘅資料：天氣、黃金、最新 iOS 版本。每項各自失敗各自用快取。
+/// 網絡資料各自載入；每個來源失敗時獨立使用有效快取。
 struct ExtraInfo {
     var weather: WeatherSnapshot?
     var gold: GoldQuote?
@@ -12,28 +11,52 @@ struct ExtraInfo {
     var train: TrainStatus?
     var air: AirQuality?
     var fx: ExchangeRates?
+    var regional: RegionalConditions? = nil
+    var sun: SunTimes? = nil
+    var warningsFetchedAt: Date? = nil
+
+    func currentWarnings(at now: Date) -> [WeatherWarning]? {
+        guard let warningsFetchedAt, warningsFetchedAt <= now,
+              now.timeIntervalSince(warningsFetchedAt) < Self.liveMaxAge else { return nil }
+        return warnings
+    }
+
+    func currentTrain(at now: Date) -> TrainStatus? {
+        guard let train, train.fetchedAt <= now,
+              now.timeIntervalSince(train.fetchedAt) < Self.liveMaxAge else { return nil }
+        return train
+    }
 
     static let sample = ExtraInfo(
         weather: .sample, gold: .sample, latestOS: "27.0.2", updatedAt: Date(),
-        warnings: [WeatherWarning(text: "黃色暴雨", severe: false)], train: .sample, air: .sample, fx: .sample
+        warnings: [WeatherWarning(text: "黃色暴雨", severe: false)], train: .sample, air: .sample, fx: .sample,
+        regional: .sample, sun: .sample, warningsFetchedAt: Date()
     )
 
     /// 唔使網絡：讀返上次快取。
     static func cached(now: Date = Date()) -> ExtraInfo {
         ExtraInfo(
-            weather: DataCache.load(WeatherSnapshot.self, key: "weather"),
+            weather: HKOWeather.snapshot(
+                current: DataCache.fresh(HKOCurrentWeather.self, key: HKOWeather.currentCacheKey, maxAge: environmentMaxAge, now: now),
+                forecast: DataCache.fresh(HKOForecast.self, key: HKOWeather.forecastCacheKey, maxAge: forecastMaxAge, now: now)),
             gold: DataCache.load(GoldQuote.self, key: "gold"),
             latestOS: DataCache.load(String.self, key: "latestOS"),
             updatedAt: now,
             warnings: DataCache.fresh([WeatherWarning].self, key: "warnings", maxAge: liveMaxAge, now: now),
             train: DataCache.fresh(TrainStatus.self, key: "train", maxAge: liveMaxAge, now: now),
-            air: DataCache.load(AirQuality.self, key: "air"),
-            fx: DataCache.load(ExchangeRates.self, key: "fx")
+            air: DataCache.fresh(AirQuality.self, key: EPDAQHI.cacheKey, maxAge: environmentMaxAge, now: now),
+            fx: DataCache.load(ExchangeRates.self, key: "fx"),
+            regional: RegionalConditions.merged(
+                wind: DataCache.fresh(RegionalConditions.self, key: HKORegional.windCacheKey, maxAge: environmentMaxAge, now: now),
+                pressure: DataCache.fresh(RegionalConditions.self, key: HKORegional.pressureCacheKey, maxAge: environmentMaxAge, now: now)),
+            sun: cachedSun(now: now), warningsFetchedAt: DataCache.savedAt("warnings")
         )
     }
 
     /// 警告同列車狀況係「而家」資料：超過呢段時間冇更新就唔再顯示，免得見到舊警告。
     static let liveMaxAge: TimeInterval = 30 * 60
+    static let environmentMaxAge: TimeInterval = 2 * 3_600
+    static let forecastMaxAge: TimeInterval = 48 * 3_600
 
     /// 天氣同黃金每次 reload 都重讀（「即時更新」先有用）；最新 iOS 版本 6 小時一次。
     static func load(now: Date = Date()) async -> ExtraInfo {
@@ -44,23 +67,38 @@ struct ExtraInfo {
         async let train = loadTrain(now: now)
         async let air = loadAir(now: now)
         async let fx = loadFX(now: now)
+        async let regional = loadRegional(now: now)
+        async let sun = loadSun(now: now)
         return ExtraInfo(
             weather: await weather, gold: await gold, latestOS: await latestOS, updatedAt: now,
-            warnings: await warnings, train: await train, air: await air, fx: await fx
+            warnings: await warnings, train: await train, air: await air, fx: await fx,
+            regional: await regional, sun: await sun, warningsFetchedAt: DataCache.savedAt("warnings")
         )
     }
 
     private static func loadWeather(now: Date) async -> WeatherSnapshot? {
-        let coordinate = await WidgetLocation.coordinate()
+        async let current = loadCurrentWeather(now: now)
+        async let forecast = loadForecast(now: now)
+        return HKOWeather.snapshot(current: await current, forecast: await forecast)
+    }
+
+    private static func loadCurrentWeather(now: Date) async -> HKOCurrentWeather? {
         do {
-            guard let url = OpenMeteo.url(latitude: coordinate.latitude, longitude: coordinate.longitude) else {
-                throw URLError(.badURL)
-            }
-            let snapshot = try OpenMeteo.parse(try await Fetcher.data(from: url), now: now)
-            DataCache.save(snapshot, key: "weather")
-            return snapshot
+            let current = try HKOWeather.parseCurrent(try await Fetcher.data(from: HKOWeather.currentURL), now: now)
+            DataCache.save(current, key: HKOWeather.currentCacheKey, stamped: now)
+            return current
         } catch {
-            return DataCache.load(WeatherSnapshot.self, key: "weather")
+            return DataCache.fresh(HKOCurrentWeather.self, key: HKOWeather.currentCacheKey, maxAge: environmentMaxAge, now: now)
+        }
+    }
+
+    private static func loadForecast(now: Date) async -> HKOForecast? {
+        do {
+            let forecast = try HKOWeather.parseForecast(try await Fetcher.data(from: HKOWeather.forecastURL), now: now)
+            DataCache.save(forecast, key: HKOWeather.forecastCacheKey, stamped: now)
+            return forecast
+        } catch {
+            return DataCache.fresh(HKOForecast.self, key: HKOWeather.forecastCacheKey, maxAge: forecastMaxAge, now: now)
         }
     }
 
@@ -94,19 +132,62 @@ struct ExtraInfo {
         }
     }
 
-    /// 空氣質素 30 分鐘一次。
+    /// 本地快取 30 分鐘；來源為 EPD 一般監測站 AQHI。
     private static func loadAir(now: Date) async -> AirQuality? {
-        if let fresh = DataCache.fresh(AirQuality.self, key: "air", maxAge: 30 * 60, now: now) { return fresh }
-        let coordinate = await WidgetLocation.coordinate()
+        if let fresh = DataCache.fresh(AirQuality.self, key: EPDAQHI.cacheKey, maxAge: 30 * 60, now: now) { return fresh }
         do {
-            guard let url = OpenMeteoAir.url(latitude: coordinate.latitude, longitude: coordinate.longitude) else {
-                throw URLError(.badURL)
-            }
-            let air = try OpenMeteoAir.parse(try await Fetcher.data(from: url), now: now)
-            DataCache.save(air, key: "air", stamped: now)
+            let air = try EPDAQHI.parse(try await Fetcher.data(from: EPDAQHI.url), now: now)
+            DataCache.save(air, key: EPDAQHI.cacheKey, stamped: now)
             return air
         } catch {
-            return DataCache.load(AirQuality.self, key: "air")
+            return DataCache.fresh(AirQuality.self, key: EPDAQHI.cacheKey, maxAge: environmentMaxAge, now: now)
+        }
+    }
+
+    private static func loadRegional(now: Date) async -> RegionalConditions? {
+        async let wind = loadWind(now: now)
+        async let pressure = loadPressure(now: now)
+        return RegionalConditions.merged(wind: await wind, pressure: await pressure)
+    }
+
+    private static func loadWind(now: Date) async -> RegionalConditions? {
+        if let fresh = DataCache.fresh(RegionalConditions.self, key: HKORegional.windCacheKey, maxAge: 10 * 60, now: now) { return fresh }
+        do {
+            let wind = try HKORegional.parseWind(try await Fetcher.data(from: HKORegional.windURL), now: now)
+            DataCache.save(wind, key: HKORegional.windCacheKey, stamped: now)
+            return wind
+        } catch {
+            return DataCache.fresh(RegionalConditions.self, key: HKORegional.windCacheKey, maxAge: environmentMaxAge, now: now)
+        }
+    }
+
+    private static func loadPressure(now: Date) async -> RegionalConditions? {
+        if let fresh = DataCache.fresh(RegionalConditions.self, key: HKORegional.pressureCacheKey, maxAge: 10 * 60, now: now) { return fresh }
+        do {
+            let pressure = try HKORegional.parsePressure(try await Fetcher.data(from: HKORegional.pressureURL), now: now)
+            DataCache.save(pressure, key: HKORegional.pressureCacheKey, stamped: now)
+            return pressure
+        } catch {
+            return DataCache.fresh(RegionalConditions.self, key: HKORegional.pressureCacheKey, maxAge: environmentMaxAge, now: now)
+        }
+    }
+
+    private static func cachedSun(now: Date) -> SunTimes? {
+        let year = HKODate.calendar.component(.year, from: now)
+        return DataCache.load(HKOSolarYear.self, key: HKOSolar.cacheKey(year: year))?.day(on: now)
+    }
+
+    private static func loadSun(now: Date) async -> SunTimes? {
+        let year = HKODate.calendar.component(.year, from: now)
+        let key = HKOSolar.cacheKey(year: year)
+        if let cached = DataCache.fresh(HKOSolarYear.self, key: key, maxAge: 7 * 86_400, now: now),
+           let day = cached.day(on: now) { return day }
+        do {
+            let annual = try HKOSolar.parse(try await Fetcher.data(from: HKOSolar.url(year: year)), year: year, now: now)
+            DataCache.save(annual, key: key, stamped: now)
+            return annual.day(on: now)
+        } catch {
+            return cachedSun(now: now)
         }
     }
 
@@ -136,72 +217,5 @@ struct ExtraInfo {
         } catch {
             return DataCache.load(String.self, key: "latestOS")
         }
-    }
-}
-
-struct SavedCoordinate: Codable {
-    var latitude: Double
-    var longitude: Double
-}
-
-/// 取一次大約位置。未授權、逾時、失敗就用上次位置，再冇就用香港市區。
-enum WidgetLocation {
-    static let fallback = SavedCoordinate(latitude: 22.3193, longitude: 114.1694)
-
-    static func coordinate() async -> SavedCoordinate {
-        if let location = await OneShotLocation.current() {
-            let found = SavedCoordinate(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
-            DataCache.save(found, key: "coordinate")
-            return found
-        }
-        return DataCache.load(SavedCoordinate.self, key: "coordinate") ?? fallback
-    }
-}
-
-final class OneShotLocation: NSObject, CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
-    private var continuation: CheckedContinuation<CLLocation?, Never>?
-    private var selfReference: OneShotLocation?
-
-    static func current(timeout: TimeInterval = 5) async -> CLLocation? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                let helper = OneShotLocation()
-                helper.continuation = continuation
-                helper.start(timeout: timeout)
-            }
-        }
-    }
-
-    private func start(timeout: TimeInterval) {
-        let status = manager.authorizationStatus
-        let authorised = manager.isAuthorizedForWidgetUpdates || status == .authorizedWhenInUse || status == .authorizedAlways
-        guard authorised else {
-            finish(manager.location)
-            return
-        }
-        selfReference = self
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyKilometer
-        manager.requestLocation()
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
-            guard let self else { return }
-            self.finish(self.manager.location)
-        }
-    }
-
-    private func finish(_ location: CLLocation?) {
-        guard let continuation else { return }
-        self.continuation = nil
-        selfReference = nil
-        continuation.resume(returning: location)
-    }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        finish(locations.last)
-    }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        finish(manager.location)
     }
 }

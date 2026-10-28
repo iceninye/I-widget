@@ -132,9 +132,11 @@ struct ThemeButton: View {
         Button(intent: ThemeIntent()) {
             Image(systemName: "paintpalette.fill")
                 .foregroundStyle(theme.accent ?? .secondary)
+                .frame(minWidth: 24, minHeight: 24)
         }
         .buttonStyle(.plain)
-        .font(.system(size: 11))
+        .font(.system(size: 12))
+        .accessibilityLabel("切換配色")
     }
 }
 
@@ -144,14 +146,14 @@ struct RefreshButton: View {
 
     var body: some View {
         Button(intent: RefreshIntent()) {
-            HStack(spacing: 3) {
-                Text(Formatting.clock(updatedAt)).monospacedDigit()
-                Image(systemName: "arrow.clockwise")
-            }
+            Image(systemName: "arrow.clockwise")
+                .frame(minWidth: 24, minHeight: 24)
         }
         .buttonStyle(.plain)
-        .font(.system(size: 10, weight: .medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(.secondary)
+        .accessibilityLabel("重新讀取資料")
+        .accessibilityHint("上次讀取 \(Formatting.sourceTime(updatedAt))；更新時間由系統安排")
     }
 }
 

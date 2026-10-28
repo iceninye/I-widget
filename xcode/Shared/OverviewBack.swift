@@ -16,10 +16,10 @@ extension OverviewEntry {
     }
 
     var batteryBack: [BackLine] {
-        var lines = [BackLine(
-            label: "狀態",
-            value: (stats.isFullyCharged ? "已充滿" : stats.isCharging ? "充電中" : "使用電池") + (stats.isLowPowerMode ? " · 低耗電" : "")
-        )]
+        var lines = [
+            BackLine(label: "電量", value: Formatting.percent(stats.batteryLevel)),
+            BackLine(label: "狀態", value: (stats.isFullyCharged ? "已充滿" : stats.isCharging ? "充電中" : "使用電池") + (stats.isLowPowerMode ? " · 低耗電" : ""))
+        ]
         if let rate = batteryRate {
             lines.append(BackLine(label: stats.isCharging ? "充電速度" : "耗電速度", value: String(format: "%.1f%% / 小時", rate)))
         } else {
@@ -56,37 +56,33 @@ extension OverviewEntry {
         ]
     }
 
-    var weatherBack: [BackLine] {
-        guard let weather = info.weather else { return [BackLine(label: "天氣", value: "未有資料")] }
-        func line(_ label: String, _ day: WeatherDay?) -> BackLine {
-            guard let day else { return BackLine(label: label, value: Formatting.missing) }
-            let rain = day.rainChance.map { " · 雨 \($0)%" } ?? ""
-            return BackLine(label: label, value: "\(WeatherCode.text(day.code)) \(Formatting.tempRange(day))\(rain)")
-        }
-        return [line("今日", weather.today), line("明日", weather.tomorrow), BackLine(label: "更新", value: clock(weather.fetchedAt))]
-    }
-
-    var uvBack: [BackLine] {
-        guard let weather = info.weather else { return [BackLine(label: "紫外線", value: "未有資料")] }
-        func uv(_ day: WeatherDay?) -> String {
-            guard let value = day?.uvIndex else { return Formatting.missing }
-            return "\(Int(value.rounded())) \(UVLevel.text(value))"
-        }
-        func rain(_ day: WeatherDay?) -> String { day?.rainChance.map { "\($0)%" } ?? Formatting.missing }
-        return [
-            BackLine(label: "今日", value: "UV \(uv(weather.today)) · 雨 \(rain(weather.today))"),
-            BackLine(label: "明日", value: "UV \(uv(weather.tomorrow)) · 雨 \(rain(weather.tomorrow))"),
-            BackLine(label: "更新", value: clock(weather.fetchedAt)),
-        ]
-    }
-
     var airBack: [BackLine] {
-        guard let air = info.air else { return [BackLine(label: "空氣", value: "未有資料")] }
+        guard let air = info.air else { return [BackLine(label: "香港 AQHI", value: "未有資料")] }
         return [
-            BackLine(label: "US AQI", value: "\(air.aqi) \(air.level)"),
-            BackLine(label: "PM2.5", value: air.pm25.map { String(format: "%.0f µg/m³", $0) } ?? Formatting.missing),
-            BackLine(label: "更新", value: clock(air.fetchedAt)),
+            BackLine(label: "香港 AQHI", value: "\(air.index) · \(air.level)"),
+            BackLine(label: "測站", value: air.station),
         ]
+    }
+
+    var regionalBack: [BackLine] {
+        guard let regional = info.regional else { return [BackLine(label: "地區觀測", value: "未有資料")] }
+        return [
+            BackLine(label: "風力測站", value: regional.windStation ?? Formatting.missing),
+            BackLine(label: "風向", value: regional.windDirection ?? Formatting.missing),
+            BackLine(label: "平均風速", value: regional.windSpeed.map { String(format: "%.0f km/h", $0) } ?? Formatting.missing),
+            BackLine(label: "最高陣風", value: regional.gust.map { String(format: "%.0f km/h", $0) } ?? Formatting.missing),
+            BackLine(label: "風力時間", value: Formatting.sourceTime(regional.windObservedAt)),
+            BackLine(label: "氣壓測站", value: regional.pressureStation ?? Formatting.missing),
+            BackLine(label: "海平面氣壓", value: regional.pressure.map { String(format: "%.1f hPa", $0) } ?? Formatting.missing),
+            BackLine(label: "氣壓時間", value: Formatting.sourceTime(regional.pressureObservedAt)),
+        ]
+    }
+
+    var sunBack: [BackLine] {
+        guard let sun = info.sun, sun.date == Days.calendarDate(date) else {
+            return [BackLine(label: "日出日落", value: "未有今日資料")]
+        }
+        return [BackLine(label: "日出", value: sun.sunrise), BackLine(label: "日落", value: sun.sunset)]
     }
 
     var fxBack: [BackLine] {
@@ -101,9 +97,10 @@ extension OverviewEntry {
         guard let price = info.gold?.usdPerOunce else { return [BackLine(label: "黃金", value: "未有資料")] }
         // 1 金衡盎司 = 31.1035 克；1 両 = 37.429 克
         return [
+            BackLine(label: "每金衡盎司", value: "US$\(Formatting.gold(price))"),
             BackLine(label: "每克", value: "US$\(Formatting.gold(price / 31.1035))"),
             BackLine(label: "每両", value: "US$\(Formatting.gold(price / 31.1035 * 37.429))"),
-            BackLine(label: "更新", value: clock(info.gold?.fetchedAt)),
+            BackLine(label: "讀取時間", value: Formatting.sourceTime(info.gold?.fetchedAt)),
         ]
     }
 
@@ -126,7 +123,9 @@ extension OverviewEntry {
         return [
             BackLine(label: "系統", value: "\(status.os) · \(status.kernel)"),
             BackLine(label: "更新", value: "\(status.upgradable) 項（安全 \(status.security)）· \(status.rebootRequired ? "要重啟" : "毋須重啟")"),
-            BackLine(label: "伺服器", value: status.updatedAt.map { "更新 \(Formatting.clock($0))" } ?? "更新時間不明"),
+            BackLine(label: "Xray", value: status.xrayRunning.map { $0 ? "運行中" : "未運行" } ?? "未有資料"),
+            BackLine(label: "Hysteria 2", value: status.hysteria2Listening.map { $0 ? "監聽中" : "未監聽" } ?? "未有資料"),
+            BackLine(label: "伺服器資料時間", value: Formatting.sourceTime(status.updatedAt)),
         ]
     }
 

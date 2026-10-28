@@ -24,6 +24,15 @@ extension Formatting {
         return formatter.string(from: NSNumber(value: price)) ?? missing
     }
 
+    static func sourceTime(_ date: Date?) -> String {
+        guard let date else { return "時間未提供" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
+        formatter.dateFormat = "yyyy/MM/dd HH:mm"
+        return formatter.string(from: date)
+    }
+
     /// 超過呢段時間冇更新，就當資料已過時。
     static let staleAfter: TimeInterval = 3_600
 

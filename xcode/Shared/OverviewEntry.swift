@@ -42,6 +42,7 @@ struct OverviewEntry: TimelineEntry {
     var nextHoliday: Holiday? { schedule.nextHoliday(dayStart: todayStart) }
 
     static var sample: OverviewEntry {
+        let info = ExtraInfo.sample
         let now = Date()
         let today = Days.serviceDate(now)
         let roster = Roster(
@@ -59,7 +60,7 @@ struct OverviewEntry: TimelineEntry {
             CalendarEvent(title: "陸運會", start: dayStart.addingTimeInterval(86_400), end: dayStart.addingTimeInterval(2 * 86_400), allDay: true, calendar: "事項", rule: nil),
         ]
         return OverviewEntry(
-            date: now, stats: .sample, battery: .remaining(5 * 3_600 + 20 * 60), info: .sample,
+            date: now, stats: .sample, battery: .remaining(5 * 3_600 + 20 * 60), info: info,
             schedule: schedule, vps: .sample, updatedAt: now
         )
     }
