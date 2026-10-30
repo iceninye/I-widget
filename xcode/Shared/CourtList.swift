@@ -41,10 +41,36 @@ struct CourtCase: Codable, Equatable {
     var judge: String
     var minutes: Int?
     var caseNo: String
+    /// 性質／控罪（例如「審訊」「答辯」）；只有按欄對位讀得到嘅行先有。舊快取冇呢欄，解碼成 nil。
+    var nature: String? = nil
 
     var timeText: String {
         guard let minutes else { return "--:--" }
         return String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    /// 開始後呢個分鐘數內仍當作進行中。
+    static let ongoingWindow = 20
+
+    /// 相對於當日分鐘數（`nil` = 唔係今日）嘅進度。
+    func status(atMinute now: Int?) -> CourtStatus {
+        guard let now, let minutes else { return .scheduled }
+        if minutes > now { return .upcoming }
+        return now - minutes < Self.ongoingWindow ? .ongoing : .finished
+    }
+}
+
+enum CourtStatus: Equatable {
+    case scheduled   // 唔係今日或者冇時間
+    case upcoming, ongoing, finished
+
+    var text: String {
+        switch self {
+        case .scheduled: return "待審"
+        case .upcoming: return "未開始"
+        case .ongoing: return "進行中"
+        case .finished: return "已過時間"
+        }
     }
 }
 
@@ -58,9 +84,9 @@ struct CourtDay: Codable, Equatable {
 
     var name: String { CourtCatalog.name(code) }
 
-    /// 仲未完嘅聆訊（開始後 20 分鐘內當仲進行緊）；`now` 為當日分鐘數，`nil` 代表唔係今日，全部都算。
-    func upcoming(afterMinute now: Int?) -> [CourtCase] {
-        let sorted = cases.enumerated().sorted { lhs, rhs in
+    /// 按時間排好嘅全部聆訊（冇時間嘅排最後，同時間保持原本次序）。
+    var sortedCases: [CourtCase] {
+        cases.enumerated().sorted { lhs, rhs in
             switch (lhs.element.minutes, rhs.element.minutes) {
             case let (a?, b?): return a == b ? lhs.offset < rhs.offset : a < b
             case (nil, _?): return false
@@ -68,17 +94,86 @@ struct CourtDay: Codable, Equatable {
             case (nil, nil): return lhs.offset < rhs.offset
             }
         }.map(\.element)
-        guard let now else { return sorted }
-        return sorted.filter { ($0.minutes ?? Int.max) >= now - 20 }
+    }
+
+    /// 仲未完嘅聆訊（開始後 20 分鐘內當仲進行緊）；`now` 為當日分鐘數，`nil` 代表唔係今日，全部都算。
+    func upcoming(afterMinute now: Int?) -> [CourtCase] {
+        guard let now else { return sortedCases }
+        return sortedCases.filter { ($0.minutes ?? Int.max) >= now - CourtCase.ongoingWindow }
+    }
+}
+
+/// Widget 同 app 之間嘅連結：`iwidget://court?code=DC&case=DCCJ%201%2F2026&t=570`。
+struct CourtLink: Equatable {
+    var code: String
+    var caseNo: String?
+    var minutes: Int?
+
+    static let scheme = "iwidget"
+
+    var url: URL {
+        var components = URLComponents()
+        components.scheme = Self.scheme
+        components.host = "court"
+        var items = [URLQueryItem(name: "code", value: code)]
+        if let caseNo { items.append(URLQueryItem(name: "case", value: caseNo)) }
+        if let minutes { items.append(URLQueryItem(name: "t", value: String(minutes))) }
+        components.queryItems = items
+        return components.url ?? URL(string: "\(Self.scheme)://court")!
+    }
+
+    init(code: String, caseNo: String? = nil, minutes: Int? = nil) {
+        self.code = code
+        self.caseNo = caseNo
+        self.minutes = minutes
+    }
+
+    init?(url: URL) {
+        guard url.scheme == Self.scheme, url.host == "court",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else { return nil }
+        self.code = code
+        caseNo = items.first { $0.name == "case" }?.value
+        minutes = items.first { $0.name == "t" }?.value.flatMap { Int($0) }
+    }
+
+    /// 喺某日案件表搵返連結指向嘅聆訊：案號加時間都對得上先，否則只對案號。
+    func match(in day: CourtDay) -> CourtCase? {
+        guard let caseNo else { return nil }
+        let same = day.sortedCases.filter { $0.caseNo == caseNo }
+        return same.first { $0.minutes == minutes } ?? same.first
+    }
+}
+
+extension CourtCase {
+    func link(code: String) -> CourtLink { CourtLink(code: code, caseNo: caseNo, minutes: minutes) }
+}
+
+enum CourtLayout {
+    /// 將 `budget` 行派畀各法院：每個先攤平均，唔夠用嘅就將餘額畀其他仲有嘢睇嘅法院；每個至少 1 行。
+    static func allocate(counts: [Int], budget: Int) -> [Int] {
+        guard !counts.isEmpty else { return [] }
+        var rows = Array(repeating: 1, count: counts.count)
+        var left = max(budget - counts.count, 0)
+        while left > 0 {
+            var gave = false
+            for index in counts.indices where left > 0 && rows[index] < counts[index] {
+                rows[index] += 1
+                left -= 1
+                gave = true
+            }
+            if !gave { break }
+        }
+        return rows
     }
 }
 
 enum CourtList {
     // MARK: 解析
 
-    private enum Column { case court, judge, time, caseNo }
+    private enum Column { case court, judge, time, caseNo, nature }
 
-    private typealias Fields = (room: String?, judge: String?, time: String?, caseNo: String?)
+    private typealias Fields = (room: String?, judge: String?, time: String?, caseNo: String?, nature: String?)
 
     /// 解析 view.jsp 嘅 HTML（Word 匯出嘅表格）。
     ///
@@ -126,7 +221,7 @@ enum CourtList {
                     guard let index = columns[column], index < raw.count, !raw[index].isEmpty else { return nil }
                     return raw[index]
                 }
-                fields = (at(.court), at(.judge), at(.time), at(.caseNo))
+                fields = (at(.court), at(.judge), at(.time), at(.caseNo), at(.nature))
                 positional = true
             } else {
                 fields = classify(cells, expectRoom: columns[.court] != nil, expectJudge: columns[.judge] != nil)
@@ -140,14 +235,14 @@ enum CourtList {
             if let value = fields.judge { judge = chinesePart(value) }
             if let value = fields.time, let parsed = parseTime(value) { minutes = parsed }
             guard let caseNo = fields.caseNo, !positional || caseNo.contains(where: \.isNumber) else { continue }
-            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo)))
+            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: natureText(fields.nature)))
         }
         return cases
     }
 
     /// 格數唔齊（合併儲存格）嘅行：按內容認出時間、案件編號，必要時法庭同法官。
     private static func classify(_ cells: [String], expectRoom: Bool, expectJudge: Bool) -> Fields {
-        var result: Fields = (nil, nil, nil, nil)
+        var result: Fields = (nil, nil, nil, nil, nil)
         for cell in cells {
             if result.time == nil, isTimeCell(cell) {
                 result.time = cell
@@ -196,7 +291,16 @@ enum CourtList {
         if text.contains("時間") { return .time }
         if ["法官", "聆案官", "裁判官", "審裁", "驗屍官", "司法"].contains(where: text.contains) { return .judge }
         if text.contains("法庭") || text.contains("法院") { return .court }
+        if text.contains("性質") || text.contains("控罪") { return .nature }
         return nil
+    }
+
+    /// 性質／控罪格只留中文頭一段，太長或者似句子（備註）就唔要。
+    private static func natureText(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let zh = chinesePart(text)
+        guard !zh.isEmpty, zh.count <= 24 else { return nil }
+        return zh
     }
 
     private static func isTimeCell(_ text: String) -> Bool {

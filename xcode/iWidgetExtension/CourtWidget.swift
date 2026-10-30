@@ -105,83 +105,121 @@ struct CourtWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("法院案件表")
-        .description("司法機構法庭日誌：各法院案件數同下一庭（唔顯示訴訟各方）。")
+        .description("司法機構法庭日誌：放得落嘅聆訊全部列出（時間、法庭、案號、性質、法官），撳入去睇詳情；唔顯示訴訟各方。")
         .supportedFamilies(withExtraLargePortrait([.systemLarge, .systemExtraLarge]))
     }
 }
 
 struct CourtWidgetView: View {
     let entry: CourtEntry
-    @Environment(\.widgetFamily) private var family
 
     private var minute: Int? { CourtList.minuteOfDay(now: entry.date, listDate: entry.listDate) }
 
-    /// 所有法院合共畫幾多行聆訊。
-    private var rowBudget: Int { family == .systemLarge ? 10 : 24 }
+    /// 標題列、每個法院卡嘅框同行距，加埋一行聆訊嘅高度（pt）；用嚟由 widget 高度推算放得落幾多行。
+    private enum Metrics {
+        static let header: CGFloat = 26
+        static let section: CGFloat = 36
+        static let row: CGFloat = 13.5
+    }
 
     var body: some View {
-        let rows = max(1, rowBudget / max(entry.days.count, 1))
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "building.columns.fill").foregroundStyle(.secondary)
-                Text("法院 \(CourtList.dayText(entry.listDate, now: entry.date))")
-                    .font(.system(size: 13, weight: .bold))
+        GeometryReader { geometry in
+            let lists = entry.days.map { $0.upcoming(afterMinute: minute) }
+            let free = geometry.size.height - Metrics.header - CGFloat(entry.days.count) * Metrics.section
+            let budget = max(Int(free / Metrics.row), entry.days.count)
+            let rows = CourtLayout.allocate(counts: lists.map(\.count), budget: budget)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "building.columns.fill").foregroundStyle(.secondary).widgetAccentable()
+                    Text("法院 \(CourtList.dayText(entry.listDate, now: entry.date))")
+                        .font(.system(size: 13, weight: .bold))
+                    Spacer(minLength: 0)
+                    ThemeButton()
+                    RefreshButton(updatedAt: entry.updatedAt)
+                }
+                if entry.days.isEmpty {
+                    Text("長按 widget →「編輯小工具」揀法院")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(entry.days.enumerated()), id: \.offset) { index, day in
+                    CourtSection(day: day, upcoming: lists[index], minute: minute, rows: rows[index])
+                }
                 Spacer(minLength: 0)
-                ThemeButton()
-                RefreshButton(updatedAt: entry.updatedAt)
             }
-            if entry.days.isEmpty {
-                Text("長按 widget →「編輯小工具」揀法院")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(entry.days, id: \.code) { day in
-                CourtSection(day: day, minute: minute, rows: rows)
-            }
-            Spacer(minLength: 0)
         }
+        .widgetURL(entry.days.first.map { CourtLink(code: $0.code).url })
     }
 }
 
 private struct CourtSection: View {
     let day: CourtDay
+    let upcoming: [CourtCase]
     let minute: Int?
     let rows: Int
 
     var body: some View {
-        let upcoming = day.upcoming(afterMinute: minute)
+        // 放得落全部就全部畫；放唔落就留最後一行做「尚有 N 宗」
+        let hidden = max(upcoming.count - rows, 0)
+        let shown = hidden > 0 ? max(rows - 1, 0) : upcoming.count
         GlassCard(padding: 6) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(day.name).font(.system(size: 12, weight: .semibold))
-                    if day.error {
-                        Badge(text: "讀取失敗", color: .orange)
-                    } else if day.total == 0 {
-                        Badge(text: "未有案件表")
-                    } else {
-                        Badge(text: "\(day.total) 宗", color: .blue)
-                    }
-                    Spacer(minLength: 0)
-                    if let next = upcoming.first {
-                        Text("下一庭 \(next.timeText)")
-                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                Link(destination: CourtLink(code: day.code).url) { header }
+                ForEach(Array(upcoming.prefix(shown).enumerated()), id: \.offset) { _, item in
+                    Link(destination: item.link(code: day.code).url) { row(item) }
+                }
+                if hidden > 0 {
+                    Link(destination: CourtLink(code: day.code).url) {
+                        Text("尚有 \(upcoming.count - shown) 宗 · 撳入 app 睇全部")
+                            .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                }
-                ForEach(Array(upcoming.prefix(max(rows - 1, 1)).enumerated()), id: \.offset) { _, item in
-                    HStack(spacing: 6) {
-                        Text(item.timeText).monospacedDigit().frame(width: 38, alignment: .leading)
-                        Text(item.room).lineLimit(1).frame(width: 52, alignment: .leading)
-                        Text(item.caseNo).lineLimit(1)
-                        Spacer(minLength: 0)
-                        Text(item.judge).lineLimit(1).foregroundStyle(.secondary)
-                    }
-                    .font(.system(size: 10))
                 }
                 if !day.error, day.total > 0, upcoming.isEmpty {
                     Text("今日聆訊已完").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text(day.name).font(.system(size: 12, weight: .semibold))
+            if day.error {
+                Badge(text: "讀取失敗", color: .orange)
+            } else if day.total == 0 {
+                Badge(text: "未有案件表")
+            } else if minute != nil, upcoming.count != day.total {
+                Badge(text: "餘 \(upcoming.count) / \(day.total) 宗", color: .blue)
+            } else {
+                Badge(text: "\(day.total) 宗", color: .blue)
+            }
+            Spacer(minLength: 0)
+            if let next = upcoming.first(where: { $0.status(atMinute: minute) == .upcoming }) {
+                Text("下一庭 \(next.timeText)")
+                    .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func row(_ item: CourtCase) -> some View {
+        let ongoing = item.status(atMinute: minute) == .ongoing
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(ongoing ? Color.green : Color.clear)
+                .frame(width: 5, height: 5)
+                .widgetAccentable()
+            Text(item.timeText).monospacedDigit().frame(width: 34, alignment: .leading)
+            Text(item.room).lineLimit(1).minimumScaleFactor(0.7).frame(width: 52, alignment: .leading)
+            Text(item.caseNo).lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
+            if let nature = item.nature {
+                Text(nature).lineLimit(1).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Text(item.judge).lineLimit(1).foregroundStyle(.secondary)
+        }
+        .font(.system(size: 10, weight: ongoing ? .semibold : .regular))
     }
 }

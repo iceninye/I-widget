@@ -38,6 +38,26 @@ extension OverviewEntry {
         ]
     }
 
+    var memoryBack: [BackLine] {
+        guard let total = stats.memoryTotal else { return [BackLine(label: "記憶體", value: "讀唔到")] }
+        var lines = [BackLine(label: "總共", value: Formatting.bytes(total))]
+        if let available = stats.memoryAvailable {
+            lines.insert(BackLine(label: "可用", value: Formatting.bytes(available)), at: 0)
+            lines.insert(BackLine(label: "已用", value: Formatting.percent(Formatting.usedFraction(free: available, total: total))), at: 1)
+        }
+        return lines
+    }
+
+    var rainBack: [BackLine] {
+        guard let weather = info.weather else { return [BackLine(label: "降雨", value: "未有資料")] }
+        func rain(_ day: WeatherDay?) -> String { day?.rainChance.map { "\($0)%" } ?? Formatting.missing }
+        return [
+            BackLine(label: "今日", value: rain(weather.today)),
+            BackLine(label: "明日", value: rain(weather.tomorrow)),
+            BackLine(label: "更新", value: clock(weather.fetchedAt)),
+        ]
+    }
+
     var uptimeBack: [BackLine] {
         let uptime = stats.uptime(at: date)
         let untilDue = uptime.map { RebootHint.dueAfter - $0 }
