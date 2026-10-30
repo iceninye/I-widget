@@ -14,7 +14,7 @@ final class CourtListTests: XCTestCase {
     func testParseMapsColumnsAndFillsDown() {
         let cases = CourtList.parse(fixture)
         XCTAssertEqual(cases.count, 3)
-        XCTAssertEqual(cases[0], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 570, caseNo: "DCCJ 1/2026"))
+        XCTAssertEqual(cases[0], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 570, caseNo: "DCCJ 1/2026", nature: "聆訊"))
         // rowspan 令第二行少咗前兩格：沿用上一行嘅法庭同法官
         XCTAssertEqual(cases[1], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 14 * 60 + 15, caseNo: "DCCJ 2/2026"))
         XCTAssertEqual(cases[2].minutes, 15 * 60 + 30)
@@ -147,5 +147,47 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(CourtList.decode(Data("法庭".utf8)), "法庭")
         let big5 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5_HKSCS_1999.rawValue)))
         XCTAssertEqual(CourtList.decode("法庭".data(using: big5)!), "法庭")
+    }
+
+    func testNatureColumnOnlyReadFromAlignedRows() {
+        let cases = CourtList.parse(fixture)
+        XCTAssertEqual(cases.map(\.nature), ["聆訊", nil, nil])
+    }
+
+    func testStatusAroundStartTime() {
+        let hearing = CourtCase(room: "A", judge: "", minutes: 600, caseNo: "1")
+        XCTAssertEqual(hearing.status(atMinute: nil), .scheduled)
+        XCTAssertEqual(hearing.status(atMinute: 599), .upcoming)
+        XCTAssertEqual(hearing.status(atMinute: 600), .ongoing)
+        XCTAssertEqual(hearing.status(atMinute: 619), .ongoing)
+        XCTAssertEqual(hearing.status(atMinute: 620), .finished)
+        XCTAssertEqual(CourtCase(room: "A", judge: "", minutes: nil, caseNo: "1").status(atMinute: 700), .scheduled)
+    }
+
+    func testLinkRoundTripAndMatch() {
+        let link = CourtLink(code: "DC", caseNo: "DCCJ 1/2026", minutes: 570)
+        XCTAssertEqual(CourtLink(url: link.url), link)
+        XCTAssertEqual(CourtLink(url: CourtLink(code: "CFA").url), CourtLink(code: "CFA"))
+        XCTAssertNil(CourtLink(url: URL(string: "https://example.com/court?code=DC")!))
+        XCTAssertNil(CourtLink(url: URL(string: "iwidget://court")!))
+
+        let day = CourtDay(code: "DC", dateCode: "26102026", total: 2, cases: [
+            CourtCase(room: "A", judge: "", minutes: 570, caseNo: "DCCJ 1/2026"),
+            CourtCase(room: "B", judge: "", minutes: 840, caseNo: "DCCJ 1/2026"),
+        ])
+        XCTAssertEqual(link.match(in: day)?.room, "A")
+        XCTAssertEqual(CourtLink(code: "DC", caseNo: "DCCJ 1/2026", minutes: 840).match(in: day)?.room, "B")
+        XCTAssertEqual(CourtLink(code: "DC", caseNo: "DCCJ 1/2026", minutes: 1).match(in: day)?.room, "A")
+        XCTAssertNil(CourtLink(code: "DC").match(in: day))
+    }
+
+    func testAllocateRowsSharesLeftover() {
+        XCTAssertEqual(CourtLayout.allocate(counts: [], budget: 10), [])
+        XCTAssertEqual(CourtLayout.allocate(counts: [50, 50], budget: 10), [5, 5])
+        // 一個只有 2 行，餘額畀另一個
+        XCTAssertEqual(CourtLayout.allocate(counts: [2, 50], budget: 10), [2, 8])
+        // 冇嘢睇嘅法院都保留 1 行（標題），預算唔夠也不少於 1
+        XCTAssertEqual(CourtLayout.allocate(counts: [0, 0, 0], budget: 2), [1, 1, 1])
+        XCTAssertEqual(CourtLayout.allocate(counts: [3, 3], budget: 100), [3, 3])
     }
 }

@@ -6,13 +6,28 @@ import WidgetKit
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AppModel()
+    @StateObject private var court = CourtModel()
+    @State private var tab = Tab.data
+
+    private enum Tab { case data, court, settings }
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             NavigationStack { DataView(model: model) }
                 .tabItem { Label("資料", systemImage: "rectangle.grid.2x2.fill") }
+                .tag(Tab.data)
+            NavigationStack { CourtView(model: court) }
+                .tabItem { Label("法院", systemImage: "building.columns.fill") }
+                .tag(Tab.court)
             NavigationStack { SettingsView { Task { await model.refresh() } } }
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
+                .tag(Tab.settings)
+        }
+        // widget 嘅法院連結：跳去法院分頁，有案號就打開該聆訊嘅詳情
+        .onOpenURL { url in
+            guard let link = CourtLink(url: url) else { return }
+            tab = .court
+            court.open(link)
         }
         .task { await refresh() }
         .onChange(of: scenePhase) { _, phase in

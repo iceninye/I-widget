@@ -34,6 +34,11 @@ targets:
         NSLocationWhenInUseUsageDescription: 用你嘅大約位置查天氣預報，位置唔會上傳到自己嘅伺服器。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # widget 撳入去法院詳情：iwidget://court?code=DC&case=...
+        CFBundleURLTypes:
+          - CFBundleURLName: com.iceninye.i-widget
+            CFBundleURLSchemes:
+              - iwidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget

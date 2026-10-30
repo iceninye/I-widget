@@ -62,15 +62,16 @@ struct TodayLayout: View {
 struct InfoLayout: View {
     let entry: OverviewEntry
 
-    /// 位唔夠就先收起最底一行資料格（紫外線、空氣、匯率）。
+    /// 位唔夠就由最底一行開始收起（第 4 行記憶體、降雨、低耗電；第 3 行紫外線、空氣、匯率）。
     var body: some View {
         ViewThatFits(in: .vertical) {
-            stack(extras: true)
-            stack(extras: false)
+            stack(extraRows: 2)
+            stack(extraRows: 1)
+            stack(extraRows: 0)
         }
     }
 
-    private func stack(extras: Bool) -> some View {
+    private func stack(extraRows: Int) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 5) {
                 Image(systemName: "square.grid.2x2.fill").foregroundStyle(.secondary).widgetAccentable()
@@ -83,7 +84,7 @@ struct InfoLayout: View {
             .padding(.horizontal, 4)
             InfoSection(entry: entry)
             Spacer(minLength: 0)
-            TileGrid(entry: entry, extras: extras)
+            TileGrid(entry: entry, extraRows: extraRows)
             VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
         }
     }
@@ -434,10 +435,10 @@ struct InfoSection: View {
     }
 }
 
-/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS；有位再加一行紫外線、空氣、匯率。
+/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS；有位再加紫外線、空氣、匯率，同記憶體、降雨、低耗電。
 struct TileGrid: View {
     let entry: OverviewEntry
-    var extras = true
+    var extraRows = 2
 
     var body: some View {
         let stats = entry.stats
@@ -489,14 +490,56 @@ struct TileGrid: View {
                     flipped: entry.isFlipped("ios"), back: entry.osBack
                 )
             }
-            if extras {
+            if extraRows >= 1 {
                 GridRow {
                     uvTile
                     airTile
                     fxTile
                 }
             }
+            if extraRows >= 2 {
+                GridRow {
+                    memoryTile
+                    rainTile
+                    powerTile
+                }
+            }
         }
+    }
+
+    private var memoryTile: some View {
+        let stats = entry.stats
+        let used = Formatting.usedFraction(free: stats.memoryAvailable, total: stats.memoryTotal)
+        return Tile(
+            id: "ram", symbol: "memorychip.fill", tint: (used ?? 0) > 0.9 ? .orange : .teal,
+            value: Formatting.bytes(stats.memoryAvailable),
+            caption: "記憶體可用 / \(Formatting.bytes(stats.memoryTotal))",
+            fraction: used,
+            flipped: entry.isFlipped("ram"), back: entry.memoryBack
+        )
+    }
+
+    private var rainTile: some View {
+        let weather = entry.info.weather
+        let today = weather?.today.rainChance
+        let tomorrow = weather?.tomorrow?.rainChance
+        return Tile(
+            id: "rain", symbol: "umbrella.fill", tint: (today ?? 0) >= 60 || (tomorrow ?? 0) >= 60 ? .indigo : .cyan,
+            value: today.map { "\($0)%" } ?? Formatting.missing,
+            caption: "降雨 · 明 \(tomorrow.map { "\($0)%" } ?? Formatting.missing)",
+            fraction: today.map { Double($0) / 100 },
+            flipped: entry.isFlipped("rain"), back: entry.rainBack
+        )
+    }
+
+    private var powerTile: some View {
+        let on = entry.stats.isLowPowerMode
+        return Tile(
+            id: "power", symbol: on ? "bolt.badge.clock.fill" : "bolt.fill", tint: on ? .yellow : .gray,
+            value: on ? "開" : "關",
+            caption: "低耗電模式",
+            flipped: entry.isFlipped("power"), back: entry.batteryBack
+        )
     }
 
     private var uvTile: some View {
