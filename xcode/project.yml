@@ -30,6 +30,7 @@ targets:
       path: iWidget/Info.plist
       properties:
         CFBundleDisplayName: i-widget
+        # widget 撳入去 app：iwidget://today、iwidget://court?code=DC&date=2026-10-28 等
         CFBundleURLTypes:
           - CFBundleURLName: com.iceninye.i-widget
             CFBundleURLSchemes:
@@ -89,6 +90,7 @@ targets:
       - path: Shared/LiveAlerts.swift
       - path: Shared/ExtraInfo.swift
       - path: Shared/CourtList.swift
+      - path: Shared/PublicHolidays.swift
       - path: Shared/DataCache.swift
       - path: Shared/AppRoute.swift
     settings:

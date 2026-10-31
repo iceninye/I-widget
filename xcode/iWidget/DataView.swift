@@ -254,6 +254,13 @@ struct DataView: View {
     @ViewBuilder private func device(_ entry: OverviewEntry) -> some View {
         Section("電量") { lines(entry.batteryBack) }
         Section("儲存空間") { lines(entry.storageBack) }
+        Section {
+            lines(entry.memoryBack)
+        } header: {
+            Text("記憶體")
+        } footer: {
+            Text("只係讀取嗰一刻嘅快照，參考用。")
+        }
         Section("開機時間") { lines(entry.uptimeBack) }
         Section("系統") { lines(entry.osBack) }
         Section("VPS") {

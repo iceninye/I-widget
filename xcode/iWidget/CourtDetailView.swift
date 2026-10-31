@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 @MainActor
 struct CourtDetailView: View {
     @State private var selectedCode: String
     @State private var selectedDate: Date
     @State private var search = ""
+    @State private var hearing: Hearing?
     @State private var days: [String: CourtDay] = [:]
     @State private var pending = Set<String>()
     @State private var generation = UUID()
@@ -12,8 +14,9 @@ struct CourtDetailView: View {
 
     init(initialCode: String? = nil, initialDate: String? = nil) {
         let code = initialCode.flatMap { candidate in CourtCatalog.all.first { $0.code == candidate }?.code } ?? ""
+        let defaultDate = CourtList.listDate(now: Date(), holidays: PublicHolidays.cached())
         _selectedCode = State(initialValue: code)
-        _selectedDate = State(initialValue: initialDate.flatMap { CourtList.date(fromISO: $0) } ?? CourtList.listDate(now: Date()))
+        _selectedDate = State(initialValue: initialDate.flatMap { CourtList.date(fromISO: $0) } ?? defaultDate)
     }
 
     private struct Request: Equatable {
@@ -51,12 +54,19 @@ struct CourtDetailView: View {
             }
             ForEach(current.codes, id: \.self) { code in
                 CourtDetailSection(code: code, dateCode: CourtList.dateCode(selectedDate),
-                                   day: days[code], loading: pending.contains(code), search: search)
+                                   day: days[code], loading: pending.contains(code), search: search,
+                                   open: { item in
+                                       hearing = Hearing(code: code, dateCode: CourtList.dateCode(selectedDate), item: item)
+                                   })
             }
         }
         .environment(\.timeZone, ICalendar.hongKong.timeZone)
         .navigationTitle("法院案件表")
         .searchable(text: $search, prompt: "搜尋案件編號（不搜尋訴訟各方）")
+        .sheet(item: $hearing) { hearing in
+            NavigationStack { HearingView(hearing: hearing) }
+                .presentationDetents([.medium, .large])
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { reload += 1 } label: { Image(systemName: "arrow.clockwise") }
@@ -85,12 +95,20 @@ struct CourtDetailView: View {
     }
 }
 
+private struct Hearing: Identifiable {
+    let id = UUID()
+    let code: String
+    let dateCode: String
+    let item: CourtCase
+}
+
 private struct CourtDetailSection: View {
     let code: String
     let dateCode: String
     let day: CourtDay?
     let loading: Bool
     let search: String
+    let open: (CourtCase) -> Void
 
     private var matching: [CourtCase] {
         guard let day, day.dateCode == dateCode else { return [] }
@@ -108,15 +126,25 @@ private struct CourtDetailSection: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(Array(cases.enumerated()), id: \.offset) { _, item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.caseNo).font(.headline).textSelection(.enabled)
-                        HStack(alignment: .top) {
-                            Text(item.minutes == nil ? "時間未列" : "排期 \(item.timeText)").monospacedDigit()
-                            if !item.room.isEmpty { Text(item.room) }
+                    Button { open(item) } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(item.caseNo).font(.headline).textSelection(.enabled)
+                                    if let nature = item.nature { Text(nature).font(.caption2.weight(.semibold)).foregroundStyle(.blue) }
+                                }
+                                HStack(alignment: .top) {
+                                    Text(item.minutes == nil ? "時間未列" : "排期 \(item.timeText)").monospacedDigit()
+                                    if !item.room.isEmpty { Text(item.room) }
+                                }
+                                .font(.subheadline)
+                                if !item.judge.isEmpty { Text(item.judge).font(.footnote).foregroundStyle(.secondary) }
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                         }
-                        .font(.subheadline)
-                        if !item.judge.isEmpty { Text(item.judge).font(.footnote).foregroundStyle(.secondary) }
                     }
+                    .buttonStyle(.plain)
                 }
             } else {
                 HStack {
@@ -156,5 +184,41 @@ private struct CourtDetailSection: View {
     private func timestamp(_ date: Date) -> String {
         let calendar = ICalendar.hongKong
         return CourtList.isoDate(date) + String(format: " %02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
+    }
+}
+
+private struct HearingView: View {
+    let hearing: Hearing
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let item = hearing.item
+        List {
+            Section {
+                LabeledContent("案件編號", value: item.caseNo)
+                LabeledContent("法院", value: CourtCatalog.name(hearing.code))
+                LabeledContent("日期", value: CourtList.date(fromISO: hearing.dateCode)
+                    .map { CourtList.dayText($0, now: Date()) } ?? hearing.dateCode)
+                LabeledContent("排期時間", value: item.minutes == nil ? "原頁未列" : item.timeText)
+                LabeledContent("法庭", value: item.room.isEmpty ? Formatting.missing : item.room)
+                LabeledContent("法官／審理人員", value: item.judge.isEmpty ? Formatting.missing : item.judge)
+                if let nature = item.nature { LabeledContent("性質", value: nature) }
+            }
+            Section {
+                Button("複製案件編號", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = item.caseNo
+                }
+                if let url = CourtList.url(code: hearing.code, dateCode: hearing.dateCode) {
+                    Link(destination: url) { Label("喺司法機構網頁開啟原案件表", systemImage: "safari") }
+                }
+            } footer: {
+                Text("排期時間不是即時開庭或完庭狀態；為保障個人資料，唔顯示訴訟各方，詳情請睇原案件表及附件。")
+            }
+        }
+        .navigationTitle("聆訊詳情")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+        }
     }
 }

@@ -105,7 +105,7 @@ struct CourtProvider: AppIntentTimelineProvider {
     func snapshot(for configuration: CourtConfigIntent, in context: Context) async -> CourtEntry {
         if context.isPreview { return .sample }
         let now = Date()
-        let day = CourtList.listDate(now: now)
+        let day = CourtList.listDate(now: now, holidays: PublicHolidays.cached())
         let codes = CourtCatalog.selection(configuration.courts.map(\.rawValue))
         let key = CourtPaging.configurationKey(codes: codes, autoRotate: configuration.autoRotate)
         return entry(at: now, days: codes.map { CourtList.cached(code: $0, day: day) }, listDate: day,
@@ -114,7 +114,8 @@ struct CourtProvider: AppIntentTimelineProvider {
 
     func timeline(for configuration: CourtConfigIntent, in context: Context) async -> Timeline<CourtEntry> {
         let started = Date()
-        let day = CourtList.listDate(now: started)
+        let holidays = await withDeadline(12, fallback: PublicHolidays.cached()) { await PublicHolidays.load(now: started) }
+        let day = CourtList.listDate(now: started, holidays: holidays)
         let codes = CourtCatalog.selection(configuration.courts.map(\.rawValue))
         let key = CourtPaging.configurationKey(codes: codes, autoRotate: configuration.autoRotate)
         let pageState = state(for: key, now: started)
@@ -133,7 +134,7 @@ struct CourtProvider: AppIntentTimelineProvider {
         let theme = WidgetTheme.load()
         var byDate = [CourtList.dateCode(day): days]
         let entries = CourtPaging.dates(now: now, state: pageState, autoRotate: configuration.autoRotate).map { date in
-            let targetDay = CourtList.listDate(now: date)
+            let targetDay = CourtList.listDate(now: date, holidays: holidays)
             let dateCode = CourtList.dateCode(targetDay)
             if byDate[dateCode] == nil {
                 byDate[dateCode] = codes.map { CourtList.cached(code: $0, day: targetDay) }
@@ -142,7 +143,7 @@ struct CourtProvider: AppIntentTimelineProvider {
                          key: key, autoRotate: configuration.autoRotate, theme: theme)
         }
         var refresh = now.addingTimeInterval(justPaged ? 10 : 30 * 60)
-        if CourtList.dateCode(CourtList.listDate(now: now)) != CourtList.dateCode(day) {
+        if CourtList.dateCode(CourtList.listDate(now: now, holidays: holidays)) != CourtList.dateCode(day) {
             refresh = now.addingTimeInterval(1)
         } else if let boundary = ICalendar.hongKong.nextDate(after: now, matching: DateComponents(hour: 18, minute: 30), matchingPolicy: .nextTime) {
             refresh = min(refresh, boundary)

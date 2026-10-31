@@ -38,6 +38,16 @@ extension OverviewEntry {
         ]
     }
 
+    var memoryBack: [BackLine] {
+        guard let total = stats.memoryTotal else { return [BackLine(label: "記憶體", value: "讀唔到")] }
+        var lines = [BackLine(label: "總共", value: Formatting.bytes(total))]
+        if let available = stats.memoryAvailable {
+            lines.insert(BackLine(label: "可用", value: Formatting.bytes(available)), at: 0)
+            lines.insert(BackLine(label: "已用", value: Formatting.percent(Formatting.usedFraction(free: available, total: total))), at: 1)
+        }
+        return lines
+    }
+
     var uptimeBack: [BackLine] {
         let uptime = stats.uptime(at: date)
         let untilDue = uptime.map { RebootHint.dueAfter - $0 }
