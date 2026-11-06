@@ -16,7 +16,7 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(cases.count, 3)
         XCTAssertEqual(cases[0], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 570, caseNo: "DCCJ 1/2026", nature: "聆訊"))
         // rowspan 令第二行少咗前兩格：沿用上一行嘅法庭同法官
-        XCTAssertEqual(cases[1], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 14 * 60 + 15, caseNo: "DCCJ 2/2026"))
+        XCTAssertEqual(cases[1], CourtCase(room: "第 3 庭", judge: "陳 法官", minutes: 14 * 60 + 15, caseNo: "DCCJ 2/2026", nature: "聆訊"))
         XCTAssertEqual(cases[2].minutes, 15 * 60 + 30)
         XCTAssertEqual(cases[2].room, "第 5 庭")
     }
@@ -149,9 +149,58 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(CourtList.decode("法庭".data(using: big5)!), "法庭")
     }
 
-    func testNatureColumnOnlyReadFromAlignedRows() {
+    func testNatureFromColumnOrStageWords() {
         let cases = CourtList.parse(fixture)
-        XCTAssertEqual(cases.map(\.nature), ["聆訊", nil, nil])
+        // 第一行按「性質」欄；第二行合併格對唔到位，但「聆訊」係固定字眼；第三行冇
+        XCTAssertEqual(cases.map(\.nature), ["聆訊", "聆訊", nil])
+    }
+
+    func testMagistrateStageWordsButNeverPartiesOrCharges() {
+        let html = rows([
+            ["法庭 Court :", "第 1 庭 Court No.1"],
+            ["9:30 am", "TWS 1/2026", "陳大文", "襲警", "答辯 Plea"],
+            ["", "TWS 2/2026", "李小明", "盜竊", "訊問"],
+            ["10:00 am", "KCCC 5/2026", "張三", "傷人"],
+        ])
+        let cases = CourtList.parse(html)
+        XCTAssertEqual(cases.map(\.nature), ["答辯", "訊問", nil])
+        for item in cases {
+            XCTAssertFalse([item.nature, item.judge, item.room].contains { $0 == "陳大文" || $0 == "襲警" || $0 == "張三" })
+        }
+    }
+
+    func testCaseTypeFromPrefix() {
+        XCTAssertEqual(CaseTypes.prefix(of: "DCCJ 1/2026"), "DCCJ")
+        XCTAssertEqual(CaseTypes.prefix(of: "CCDI-269/2022(MC)"), "CCDI")
+        XCTAssertEqual(CaseTypes.classify("DCCJ 1/2026"), CaseType(category: .civil, label: "民事訴訟"))
+        XCTAssertEqual(CaseTypes.classify("HCCC 12/2026").category, .criminal)
+        XCTAssertEqual(CaseTypes.classify("FACV 3/2026").category, .appeal)
+        XCTAssertEqual(CaseTypes.classify("HCMA 100/2026"), CaseType(category: .appeal, label: "裁判法院上訴"))
+        XCTAssertEqual(CaseTypes.classify("FCMC 9/2026").category, .family)
+        XCTAssertEqual(CaseTypes.classify("LBTC 100/2026").category, .tribunal)
+        XCTAssertEqual(CaseTypes.classify("CCDI-269/2022(MC)").category, .inquest)
+        // 裁判法院：法院代號 + CC／S
+        XCTAssertEqual(CaseTypes.classify("KCCC 5/2026"), CaseType(category: .criminal, label: "刑事案件"))
+        XCTAssertEqual(CaseTypes.classify("TWS 1/2026"), CaseType(category: .criminal, label: "傳票案件"))
+        // 已知法院但唔認得嘅類型唔亂估；完全唔認得就「其他」
+        XCTAssertEqual(CaseTypes.classify("LDXX 1/2026").category, .tribunal)
+        XCTAssertEqual(CaseTypes.classify("HCZZ 1/2026"), CaseType(category: .other, label: "高院案件"))
+        XCTAssertEqual(CaseTypes.classify("1/2026").category, .other)
+    }
+
+    func testDetailTextAndCategoryCounts() {
+        XCTAssertEqual(CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCJ 1/2026", nature: "聆訊").detailText, "民事訴訟 · 聆訊")
+        XCTAssertEqual(CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCJ 1/2026").detailText, "民事訴訟")
+        let day = CourtDay(code: "DC", dateCode: "", total: 4, cases: [
+            CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCJ 1/2026"),
+            CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCC 1/2026"),
+            CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCC 2/2026"),
+            CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCPI 1/2026"),
+        ])
+        XCTAssertEqual(day.categoryCounts, [
+            CategoryCount(category: .criminal, count: 2),
+            CategoryCount(category: .civil, count: 2),
+        ])
     }
 
     func testStatusAroundStartTime() {

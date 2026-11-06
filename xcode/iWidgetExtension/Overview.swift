@@ -26,7 +26,7 @@ struct InfoConfigIntent: WidgetConfigurationIntent {
 
 /// 今日咭同資訊兩個 widget 共用嘅 provider：每 30 分鐘重讀一次（一日 48 次，喺 WidgetKit 預算內）；
 /// 中間每 10 分鐘一個 entry，等開機時間、更份進度條同香港午夜／04:00 轉日都會自己更新。
-/// 倒數用系統計時字，唔使 entry。今日咭只讀更份同學校日程，資訊只讀天氣、黃金、VPS 等，各自慳流量。
+/// 倒數用系統計時字，唔使 entry。今日咭讀更份、學校日程、天氣預報同警告；資訊讀天氣、黃金、VPS 等。
 struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelineProvider {
     enum Part { case today, info }
 
@@ -71,7 +71,9 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         if !justFlipped {
             switch part {
             case .today:
-                loadedSchedule = await ScheduleData.load(token: config.rosterToken, now: now)
+                async let schedule = ScheduleData.load(token: config.rosterToken, now: now)
+                async let info = withDeadline(15, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.loadToday(now: now) }
+                (loadedSchedule, loadedInfo) = await (schedule, info)
             case .info:
                 async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
                 async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now)
@@ -148,7 +150,7 @@ struct IWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("今日咭")
-        .description("今日更份、未來 7 日、本週概況、明日同學校日程。")
+        .description("今日更份、天氣預報（含返工／放工時段）、天氣警告、未來 7 日、本週概況、明日同學校日程。")
         .supportedFamilies(withExtraLargePortrait([.systemMedium, .systemLarge, .systemExtraLarge, .accessoryInline, .accessoryRectangular]))
     }
 }

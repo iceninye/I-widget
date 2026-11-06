@@ -50,14 +50,30 @@ struct ExtraInfo {
         )
     }
 
-    private static func loadWeather(now: Date) async -> WeatherSnapshot? {
+    /// 今日咭：天氣（10 分鐘內讀過就用返）、天氣警告、屯馬綫；其餘（黃金、匯率等）用快取。
+    static func loadToday(now: Date = Date()) async -> ExtraInfo {
+        async let weather = loadWeather(now: now, reuseWithin: 10 * 60)
+        async let warnings = loadWarnings(now: now)
+        async let train = loadTrain(now: now)
+        var info = cached(now: now)
+        info.weather = await weather
+        info.warnings = await warnings
+        info.train = await train
+        return info
+    }
+
+    /// `reuseWithin`：今日咭同資訊 widget 差唔多時間 reload，避免重複讀。
+    private static func loadWeather(now: Date, reuseWithin maxAge: TimeInterval? = nil) async -> WeatherSnapshot? {
+        if let maxAge, let fresh = DataCache.fresh(WeatherSnapshot.self, key: "weather", maxAge: maxAge, now: now) {
+            return fresh
+        }
         let coordinate = await WidgetLocation.coordinate()
         do {
             guard let url = OpenMeteo.url(latitude: coordinate.latitude, longitude: coordinate.longitude) else {
                 throw URLError(.badURL)
             }
             let snapshot = try OpenMeteo.parse(try await Fetcher.data(from: url), now: now)
-            DataCache.save(snapshot, key: "weather")
+            DataCache.save(snapshot, key: "weather", stamped: now)
             return snapshot
         } catch {
             return DataCache.load(WeatherSnapshot.self, key: "weather")

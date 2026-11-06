@@ -50,6 +50,7 @@ struct TodayLayout: View {
     private func stack(rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             TodayCard(entry: entry)
+            TodayAlerts(entry: entry)
             if strip { WeekStrip(entry: entry) }
             if week { WeekLine(entry: entry) }
             if tomorrow { TomorrowLine(entry: entry) }
@@ -143,6 +144,16 @@ struct WeekStrip: View {
                         RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.primary, lineWidth: 1.5)
                     }
                 }
+            if let weather = date.flatMap({ entry.info.weather?.day($0) }) {
+                HStack(spacing: 1) {
+                    Image(systemName: WeatherCode.symbol(weather.code))
+                    Text("\(Int(weather.maxTemp.rounded()))°").monospacedDigit()
+                }
+                .font(.system(size: 8.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -173,6 +184,11 @@ struct TodayCard: View {
                         .minimumScaleFactor(0.7)
                     if let day { badges(day) }
                     Spacer(minLength: 2)
+                    Text(shortDate(entry.serviceToday))
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     ThemeButton()
                     RefreshButton(updatedAt: entry.updatedAt)
                 }
@@ -188,6 +204,10 @@ struct TodayCard: View {
                             working(day)
                         } else if let day {
                             resting(day)
+                        }
+                        if !entry.isFlipped("today"), let weather = entry.info.weather {
+                            Divider().padding(.vertical, 1)
+                            TodayWeatherRow(weather: weather, day: day?.hasTimes == true ? day : nil, now: entry.date)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -273,6 +293,113 @@ struct TodayCard: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+        }
+    }
+}
+
+/// 今日咭底部：今日天氣（而家溫度、天氣、高低溫、降雨機會），
+/// 有上落班時間就再加返工／放工嗰個鐘嘅逐小時預報（已過嘅時段唔顯示）。
+struct TodayWeatherRow: View {
+    let weather: WeatherSnapshot
+    let day: DutyDay?
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: WeatherCode.symbol(weather.today.code))
+                    .symbolRenderingMode(.multicolor)
+                Text(Formatting.degrees(weather.currentTemp ?? weather.today.maxTemp))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                Text(WeatherCode.text(weather.today.code))
+                Text(Formatting.tempRange(weather.today))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+                if let rain = weather.today.rainChance {
+                    rainLabel(rain)
+                }
+            }
+            if let day, !shifts(day).isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(Array(shifts(day).enumerated()), id: \.offset) { _, item in
+                        shiftForecast(item.label, item.hour)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+
+    private struct ShiftHour {
+        let label: String
+        let hour: WeatherHour
+    }
+
+    /// 返工、放工兩個時刻（未過去嘅）對應嘅逐小時預報。
+    private func shifts(_ day: DutyDay) -> [ShiftHour] {
+        let calendar = ICalendar.hongKong
+        let moments: [(String, Int?)] = [("返工", day.on), ("放工", day.off)]
+        return moments.compactMap { (label, seconds) -> ShiftHour? in
+            guard let seconds, let at = day.moment(atServiceSecond: seconds),
+                  at > now.addingTimeInterval(-3_600),
+                  let hour = weather.hour(at: at, calendar: calendar) else { return nil }
+            return ShiftHour(label: "\(label) \(DutyDay.clock(seconds))", hour: hour)
+        }
+    }
+
+    private func shiftForecast(_ label: String, _ hour: WeatherHour) -> some View {
+        HStack(spacing: 3) {
+            Text(label).foregroundStyle(.secondary).monospacedDigit()
+            if let code = hour.code {
+                Image(systemName: WeatherCode.symbol(code)).symbolRenderingMode(.multicolor)
+            }
+            Text(Formatting.degrees(hour.temp)).monospacedDigit()
+            if let rain = hour.rainChance, rain >= 30 {
+                rainLabel(rain)
+            }
+        }
+    }
+
+    private func rainLabel(_ rain: Int) -> some View {
+        HStack(spacing: 1) {
+            Image(systemName: "umbrella.fill")
+            Text("\(rain)%").monospacedDigit()
+        }
+        .foregroundStyle(rain >= 50 ? Color.blue : Color.secondary)
+        .widgetAccentable()
+    }
+}
+
+/// 今日咭下面：有天氣警告、或者屯馬綫唔正常先出現；平時唔佔位。
+struct TodayAlerts: View {
+    let entry: OverviewEntry
+
+    var body: some View {
+        let warnings = entry.info.warnings ?? []
+        let train = entry.info.train
+        let trainIssue = train.map { $0.state != .normal } ?? false
+        if !warnings.isEmpty || trainIssue {
+            HStack(spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
+                    .widgetAccentable()
+                ForEach(Array(warnings.prefix(3).enumerated()), id: \.offset) { _, warning in
+                    Badge(text: warning.text, color: warning.severe ? .red : .orange)
+                }
+                if let train, trainIssue {
+                    Badge(text: "屯馬綫 \(train.state.text)", color: .orange)
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 11))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 4)
         }
     }
 }

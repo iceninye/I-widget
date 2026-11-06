@@ -38,7 +38,47 @@ final class WeatherTests: XCTestCase {
         let url = try XCTUnwrap(OpenMeteo.url(latitude: 22.3193, longitude: 114.1694))
         XCTAssertTrue(url.absoluteString.contains("latitude=22.319"))
         XCTAssertTrue(url.absoluteString.contains("longitude=114.169"))
-        XCTAssertTrue(url.absoluteString.contains("forecast_days=2"))
+        XCTAssertTrue(url.absoluteString.contains("forecast_days=7"))
+        XCTAssertTrue(url.absoluteString.contains("hourly=temperature_2m"))
+    }
+
+    func testParseWeekAndHourly() throws {
+        let json = """
+        {"daily":{"time":["2026-11-06","2026-11-07"],"weather_code":[3,61],
+                  "temperature_2m_max":[26,24],"temperature_2m_min":[20,19],
+                  "precipitation_probability_max":[10,80]},
+         "hourly":{"time":["2026-11-06T07:00","2026-11-06T08:00","2026-11-06T15:00"],
+                   "temperature_2m":[21.4,22.0,25.6],
+                   "precipitation_probability":[5,null,40],
+                   "weather_code":[2,3,61]}}
+        """
+        let snapshot = try OpenMeteo.parse(Data(json.utf8))
+        XCTAssertEqual(snapshot.days?.count, 2)
+        XCTAssertEqual(snapshot.day("2026-11-07")?.rainChance, 80)
+        XCTAssertNil(snapshot.day("2026-11-08"))
+        XCTAssertEqual(snapshot.hours?.count, 3)
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Hong_Kong")!
+        let at = calendar.date(from: DateComponents(year: 2026, month: 11, day: 6, hour: 15, minute: 40))!
+        let hour = try XCTUnwrap(snapshot.hour(at: at, calendar: calendar))
+        XCTAssertEqual(hour.temp, 25.6)
+        XCTAssertEqual(hour.rainChance, 40)
+        XCTAssertEqual(hour.code, 61)
+        let eight = calendar.date(from: DateComponents(year: 2026, month: 11, day: 6, hour: 8))!
+        XCTAssertNil(snapshot.hour(at: eight, calendar: calendar)?.rainChance)
+        XCTAssertNil(snapshot.hour(at: calendar.date(byAdding: .day, value: 3, to: at)!, calendar: calendar))
+    }
+
+    func testOldCacheWithoutForecastStillDecodes() throws {
+        let old = WeatherSnapshot(currentTemp: 20, today: WeatherDay(code: 0, minTemp: 18, maxTemp: 24), tomorrow: nil, fetchedAt: Date(timeIntervalSince1970: 0))
+        // 舊版快取根本冇 days／hours 兩個 key
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(old), encoding: .utf8))
+        XCTAssertFalse(json.contains("days"))
+        let decoded = try JSONDecoder().decode(WeatherSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.days)
+        XCTAssertNil(decoded.hours)
+        XCTAssertEqual(decoded.today.maxTemp, 24)
     }
 
     func testWeatherCodeMapping() {

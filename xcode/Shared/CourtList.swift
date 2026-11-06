@@ -235,7 +235,9 @@ enum CourtList {
             if let value = fields.judge { judge = chinesePart(value) }
             if let value = fields.time, let parsed = parseTime(value) { minutes = parsed }
             guard let caseNo = fields.caseNo, !positional || caseNo.contains(where: \.isNumber) else { continue }
-            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: natureText(fields.nature)))
+            // 冇「性質」欄（或者合併格對唔到位）就搵固定嘅聆訊字眼，例如裁判法院嘅「答辯」「訊問」
+            let nature = natureText(fields.nature) ?? cells.lazy.compactMap(HearingStage.match).first
+            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: nature))
         }
         return cases
     }
