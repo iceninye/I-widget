@@ -164,8 +164,10 @@ final class CourtListTests: XCTestCase {
         ])
         let cases = CourtList.parse(html)
         XCTAssertEqual(cases.map(\.nature), ["答辯", "訊問", nil])
+        let leaked: Set<String> = ["陳大文", "李小明", "張三", "襲警", "盜竊", "傷人"]
         for item in cases {
-            XCTAssertFalse([item.nature, item.judge, item.room].contains { $0 == "陳大文" || $0 == "襲警" || $0 == "張三" })
+            let fields: Set<String> = [item.nature ?? "", item.judge, item.room]
+            XCTAssertTrue(fields.isDisjoint(with: leaked), "\(fields)")
         }
     }
 
