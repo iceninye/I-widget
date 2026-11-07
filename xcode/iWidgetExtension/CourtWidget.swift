@@ -42,8 +42,9 @@ struct CourtEntry: TimelineEntry {
         date: Date(),
         days: [
             CourtDay(code: "DC", dateCode: "", total: 42, cases: [
-                CourtCase(room: "第 3 庭", judge: "法官", minutes: 570, caseNo: "DCCJ 1/2026"),
-                CourtCase(room: "第 5 庭", judge: "法官", minutes: 600, caseNo: "DCCC 2/2026"),
+                CourtCase(room: "第 3 庭", judge: "法官", minutes: 570, caseNo: "DCCJ 1/2026", nature: "聆訊"),
+                CourtCase(room: "第 5 庭", judge: "法官", minutes: 600, caseNo: "DCCC 2/2026", nature: "審訊"),
+                CourtCase(room: "第 8 庭", judge: "法官", minutes: 630, caseNo: "DCPI 3/2026"),
             ]),
         ],
         listDate: Date(), updatedAt: Date(), theme: .classic
@@ -105,7 +106,7 @@ struct CourtWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("法院案件表")
-        .description("司法機構法庭日誌：放得落嘅聆訊全部列出（時間、法庭、案號、性質、法官），撳入去睇詳情；唔顯示訴訟各方。")
+        .description("司法機構法庭日誌：按類別（刑事、民事、家事、上訴…）上色，列出時間、案號、法庭、案件類型、聆訊性質同法官；唔顯示訴訟各方。")
         .supportedFamilies(withExtraLargePortrait([.systemLarge, .systemExtraLarge]))
     }
 }
@@ -115,11 +116,11 @@ struct CourtWidgetView: View {
 
     private var minute: Int? { CourtList.minuteOfDay(now: entry.date, listDate: entry.listDate) }
 
-    /// 標題列、每個法院卡嘅框同行距，加埋一行聆訊嘅高度（pt）；用嚟由 widget 高度推算放得落幾多行。
+    /// 標題列、每個法院卡嘅框／標題／分類統計，加埋一個聆訊（兩行）嘅高度（pt）；用嚟由 widget 高度推算放得落幾多個。
     private enum Metrics {
         static let header: CGFloat = 26
-        static let section: CGFloat = 36
-        static let row: CGFloat = 13.5
+        static let section: CGFloat = 50
+        static let row: CGFloat = 28
     }
 
     var body: some View {
@@ -163,8 +164,9 @@ private struct CourtSection: View {
         let hidden = max(upcoming.count - rows, 0)
         let shown = hidden > 0 ? max(rows - 1, 0) : upcoming.count
         GlassCard(padding: 6) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Link(destination: CourtLink(code: day.code).url) { header }
+                if !day.error, day.total > 0 { summary }
                 ForEach(Array(upcoming.prefix(shown).enumerated()), id: \.offset) { _, item in
                     Link(destination: item.link(code: day.code).url) { row(item) }
                 }
@@ -204,22 +206,56 @@ private struct CourtSection: View {
         }
     }
 
-    private func row(_ item: CourtCase) -> some View {
-        let ongoing = item.status(atMinute: minute) == .ongoing
-        return HStack(spacing: 5) {
-            Circle()
-                .fill(ongoing ? Color.green : Color.clear)
-                .frame(width: 5, height: 5)
-                .widgetAccentable()
-            Text(item.timeText).monospacedDigit().frame(width: 34, alignment: .leading)
-            Text(item.room).lineLimit(1).minimumScaleFactor(0.7).frame(width: 52, alignment: .leading)
-            Text(item.caseNo).lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
-            if let nature = item.nature {
-                Text(nature).lineLimit(1).foregroundStyle(.secondary)
+    /// 全日案件按類別點數：刑事 12 · 民事 8 …
+    private var summary: some View {
+        HStack(spacing: 8) {
+            ForEach(day.categoryCounts, id: \.category) { item in
+                HStack(spacing: 3) {
+                    Circle().fill(item.category.color).frame(width: 6, height: 6).widgetAccentable()
+                    Text("\(item.category.title) \(item.count)").monospacedDigit()
+                }
             }
             Spacer(minLength: 0)
-            Text(item.judge).lineLimit(1).foregroundStyle(.secondary)
         }
-        .font(.system(size: 10, weight: ongoing ? .semibold : .regular))
+        .font(.system(size: 9.5))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+
+    /// 兩行一個聆訊：時間、案號、法庭／類別、類型 · 性質、法官。行頭色條 = 類別。
+    private func row(_ item: CourtCase) -> some View {
+        let status = item.status(atMinute: minute)
+        let type = item.caseType
+        return HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(type.category.color)
+                .frame(width: 3)
+                .widgetAccentable()
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(item.timeText).monospacedDigit().fontWeight(.semibold)
+                    Text(item.caseNo).fontWeight(.medium)
+                        .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
+                    if status == .ongoing {
+                        Text("進行中").font(.system(size: 9, weight: .bold)).foregroundStyle(.green)
+                    }
+                    Spacer(minLength: 0)
+                    Text(item.room).lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.secondary)
+                }
+                .font(.system(size: 11))
+                HStack(spacing: 4) {
+                    Text(type.category.title)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(type.category.color)
+                    Text(item.detailText).lineLimit(1).minimumScaleFactor(0.7)
+                    Spacer(minLength: 0)
+                    Text(item.judge).lineLimit(1).minimumScaleFactor(0.7)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

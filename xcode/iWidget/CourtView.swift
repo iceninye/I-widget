@@ -51,6 +51,8 @@ struct CourtView: View {
     @ObservedObject var model: CourtModel
     @AppStorage("court.codes") private var storedCodes = "DC,ALLMAG,CFA"
     @State private var query = ""
+    /// nil = 全部類別
+    @State private var category: CourtCategory?
 
     private var codes: [String] { storedCodes.split(separator: ",").map(String.init) }
 
@@ -60,6 +62,17 @@ struct CourtView: View {
             List {
                 if model.days.isEmpty && !model.loading {
                     Text("撳右上角揀法院。").foregroundStyle(.secondary)
+                } else {
+                    Section {
+                        Picker("類別", selection: $category) {
+                            Text("全部類別").tag(CourtCategory?.none)
+                            ForEach(CourtCategory.allCases, id: \.self) { item in
+                                Text(item.title).tag(CourtCategory?.some(item))
+                            }
+                        }
+                    } footer: {
+                        Text("類別同案件類型按案件編號推斷（例如 DCCJ = 區院民事訴訟）。")
+                    }
                 }
                 ForEach(model.days, id: \.code) { day in
                     section(day, minute: minute)
@@ -76,7 +89,7 @@ struct CourtView: View {
             }
         }
         .navigationTitle("法院 \(CourtList.dayText(model.listDate, now: Date()))")
-        .searchable(text: $query, prompt: "案號、法庭、法官")
+        .searchable(text: $query, prompt: "案號、法庭、法官、類型")
         .refreshable { await model.refresh(codes: codes) }
         .overlay { if model.loading && model.days.isEmpty { ProgressView() } }
         .toolbar {
@@ -119,9 +132,12 @@ struct CourtView: View {
     }
 
     private func matches(_ item: CourtCase) -> Bool {
+        let type = item.caseType
+        if let category, type.category != category { return false }
         let text = query.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return true }
-        return [item.caseNo, item.room, item.judge, item.nature ?? ""].contains { $0.localizedCaseInsensitiveContains(text) }
+        return [item.caseNo, item.room, item.judge, item.nature ?? "", type.label, type.category.title]
+            .contains { $0.localizedCaseInsensitiveContains(text) }
     }
 
     @ViewBuilder private func section(_ day: CourtDay, minute: Int?) -> some View {
@@ -143,10 +159,17 @@ struct CourtView: View {
                 .buttonStyle(.plain)
             }
         } header: {
-            HStack {
-                Text(day.name)
-                Spacer()
-                if day.total > 0 { Text("共 \(day.total) 宗") }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(day.name)
+                    Spacer()
+                    if day.total > 0 { Text("共 \(day.total) 宗") }
+                }
+                if !day.error, day.total > 0 {
+                    Text(day.categoryCounts.map { "\($0.category.title) \($0.count)" }.joined(separator: " · "))
+                        .font(.caption2)
+                        .textCase(nil)
+                }
             }
         }
         .id(day.code)
@@ -158,15 +181,19 @@ private struct CourtRow: View {
     let status: CourtStatus
 
     var body: some View {
+        let type = item.caseType
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(item.timeText).monospacedDigit().fontWeight(.semibold)
                 .foregroundStyle(status == .finished ? .secondary : .primary)
                 .frame(width: 48, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(item.caseNo).font(.subheadline.weight(.medium))
                     if status == .ongoing { Tag(text: "進行中", color: .green) }
-                    if let nature = item.nature { Tag(text: nature) }
+                }
+                HStack(spacing: 6) {
+                    Tag(text: type.category.title, color: type.category.color)
+                    Text(item.detailText).font(.caption)
                 }
                 Text([item.room, item.judge].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
@@ -193,7 +220,8 @@ struct CourtDetailView: View {
                 LabeledContent("時間", value: item.timeText)
                 LabeledContent("法庭", value: item.room.isEmpty ? Formatting.missing : item.room)
                 LabeledContent("法官／審理人員", value: item.judge.isEmpty ? Formatting.missing : item.judge)
-                if let nature = item.nature { LabeledContent("性質", value: nature) }
+                LabeledContent("案件類型", value: "\(item.caseType.category.title) · \(item.caseType.label)")
+                if let nature = item.nature { LabeledContent("聆訊性質", value: nature) }
                 LabeledContent("法院", value: CourtCatalog.name(selection.code))
                 LabeledContent("日期", value: CourtList.dayText(listDate, now: Date()))
                 LabeledContent("狀態", value: item.status(atMinute: minute).text)
@@ -204,7 +232,7 @@ struct CourtDetailView: View {
                     Link(destination: url) { Label("喺司法機構網頁開啟原案件表", systemImage: "safari") }
                 }
             } footer: {
-                Text("為保障個人資料，唔顯示訴訟各方；詳情請睇原案件表。")
+                Text("為保障個人資料，唔顯示訴訟各方；詳情請睇原案件表。案件類型按案件編號推斷。")
             }
         }
         .navigationTitle("聆訊詳情")

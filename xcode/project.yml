@@ -88,6 +88,7 @@ targets:
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift
       - path: Shared/CourtList.swift
+      - path: Shared/CourtCategory.swift
       - path: Shared/PublicHolidays.swift
       - path: Shared/DataCache.swift
     settings:

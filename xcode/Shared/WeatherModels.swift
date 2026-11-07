@@ -8,11 +8,42 @@ struct WeatherDay: Codable, Equatable {
     var uvIndex: Double?
 }
 
+/// 某一日（`yyyy-MM-dd`，當地時間）嘅預報。
+struct DatedWeather: Codable, Equatable {
+    var date: String
+    var day: WeatherDay
+}
+
+/// 某個鐘頭（`yyyy-MM-ddTHH:mm`，當地時間）嘅預報。
+struct WeatherHour: Codable, Equatable {
+    var time: String
+    var temp: Double?
+    var rainChance: Int?
+    var code: Int?
+}
+
 struct WeatherSnapshot: Codable, Equatable {
     var currentTemp: Double?
     var today: WeatherDay
     var tomorrow: WeatherDay?
     var fetchedAt: Date
+    /// 7 日預報；舊快取冇呢欄，解碼成 nil。
+    var days: [DatedWeather]? = nil
+    /// 逐小時預報；舊快取冇呢欄，解碼成 nil。
+    var hours: [WeatherHour]? = nil
+
+    /// `yyyy-MM-dd` 嗰日嘅預報（同更表嘅服務日格式一樣）。
+    func day(_ date: String) -> WeatherDay? {
+        days?.first { $0.date == date }?.day
+    }
+
+    /// 某一刻所屬鐘頭嘅預報；`calendar` 嘅時區要同預報一致（香港）。
+    func hour(at date: Date, calendar: Calendar) -> WeatherHour? {
+        let parts = calendar.dateComponents([.year, .month, .day, .hour], from: date)
+        guard let year = parts.year, let month = parts.month, let day = parts.day, let hour = parts.hour else { return nil }
+        let key = String(format: "%04d-%02d-%02dT%02d:00", year, month, day, hour)
+        return hours?.first { $0.time == key }
+    }
 
     static let sample = WeatherSnapshot(
         currentTemp: 26.4,
@@ -22,7 +53,7 @@ struct WeatherSnapshot: Codable, Equatable {
     )
 }
 
-/// Open-Meteo：免費、免 key（非商業用途）。今日同明日各一行。
+/// Open-Meteo：免費、免 key（非商業用途）。7 日預報加逐小時（今日咭用嚟睇返工／放工嗰陣嘅天氣）。
 enum OpenMeteo {
     static func url(latitude: Double, longitude: Double) -> URL? {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")
@@ -31,8 +62,9 @@ enum OpenMeteo {
             URLQueryItem(name: "longitude", value: String(format: "%.3f", longitude)),
             URLQueryItem(name: "current", value: "temperature_2m"),
             URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"),
+            URLQueryItem(name: "hourly", value: "temperature_2m,precipitation_probability,weather_code"),
             URLQueryItem(name: "timezone", value: "auto"),
-            URLQueryItem(name: "forecast_days", value: "2"),
+            URLQueryItem(name: "forecast_days", value: "7"),
         ]
         return components?.url
     }
@@ -40,14 +72,27 @@ enum OpenMeteo {
     private struct Response: Decodable {
         struct Current: Decodable { let temperature_2m: Double? }
         struct Daily: Decodable {
+            let time: [String]?
             let weather_code: [Double?]
             let temperature_2m_max: [Double?]
             let temperature_2m_min: [Double?]
             let precipitation_probability_max: [Double?]?
             let uv_index_max: [Double?]?
         }
+        struct Hourly: Decodable {
+            let time: [String]
+            let temperature_2m: [Double?]?
+            let precipitation_probability: [Double?]?
+            let weather_code: [Double?]?
+        }
         let current: Current?
         let daily: Daily
+        let hourly: Hourly?
+    }
+
+    private static func value(_ list: [Double?]?, _ index: Int) -> Double? {
+        guard let list, index < list.count else { return nil }
+        return list[index]
     }
 
     static func parse(_ data: Data, now: Date = Date()) throws -> WeatherSnapshot {
@@ -71,7 +116,25 @@ enum OpenMeteo {
         }
 
         guard let today = day(0) else { throw URLError(.cannotParseResponse) }
-        return WeatherSnapshot(currentTemp: response.current?.temperature_2m, today: today, tomorrow: day(1), fetchedAt: now)
+        var days: [DatedWeather]?
+        if let times = daily.time {
+            days = times.indices.compactMap { index in day(index).map { DatedWeather(date: times[index], day: $0) } }
+        }
+        var hours: [WeatherHour]?
+        if let hourly = response.hourly {
+            hours = hourly.time.indices.map { index in
+                WeatherHour(
+                    time: hourly.time[index],
+                    temp: value(hourly.temperature_2m, index),
+                    rainChance: value(hourly.precipitation_probability, index).map { Int($0.rounded()) },
+                    code: value(hourly.weather_code, index).map { Int($0) }
+                )
+            }
+        }
+        return WeatherSnapshot(
+            currentTemp: response.current?.temperature_2m, today: today, tomorrow: day(1), fetchedAt: now,
+            days: days, hours: hours
+        )
     }
 }
 
