@@ -26,6 +26,10 @@ struct DutyCard: Codable, Equatable {
     /// 分鐘
     var work: Int?
     var meal: DutyMeal?
+    /// 全日行程（舊快取冇呢欄，係 nil）
+    var legs: [DutyLeg]? = nil
+    /// 每段行程嘅接車／交車對象，同 `legs` 一一對應
+    var reliefs: [LegRelief]? = nil
 }
 
 enum DutyData {
@@ -49,13 +53,17 @@ enum DutyData {
         }
     }
 
-    /// 只抽需要嘅更份，唔使成份 sheet 放入快取。
+    /// 只抽需要嘅更份，唔使成份 sheet 放入快取。交接對象要對晒成張 sheet 嘅行程先計到，喺呢度一次過計好。
     static func parseCards(_ data: Data, ids: Set<String>) throws -> [String: DutyCard] {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let duties = root["duties"] as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
+        let everyone: [(id: String, legs: [DutyLeg])] = duties.compactMap { duty in
+            guard let id = duty["id"] as? String else { return nil }
+            return (id: id, legs: (duty["legs"] as? [[Any]] ?? []).compactMap(DutyLeg.init(raw:)))
+        }
         var result: [String: DutyCard] = [:]
-        for duty in duties {
-            guard let id = duty["id"] as? String, ids.contains(id),
+        for (duty, own) in zip(duties, everyone) {
+            guard ids.contains(own.id),
                   let on = duty["on"] as? [Any], let off = duty["off"] as? [Any],
                   let onAt = (on.first as? NSNumber)?.intValue, let offAt = (off.first as? NSNumber)?.intValue else { continue }
             var meal: DutyMeal?
@@ -67,15 +75,20 @@ enum DutyData {
                     to: raw.count > 3 ? raw[3] as? String : nil
                 )
             }
-            result[id] = DutyCard(
-                id: id,
+            let reliefs = own.legs.indices.map {
+                Relief.of(id: own.id, legs: own.legs, off: offAt, index: $0, others: everyone)
+            }
+            result[own.id] = DutyCard(
+                id: own.id,
                 group: duty["group"] as? String,
                 on: onAt,
                 onPlace: on.count > 1 ? on[1] as? String ?? "" : "",
                 off: offAt,
                 offPlace: off.count > 1 ? off[1] as? String ?? "" : "",
                 work: (duty["work"] as? NSNumber)?.intValue,
-                meal: meal
+                meal: meal,
+                legs: own.legs,
+                reliefs: reliefs
             )
         }
         return result

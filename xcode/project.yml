@@ -84,6 +84,7 @@ targets:
       - path: Shared/VPSStatus.swift
       - path: Shared/BatteryEstimate.swift
       - path: Shared/DutyCards.swift
+      - path: Shared/HandoverAlerts.swift
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift

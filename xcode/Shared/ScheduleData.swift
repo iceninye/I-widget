@@ -132,7 +132,8 @@ struct ScheduleData {
         }
         let keys = wanted.flatMap { sheet, ids in ids.map { DutyDay.cardKey(sheet: sheet, id: $0) } }
         let recent = DataCache.savedAt("dutyCards").map { now.timeIntervalSince($0) < 12 * 3_600 } ?? false
-        if recent, keys.allSatisfy({ cached[$0] != nil }) { return cached }
+        // 舊版快取冇行程（legs），要重新讀一次先計到交接
+        if recent, keys.allSatisfy({ cached[$0]?.legs != nil }) { return cached }
 
         var result: [String: DutyCard] = [:]
         for (sheet, ids) in wanted {
@@ -198,6 +199,21 @@ struct ScheduleData {
             if day.on != nil { return day }
         }
         return nil
+    }
+
+    /// 今日同明日（服務日）嘅交接提示，只留仲未響嘅。
+    func handoverAlerts(now: Date) -> [HandoverAlert] {
+        guard let roster else { return [] }
+        let today = Days.serviceDate(now)
+        var result: [HandoverAlert] = []
+        for offset in 0...1 {
+            guard let date = Days.add(today, offset), let code = roster.entry(on: date)?.code,
+                  code.range(of: "^[0-9]{7}$", options: .regularExpression) != nil else { continue }
+            let sheet = DutyData.sheet(for: code, date: date, sheets: sheets)
+            guard let card = cards[DutyDay.cardKey(sheet: sheet, id: code)] else { continue }
+            result += HandoverAlerts.make(card: card, date: date, places: places).filter { $0.fireAt > now }
+        }
+        return result.sorted { $0.fireAt < $1.fireAt }
     }
 
     func nextHoliday(dayStart: Date) -> Holiday? {
