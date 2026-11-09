@@ -45,5 +45,9 @@ final class AppModel: ObservableObject {
             date: now, stats: SystemStats.read(), battery: .unknown, info: loaded.0,
             schedule: loaded.1, vps: loaded.2, updatedAt: now
         )
+        // 每次開 app 都重排交接提示，跟最新更表
+        if HandoverNotifier.isEnabled, await HandoverNotifier.isAuthorized() {
+            await HandoverNotifier.schedule(loaded.1.handoverAlerts(now: now), now: now)
+        }
     }
 }
