@@ -2,7 +2,8 @@ import Foundation
 import UserNotifications
 
 /// 交接提示嘅本地通知：每次重排都先清走舊嘅 `handover.*`，再排今日同明日仲未響嘅。
-/// 免費簽名冇 Time Sensitive，所以係普通通知（有聲）；開咗 iPhone「朗讀通知」就會讀出內容。
+/// 免費簽名冇 Time Sensitive，所以係普通通知。提示聲係用語音合成錄好嘅句子（`SpokenSound`），
+/// 由手機喇叭直接讀出；錄唔到就用預設提示聲。
 enum HandoverNotifier {
     static let enabledKey = "settings.handoverAlerts"
     /// iOS 最多排 64 個本地通知，留位俾其他用途。
@@ -25,17 +26,30 @@ enum HandoverNotifier {
         center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
+    /// 關咗交接提示：通知同語音檔全部刪走。
+    static func disable() async {
+        await removeAll()
+        SpokenSound.removeAll()
+    }
+
     /// 回傳排咗幾多個。
     @discardableResult
     static func schedule(_ alerts: [HandoverAlert], now: Date = Date()) async -> Int {
         await removeAll()
         let center = UNUserNotificationCenter.current()
+        let upcoming = Array(alerts.filter { $0.fireAt > now }.prefix(limit))
+        // 舊語音檔（已經響完或者內容改咗）先刪，只留今次用得着嘅
+        SpokenSound.removeAll(except: Set(upcoming.map { SpokenSound.fileName(id: $0.id, text: $0.body) }))
         var count = 0
-        for alert in alerts.filter({ $0.fireAt > now }).prefix(limit) {
+        for alert in upcoming {
             let content = UNMutableNotificationContent()
             content.title = alert.title
             content.body = alert.body
-            content.sound = .default
+            if let sound = await SpokenSound.make(id: alert.id, text: alert.body) {
+                content.sound = UNNotificationSound(named: UNNotificationSoundName(sound))
+            } else {
+                content.sound = .default
+            }
             content.threadIdentifier = "handover"
             let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: alert.fireAt)
             let request = UNNotificationRequest(
