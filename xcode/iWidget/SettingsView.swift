@@ -34,7 +34,7 @@ struct SettingsView: View {
                 Text("""
                 用上面嘅 tml-roster token，排好今日同明日每次落地（前 5 分鐘）、接車（前 5 分鐘；用膳後第一程前 15 分鐘）嘅通知，會講埋接你／交俾邊個更同 Run。
                 每次開 app 會重排。唔想日日開 app：捷徑 App →「自動化」→「個人」→ 每日一個時間（例如 03:30）→ 動作「排交接提示」→ 揀「立即執行」。
-                想讀出嚟：設定 →「通知」→「朗讀通知」開啟（要戴 AirPods／Beats 或者連 CarPlay）。
+                通知一響會由手機喇叭讀出成句（開咗靜音掣就只會震）。
                 """)
             }
             Section("天氣定位") {
@@ -67,10 +67,10 @@ struct SettingsView: View {
                         return
                     }
                 } else {
-                    await HandoverNotifier.removeAll()
+                    await HandoverNotifier.disable()
                 }
                 // 等重排完先更新狀態
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
                 await refreshHandoverStatus()
             }
         }
