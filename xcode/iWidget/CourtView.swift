@@ -183,20 +183,21 @@ private struct CourtRow: View {
     var body: some View {
         let type = item.caseType
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(item.timeText).monospacedDigit().fontWeight(.semibold)
+            Text(item.timeText).font(.body.weight(.semibold)).monospacedDigit()
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(status == .finished ? .secondary : .primary)
-                .frame(width: 48, alignment: .leading)
+                .frame(minWidth: 52, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(item.caseNo).font(.subheadline.weight(.medium))
+                    Text(item.caseNo).font(.headline)
                     if status == .ongoing { Tag(text: "進行中", color: .green) }
                 }
                 HStack(spacing: 6) {
                     Tag(text: type.category.title, color: type.category.color)
-                    Text(item.detailText).font(.caption)
+                    Text(item.detailText).font(.subheadline)
                 }
                 Text([item.room, item.judge].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)

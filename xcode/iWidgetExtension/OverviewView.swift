@@ -98,7 +98,7 @@ struct WeekLine: View {
     var body: some View {
         if let week = entry.weekSummary {
             Text("本週 \(week.text)")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
@@ -396,7 +396,7 @@ struct TodayAlerts: View {
                 }
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 11))
+            .font(.system(size: 12))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .padding(.horizontal, 4)
@@ -450,7 +450,7 @@ struct TomorrowLine: View {
                 if let route = day.route { Text(route).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 12))
+            .font(.system(size: 15))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .padding(.horizontal, 4)
@@ -486,12 +486,12 @@ struct SchoolSection: View {
                     Text("\(failed.joined(separator: "、")) 讀唔到").foregroundStyle(.orange)
                 }
             }
-            .font(.system(size: 11))
+            .font(.system(size: 13))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             if rows.isEmpty {
                 Text(failed.count == SchoolCalendars.sources.count ? "學校日曆暫時讀唔到。" : "今明兩日冇學校活動。")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(rows.prefix(maxRows).enumerated()), id: \.offset) { _, row in
@@ -501,10 +501,10 @@ struct SchoolSection: View {
                     Text(row.title).lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 11))
+                .font(.system(size: 13))
             }
             if rows.count > maxRows {
-                Text("另有 \(rows.count - maxRows) 項").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("另有 \(rows.count - maxRows) 項").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if let holiday = entry.nextHoliday {
                 HStack(spacing: 5) {
@@ -514,7 +514,7 @@ struct SchoolSection: View {
                     Spacer(minLength: 0)
                     Text("\(holiday.daysAway) 日後").foregroundStyle(.secondary)
                 }
-                .font(.system(size: 11))
+                .font(.system(size: 13))
             }
         }
         .padding(.horizontal, 4)
