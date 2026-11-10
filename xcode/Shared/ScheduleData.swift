@@ -201,19 +201,21 @@ struct ScheduleData {
         return nil
     }
 
-    /// 今日同明日（服務日）嘅交接提示，只留仲未響嘅。
-    func handoverAlerts(now: Date) -> [HandoverAlert] {
-        guard let roster else { return [] }
+    /// 今日同明日（服務日）嘅提示（上班、接車、落地、放工），只留仲未響嘅。
+    func handoverAlerts(now: Date, settings: HandoverSettings = HandoverSettings()) -> [HandoverAlert] {
+        guard roster != nil else { return [] }
         let today = Days.serviceDate(now)
         var result: [HandoverAlert] = []
         for offset in 0...1 {
-            guard let date = Days.add(today, offset), let code = roster.entry(on: date)?.code,
-                  code.range(of: "^[0-9]{7}$", options: .regularExpression) != nil else { continue }
-            let sheet = DutyData.sheet(for: code, date: date, sheets: sheets)
-            guard let card = cards[DutyDay.cardKey(sheet: sheet, id: code)] else { continue }
-            result += HandoverAlerts.make(card: card, date: date, places: places).filter { $0.fireAt > now }
+            guard let date = Days.add(today, offset), let day = duty(on: date) else { continue }
+            result += HandoverAlerts.dutyAlerts(day: day, settings: settings)
+            guard day.code.range(of: "^[0-9]{7}$", options: .regularExpression) != nil else { continue }
+            let sheet = DutyData.sheet(for: day.code, date: date, sheets: sheets)
+            if let card = cards[DutyDay.cardKey(sheet: sheet, id: day.code)] {
+                result += HandoverAlerts.make(card: card, date: date, places: places, settings: settings)
+            }
         }
-        return result.sorted { $0.fireAt < $1.fireAt }
+        return result.filter { $0.fireAt > now }.sorted { $0.fireAt < $1.fireAt }
     }
 
     func nextHoliday(dayStart: Date) -> Holiday? {

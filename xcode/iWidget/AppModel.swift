@@ -46,8 +46,18 @@ final class AppModel: ObservableObject {
             schedule: loaded.1, vps: loaded.2, updatedAt: now
         )
         // 每次開 app 都重排交接提示，跟最新更表
+        await rescheduleHandover()
+    }
+
+    /// 用而家手上嘅更份資料重排提示（改設定之後唔使再上網）。回傳將會響嘅提示，設定頁預覽用。
+    @discardableResult
+    func rescheduleHandover() async -> [HandoverAlert] {
+        let now = Date()
+        let settings = HandoverSettings.load()
+        let alerts = entry.schedule.handoverAlerts(now: now, settings: settings)
         if HandoverNotifier.isEnabled, await HandoverNotifier.isAuthorized() {
-            await HandoverNotifier.schedule(loaded.1.handoverAlerts(now: now), now: now)
+            await HandoverNotifier.schedule(alerts, settings: settings, now: now)
         }
+        return alerts
     }
 }

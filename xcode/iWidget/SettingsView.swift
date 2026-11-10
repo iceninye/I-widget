@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(HandoverNotifier.enabledKey) private var handoverAlerts = false
     @State private var handoverStatus = ""
     @StateObject private var location = LocationAuth()
+    @ObservedObject var model: AppModel
     let onChange: () -> Void
 
     var body: some View {
@@ -25,6 +26,7 @@ struct SettingsView: View {
             }
             Section {
                 Toggle("交接提示", isOn: $handoverAlerts)
+                NavigationLink("提示時間、語音、試聲") { HandoverSettingsView(model: model) }
                 if !handoverStatus.isEmpty {
                     Text(handoverStatus).font(.footnote).foregroundStyle(.secondary)
                 }
@@ -32,7 +34,7 @@ struct SettingsView: View {
                 Text("交接提示")
             } footer: {
                 Text("""
-                用上面嘅 tml-roster token，排好今日同明日每次落地（前 5 分鐘）、接車（前 5 分鐘；用膳後第一程前 15 分鐘）嘅通知，會講埋接你／交俾邊個更同 Run。
+                用上面嘅 tml-roster token，排好今日同明日返工前、每次接車、落地嘅通知（預設提前 15 分鐘，返工另加 1 小時前），會講埋接你／交俾邊個更、Run 同之後做咩。
                 每次開 app 會重排。唔想日日開 app：捷徑 App →「自動化」→「個人」→ 每日一個時間（例如 03:30）→ 動作「排交接提示」→ 揀「立即執行」。
                 通知一響會由手機喇叭讀出成句（開咗靜音掣就只會震）。
                 """)

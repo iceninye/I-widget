@@ -19,7 +19,7 @@ struct ContentView: View {
             NavigationStack { CourtView(model: court) }
                 .tabItem { Label("法院", systemImage: "building.columns.fill") }
                 .tag(Tab.court)
-            NavigationStack { SettingsView { Task { await model.refresh() } } }
+            NavigationStack { SettingsView(model: model) { Task { await model.refresh() } } }
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }

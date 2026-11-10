@@ -6,7 +6,7 @@ import Foundation
 /// 唔使開 app。
 struct ScheduleHandoverAlertsIntent: AppIntent {
     static var title: LocalizedStringResource = "排交接提示"
-    static var description = IntentDescription("讀今日同明日嘅更份，排好每次接車、落地同用膳後接車嘅通知。")
+    static var description = IntentDescription("讀今日同明日嘅更份，排好返工、每次接車、落地同用膳後接車嘅通知。")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -20,10 +20,11 @@ struct ScheduleHandoverAlertsIntent: AppIntent {
         UserDefaults.standard.set(true, forKey: HandoverNotifier.enabledKey)
         let now = Date()
         let data = await ScheduleData.load(token: token, now: now)
-        let alerts = data.handoverAlerts(now: now)
-        let count = await HandoverNotifier.schedule(alerts, now: now)
+        let settings = HandoverSettings.load()
+        let alerts = data.handoverAlerts(now: now, settings: settings)
+        let count = await HandoverNotifier.schedule(alerts, settings: settings, now: now)
         if count == 0 {
-            return .result(dialog: "今日同明日冇交接提示（休息、未有更份卡，或者已經放工）。")
+            return .result(dialog: "今日同明日冇提示（休息，或者已經放工）。")
         }
         let first = alerts.first.map { "，第一個 \(Self.clock($0.fireAt))" } ?? ""
         return .result(dialog: "已排好 \(count) 個交接提示\(first)。")
