@@ -32,34 +32,62 @@ enum HandoverNotifier {
         SpokenSound.removeAll()
     }
 
-    /// 回傳排咗幾多個。
+    static let lastSpokenKey = "handover.lastSpoken"
+
+    private static func makeContent(_ alert: HandoverAlert, settings: HandoverSettings) async -> (UNMutableNotificationContent, Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = alert.title
+        content.body = alert.body
+        content.threadIdentifier = "handover"
+        if settings.speak, let sound = await SpokenSound.make(id: alert.id, text: alert.body, settings: settings) {
+            content.sound = UNNotificationSound(named: UNNotificationSoundName(sound))
+            return (content, true)
+        }
+        content.sound = .default
+        return (content, false)
+    }
+
+    /// 回傳排咗幾多個。有幾多個錄到語音記喺 `lastSpokenKey`（設定頁顯示用）。
     @discardableResult
-    static func schedule(_ alerts: [HandoverAlert], now: Date = Date()) async -> Int {
+    static func schedule(_ alerts: [HandoverAlert], settings: HandoverSettings = .load(), now: Date = Date()) async -> Int {
         await removeAll()
         let center = UNUserNotificationCenter.current()
         let upcoming = Array(alerts.filter { $0.fireAt > now }.prefix(limit))
         // 舊語音檔（已經響完或者內容改咗）先刪，只留今次用得着嘅
-        SpokenSound.removeAll(except: Set(upcoming.map { SpokenSound.fileName(id: $0.id, text: $0.body) }))
+        let keep = settings.speak ? Set(upcoming.map { SpokenSound.fileName(id: $0.id, text: $0.body, settings: settings) }) : []
+        SpokenSound.removeAll(except: keep)
         var count = 0
+        var spoken = 0
         for alert in upcoming {
-            let content = UNMutableNotificationContent()
-            content.title = alert.title
-            content.body = alert.body
-            if let sound = await SpokenSound.make(id: alert.id, text: alert.body) {
-                content.sound = UNNotificationSound(named: UNNotificationSoundName(sound))
-            } else {
-                content.sound = .default
-            }
-            content.threadIdentifier = "handover"
+            let (content, hasVoice) = await makeContent(alert, settings: settings)
             let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: alert.fireAt)
             let request = UNNotificationRequest(
                 identifier: alert.id,
                 content: content,
                 trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
             )
-            if (try? await center.add(request)) != nil { count += 1 }
+            if (try? await center.add(request)) != nil {
+                count += 1
+                if hasVoice { spoken += 1 }
+            }
         }
+        UserDefaults.standard.set(spoken, forKey: lastSpokenKey)
         return count
+    }
+
+    /// 測試通知：5 秒後響一次，用嚟試聲。回傳有冇錄到語音。
+    static func test(_ text: String, settings: HandoverSettings) async -> Bool {
+        let alert = HandoverAlert(
+            id: "\(HandoverAlerts.idPrefix)test", kind: .pickUp, fireAt: Date(), eventAt: Date(), title: "交接提示測試", body: text
+        )
+        let (content, hasVoice) = await makeContent(alert, settings: settings)
+        let request = UNNotificationRequest(
+            identifier: alert.id,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+        return hasVoice
     }
 
     /// 下一個會響嘅提示（設定頁顯示用）。

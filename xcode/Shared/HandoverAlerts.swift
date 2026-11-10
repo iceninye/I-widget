@@ -101,26 +101,83 @@ enum Relief {
     }
 }
 
-/// 一個交接提示：幾時響、講咩。通知內容喺排程嗰陣已經定咗，所以只用 Duty Sheet 嘅時間。
+/// 提示設定：每種情況提前幾多分鐘（0 = 唔提），同語音讀出嘅設定。存喺 app 嘅 UserDefaults。
+struct HandoverSettings: Codable, Equatable {
+    /// 上班前（兩次，例如 1 小時前同 15 分鐘前）
+    var onFirst = 60
+    var onSecond = 15
+    /// 接車前
+    var pickUp = 15
+    /// 落地／交車前
+    var dropOff = 15
+    /// 用膳完結（用膳後第一程接車）前
+    var mealEnd = 15
+    /// 放工前最後一次落地／交車前
+    var lastDrop = 15
+    /// 放工前
+    var off = 0
+    /// 通知一響就讀出內容
+    var speak = true
+    /// 聲線 identifier；nil = 自動揀廣東話
+    var voice: String?
+    /// 語速（AVSpeechUtterance：0–1，預設 0.5）
+    var rate = 0.5
+    /// 讀兩次（嘈吵環境）
+    var twice = false
+
+    static let key = "settings.handover"
+
+    init() {}
+
+    /// 之後加新欄位，舊設定都照樣讀到。
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        func int(_ key: CodingKeys, _ fallback: Int) -> Int {
+            max(0, (try? values.decodeIfPresent(Int.self, forKey: key)) ?? fallback)
+        }
+        onFirst = int(.onFirst, 60)
+        onSecond = int(.onSecond, 15)
+        pickUp = int(.pickUp, 15)
+        dropOff = int(.dropOff, 15)
+        mealEnd = int(.mealEnd, 15)
+        lastDrop = int(.lastDrop, 15)
+        off = int(.off, 0)
+        speak = (try? values.decodeIfPresent(Bool.self, forKey: .speak)) ?? true
+        voice = (try? values.decodeIfPresent(String.self, forKey: .voice)) ?? nil
+        rate = min(0.65, max(0.3, (try? values.decodeIfPresent(Double.self, forKey: .rate)) ?? 0.5))
+        twice = (try? values.decodeIfPresent(Bool.self, forKey: .twice)) ?? false
+    }
+
+    static func load(_ defaults: UserDefaults = .standard) -> HandoverSettings {
+        guard let data = defaults.data(forKey: key),
+              let settings = try? JSONDecoder().decode(HandoverSettings.self, from: data) else { return HandoverSettings() }
+        return settings
+    }
+
+    func save(_ defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.key) }
+    }
+}
+
+/// 一個提示：幾時響、講咩。通知內容喺排程嗰陣已經定咗，所以只用 Duty Sheet 嘅時間。
 struct HandoverAlert: Equatable {
-    enum Kind: String { case pickUp = "pick", dropOff = "drop" }
+    enum Kind: String { case on, pickUp = "pick", dropOff = "drop", off }
 
     var id: String
     var kind: Kind
     var fireAt: Date
-    /// 接車／落地嘅時間
+    /// 返工／接車／落地／放工嘅時間
     var eventAt: Date
     var title: String
     var body: String
 }
 
-/// 由更份卡砌出當日全部交接提示：
-/// - 落地前 5 分鐘：「5 分鐘後喺錦上路 1落地，接你嗰位係 118 更」
-/// - 接車前 5 分鐘；用膳之後嘅第一程提前 15 分鐘：「15 分鐘後你要喺錦上路 2接 128 更嘅 Run 18」
+/// 由更份砌出當日全部提示（提前幾耐跟 `HandoverSettings`，預設全部 15 分鐘，上班另加 1 小時前）：
+/// - 上班前：「1 小時後返工，08:53 喺錦上路，111 更」
+/// - 接車前：「15 分鐘後你要喺錦上路 2接 128 更嘅 Run 18，開去烏溪沙」
+/// - 落地前：「15 分鐘後喺錦上路 2落地，接你嗰位係 118 更，之後用膳到 11:16」
+/// 每個提示都講埋之後做咩：用膳、泊車、接另一架車、搭車、收工。
 enum HandoverAlerts {
-    static let dropLead = 5 * 60
-    static let pickLead = 5 * 60
-    static let afterMealLead = 15 * 60
     static let idPrefix = "handover."
 
     /// 「8027118」→「118」：同一張 Duty Sheet 入面，大家講後面三個字。
@@ -134,56 +191,101 @@ enum HandoverAlerts {
         return Date(timeIntervalSince1970: Double(day) * 86_400 - 8 * 3_600 + Double(second))
     }
 
-    private static func minutes(_ seconds: Int) -> String { "\(seconds / 60) 分鐘後" }
+    /// 「15 分鐘後」「1 小時後」「1 小時 30 分鐘後」
+    static func leadText(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) 分鐘後" }
+        return minutes % 60 == 0 ? "\(minutes / 60) 小時後" : "\(minutes / 60) 小時 \(minutes % 60) 分鐘後"
+    }
 
-    static func make(card: DutyCard, date: String, places: PlaceNames) -> [HandoverAlert] {
+    /// 同一個 Run 連續幾段（例如準備 → 開車 → 泊車）當一程：由 `index` 開始，最後一段嘅位置。
+    static func chainEnd(_ legs: [DutyLeg], from index: Int) -> Int {
+        var last = index
+        while Relief.continuesOut(legs, last) { last += 1 }
+        return last
+    }
+
+    /// 落地之後做咩：用膳、收工，或者下一段行程。
+    static func afterText(card: DutyCard, legs: [DutyLeg], index: Int, until: Int, places: PlaceNames) -> String {
+        let next = index + 1 < legs.count ? legs[index + 1] : nil
+        if let meal = card.meal, meal.start >= until - 60, next.map({ $0.at >= meal.start }) ?? true {
+            return "之後用膳" + (meal.end.map { "到 \(DutyDay.clock($0))" } ?? "")
+        }
+        guard let next else { return "之後收工" }
+        let at = DutyDay.clock(next.at)
+        switch next.kind {
+        case "ride": return "之後搭車去\(places.name(next.to))"
+        case "wait": return "之後待命"
+        case "park": return "之後 \(at) 喺\(places.name(next.from))泊車，Run \(next.run)"
+        case "prep": return "之後 \(at) 喺\(places.name(next.from))準備 Run \(next.run)"
+        case "drive", "empty": return "之後 \(at) 喺\(places.name(next.from))接 Run \(next.run)"
+        default: return ""
+        }
+    }
+
+    /// 接車、落地嘅提示（要有更份卡嘅行程）。
+    static func make(card: DutyCard, date: String, places: PlaceNames, settings: HandoverSettings = HandoverSettings()) -> [HandoverAlert] {
         guard let legs = card.legs, !legs.isEmpty else { return [] }
         let reliefs = card.reliefs ?? []
-        // 用膳之後第一段要接車嘅行程：用膳完結前 15 分鐘提
-        let mealEnd = card.meal?.end
-        let firstAfterMeal = mealEnd.flatMap { end in
+        // 用膳之後第一段要接車嘅行程：跟「用膳完結前」嘅設定
+        let firstAfterMeal = card.meal?.end.flatMap { end in
             legs.indices.first { legs[$0].isTrain && !Relief.continuesIn(legs, $0) && legs[$0].at >= end - 60 }
         }
+        // 放工前最後一次落地
+        let lastDrop = legs.indices.last(where: { legs[$0].isTrain && !Relief.continuesOut(legs, $0) })
 
         var result: [HandoverAlert] = []
         for index in legs.indices where legs[index].isTrain {
             let leg = legs[index]
             let relief = index < reliefs.count ? reliefs[index] : .none
 
-            if !Relief.continuesIn(legs, index), let eventAt = moment(date: date, second: leg.at) {
-                let lead = index == firstAfterMeal ? afterMealLead : pickLead
+            let pickLead = index == firstAfterMeal ? settings.mealEnd : settings.pickUp
+            if pickLead > 0, !Relief.continuesIn(legs, index), let eventAt = moment(date: date, second: leg.at) {
                 let place = places.name(leg.from)
-                let body: String
-                if leg.kind == "prep" {
-                    body = "\(minutes(lead))喺\(place)準備 Run \(leg.run)"
-                } else if let from = relief.from {
-                    body = "\(minutes(lead))你要喺\(place)接 \(short(from.id)) 更嘅 Run \(leg.run)"
-                } else {
-                    body = "\(minutes(lead))你要喺\(place)接 Run \(leg.run)"
+                let last = chainEnd(legs, from: index)
+                let chain = legs[index...last]
+                let destination = places.name(legs[last].to)
+                let whose = relief.from.map { short($0.id) + " 更嘅 " } ?? ""
+                var body = leadText(pickLead)
+                switch leg.kind {
+                case "prep":
+                    body += "喺\(place)準備 Run \(leg.run)"
+                    if last > index { body += "，之後開去\(destination)" }
+                case "park":
+                    body += "你要喺\(place)接 \(whose)Run \(leg.run)，泊車去\(destination)"
+                default:
+                    body += "你要喺\(place)接 \(whose)Run \(leg.run)"
+                    body += leg.kind == "empty" ? "，空車去\(destination)" : "，開去\(destination)"
+                    if chain.dropFirst().contains(where: { $0.kind == "park" }) { body += "，之後泊車" }
                 }
                 result.append(HandoverAlert(
                     id: "\(idPrefix)\(date).\(card.id).\(index).\(HandoverAlert.Kind.pickUp.rawValue)",
                     kind: .pickUp,
-                    fireAt: eventAt.addingTimeInterval(-Double(lead)),
+                    fireAt: eventAt.addingTimeInterval(-Double(pickLead * 60)),
                     eventAt: eventAt,
                     title: "接車 \(DutyDay.clock(leg.at)) · Run \(leg.run)",
                     body: body
                 ))
             }
 
-            if !Relief.continuesOut(legs, index), let until = Relief.end(of: legs, at: index, off: card.off),
+            let dropLead = index == lastDrop ? settings.lastDrop : settings.dropOff
+            if dropLead > 0, !Relief.continuesOut(legs, index), let until = Relief.end(of: legs, at: index, off: card.off),
                let eventAt = moment(date: date, second: until) {
                 let place = places.name(leg.to)
-                let body: String
+                var body = index == lastDrop ? "最後一程，" : ""
+                body += leadText(dropLead)
                 if let to = relief.to {
-                    body = "\(minutes(dropLead))喺\(place)落地，接你嗰位係 \(short(to.id)) 更"
+                    body += "喺\(place)落地，接你嗰位係 \(short(to.id)) 更"
+                } else if leg.kind == "park" {
+                    body += "喺\(place)泊好車，Run \(leg.run)"
                 } else {
-                    body = "\(minutes(dropLead))喺\(place)落地（Run \(leg.run)）"
+                    body += "喺\(place)落地，Run \(leg.run)"
                 }
+                let after = afterText(card: card, legs: legs, index: index, until: until, places: places)
+                if !after.isEmpty { body += "，\(after)" }
                 result.append(HandoverAlert(
                     id: "\(idPrefix)\(date).\(card.id).\(index).\(HandoverAlert.Kind.dropOff.rawValue)",
                     kind: .dropOff,
-                    fireAt: eventAt.addingTimeInterval(-Double(dropLead)),
+                    fireAt: eventAt.addingTimeInterval(-Double(dropLead * 60)),
                     eventAt: eventAt,
                     title: "落地 \(DutyDay.clock(until)) · \(place)",
                     body: body
@@ -191,5 +293,36 @@ enum HandoverAlerts {
             }
         }
         return result.sorted { $0.fireAt < $1.fireAt }
+    }
+
+    /// 上班前（最多兩次）同放工前嘅提示：有上下班時間就得，唔使更份卡。
+    static func dutyAlerts(day: DutyDay, settings: HandoverSettings = HandoverSettings()) -> [HandoverAlert] {
+        var result: [HandoverAlert] = []
+        let name = day.kind == .duty && day.code.count == 7 ? "\(short(day.code)) 更" : day.code
+        if let on = day.on, let eventAt = moment(date: day.date, second: on) {
+            let place = day.onPlace.isEmpty ? "" : " 喺\(day.onPlace)"
+            for lead in Set([settings.onFirst, settings.onSecond]).sorted(by: >) where lead > 0 {
+                result.append(HandoverAlert(
+                    id: "\(idPrefix)\(day.date).\(day.code).on.\(lead)",
+                    kind: .on,
+                    fireAt: eventAt.addingTimeInterval(-Double(lead * 60)),
+                    eventAt: eventAt,
+                    title: "返工 \(DutyDay.clock(on))\(day.onPlace.isEmpty ? "" : " · \(day.onPlace)")",
+                    body: "\(leadText(lead))返工，\(DutyDay.clock(on))\(place)，\(name)"
+                ))
+            }
+        }
+        if settings.off > 0, let off = day.off, let eventAt = moment(date: day.date, second: off) {
+            let place = day.offPlace.isEmpty ? "" : " 喺\(day.offPlace)"
+            result.append(HandoverAlert(
+                id: "\(idPrefix)\(day.date).\(day.code).off",
+                kind: .off,
+                fireAt: eventAt.addingTimeInterval(-Double(settings.off * 60)),
+                eventAt: eventAt,
+                title: "放工 \(DutyDay.clock(off))\(day.offPlace.isEmpty ? "" : " · \(day.offPlace)")",
+                body: "\(leadText(settings.off))收工，\(DutyDay.clock(off))\(place)"
+            ))
+        }
+        return result
     }
 }
