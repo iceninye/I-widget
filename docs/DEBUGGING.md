@@ -1,3 +1,5 @@
+> 📌 文中提到嘅診斷腳本（`diagnose.py`、`i_widget_probe.py`、`i_widget_slowdiag.py` 等）已經刪咗，可以喺 git 歷史搵返（commit `da34004` 或之前）。
+
 > ⚠️ **本文件記錄嘅是診斷過程，當中多個「真因」後來被真機數據推翻。**
 > 正確根因同修法見 [POSTMORTEM.md](POSTMORTEM.md)：`DynamicDate(…, color=…)` 令 process 被殺
 > （冇例外，`try/except` 捉唔到），並非 `__file__`、`Color.dynamic` 或 `COLOR_*` 缺失。

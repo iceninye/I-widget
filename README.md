@@ -1,8 +1,9 @@
 # i-widget
 
-iPhone Home Screen 嘅「時間／系統狀態」widget，用 **Pyto**（iOS 上嘅 Python 環境）寫成。
+iPhone Home Screen 嘅 widget。
 
-唔需要 Mac、唔需要 Xcode，成個 widget 就係一隻 Python 檔案。
+**主線版本係 Xcode（原生 WidgetKit）版**，放喺 [`xcode/`](xcode/README.md)：更份、交接提示、法院、天氣、黃金同 VPS 狀態都係呢邊。
+下面講嘅 **Pyto 版**（Python，唔需要 Mac、唔需要 Xcode）同 [Scriptable 版](scriptable/README.md) 係早期版本，保留作備用，唔再加新功能。
 
 ## 顯示內容
 
@@ -49,12 +50,9 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 綠色 = `wd.show_widget()` 從來冇被叫到。原因可以係例外，亦可以係 process 被系統殺死
 （`try/except` 捉唔到）。
 
-1. 喺 Pyto 行 **`i_widget_trace.py`**，睇足跡最後一行去到邊、`i_widget.banned` 有冇嘢。
-2. 某個元件令 process 死過，widget 會**自己偵測並繞開**（連續死兩次先停用，下一輪 reload 就恢復），唔使人手處理。
-3. 完整事故分析見 [docs/POSTMORTEM.md](docs/POSTMORTEM.md)（真因：`DynamicDate` 帶 `color` 參數喺 extension 入面令 process 被殺）。
-
-快速二分法：`i_widget_safe.py` 係保證出到畫面嘅最小版本。
-如果佢正常但 `i_widget.py` 綠色，就係 `i_widget.py` 某個元件有問題。
+1. 某個元件令 process 死過，widget 會**自己偵測並繞開**（連續死兩次先停用，下一輪 reload 就恢復），唔使人手處理。
+2. 完整事故分析見 [docs/POSTMORTEM.md](docs/POSTMORTEM.md)（真因：`DynamicDate` 帶 `color` 參數喺 extension 入面令 process 被殺）。
+3. 當時用嘅診斷腳本（`i_widget_trace.py`、`i_widget_safe.py`、`i_widget_probe.py` 等）已經刪咗，需要可以喺 git 歷史搵返（commit `da34004` 或之前）。
 
 ## 其他選擇：Scriptable 版
 
@@ -117,8 +115,6 @@ Pyto 要喺 widget extension 入面行成個 CPython，記憶體緊、排版工�
 | `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
 | `scriptable/i-widget.js` | **Scriptable 版**（JavaScript），見 [scriptable/README.md](scriptable/README.md) | 改版面時 |
 | `scriptable/test-i-widget.js` | Scriptable 版測試（`node scriptable/test-i-widget.js`） | 改 Scriptable 版時 |
-| `i_widget_trace.py` | 讀出真機足跡同停用名單 | 除錯時 |
-| `i_widget_safe.py` | 保證出到畫面嘅最小版本（二分用） | 唔使 |
 | `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
 | `docs/POSTMORTEM.md` | 綠色事故分析 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
