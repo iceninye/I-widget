@@ -111,3 +111,5 @@ iPhone 唔會用到 extra large，所以只砌 small／medium／large；亦減�
 | `i_widget_safe.py` | 保證出到畫面嘅最小版本，二分用 |
 | `test_widget.py` | smoke test＋崩潰自癒情境 R |
 | `test_launcher.py` | 更新邏輯測試 |
+
+> 📌 文中提到嘅診斷腳本（`slowdiag`、`diag` 等）已經刪咗，可以喺 git 歷史搵返（commit `da34004` 或之前）。

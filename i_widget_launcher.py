@@ -65,7 +65,7 @@ REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
 #
 # 綠色 default template = process 死咗或者 show_widget() 冇叫到，冇任何錯誤訊息。
 # try/except 捉唔到硬崩潰、被系統殺（記憶體／超時），所以每過一個關卡就即刻
-# 寫一行去 userkeys。下次喺 Pyto 入面行 i_widget_trace.py 就睇到「最後去到邊」。
+# 寫一行去 userkeys。下次喺 Pyto 入面讀 userkeys 嘅 i_widget.trace 就睇到「最後去到邊」。
 TRACE_KEY = "i_widget.trace"
 TRACE_MAX_LINES = 60
 _T0 = time.time()
