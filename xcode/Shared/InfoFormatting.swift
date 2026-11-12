@@ -24,6 +24,16 @@ extension Formatting {
         return formatter.string(from: NSNumber(value: price)) ?? missing
     }
 
+    /// 26,123（港元每両：整數已經夠，細格放得落）
+    static func goldWhole(_ price: Double?) -> String {
+        guard let price else { return missing }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: price.rounded())) ?? missing
+    }
+
     /// 超過呢段時間冇更新，就當資料已過時。
     static let staleAfter: TimeInterval = 3_600
 

@@ -146,7 +146,7 @@ struct ExchangeRates: Codable, Equatable {
     var fetchedAt: Date
 
     static let sample = ExchangeRates(
-        perHKD: ["JPY": 19.3, "CNY": 0.92, "TWD": 4.1, "GBP": 0.098],
+        perHKD: ["JPY": 19.3, "CNY": 0.92, "TWD": 4.1, "GBP": 0.098, "USD": 0.128],
         fetchedAt: Date()
     )
 
@@ -157,7 +157,7 @@ struct ExchangeRates: Codable, Equatable {
 /// open.er-api.com：免費、免 key，一日更新一次。
 enum FXAPI {
     static let url = URL(string: "https://open.er-api.com/v6/latest/HKD")!
-    static let codes = ["JPY", "CNY", "TWD", "GBP"]
+    static let codes = ["JPY", "CNY", "TWD", "GBP", "USD"]
 
     static func parse(_ data: Data, now: Date = Date()) throws -> ExchangeRates {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
