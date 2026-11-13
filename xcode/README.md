@@ -25,6 +25,20 @@ open iWidget.xcodeproj
 3. Xcode 上方 scheme 揀 **iWidget**，裝置揀你部 iPhone，㩒 **Run (⌘R)**。
 4. 第一次會提示「不受信任嘅開發者」：設定 → 一般 → **VPN 與裝置管理** → 揀你個 Apple ID → 信任。再 Run 一次。
 
+## 3b. 用 AltStore 安裝（唔使每 7 日插線）
+免費 Apple ID 簽名 7 日就過期。AltStore 會喺 Mac／PC 嘅 AltServer 同 iPhone 喺同一個 WiFi 時自動重新簽名，唔使再用 Xcode 重裝。
+
+1. Mac 裝好 AltServer、iPhone 裝好 AltStore（照 AltStore 官方步驟，用你自己嘅 Apple ID）。
+2. 用 iPhone 嘅 Safari 開 <https://github.com/iceninye/I-widget/releases/download/ipa-latest/iWidget.ipa> 下載（GitHub Actions `Build ipa` 每次 main 嘅 `xcode/` 有改動就更新呢個 Release，檔案係**未簽名**，所以 AltStore 先可以用你個 Apple ID 簽）。
+3. 下載完用「分享」→ **AltStore**（或者 AltStore → My Apps → 左上角 **+** → 揀檔案）。
+4. 之後 AltServer 開住、同一個 WiFi，AltStore 會自動續期；有新版本就重複步驟 2、3，AltStore 會直接覆蓋更新。
+
+注意：
+- **先刪走 Xcode 裝嗰個舊 app。** AltStore 會喺 bundle id 後面加你個 Team ID（Extension 一齊改），所以同 Xcode 版係兩個唔同嘅 app；本 repo 嘅 bundle id（`com.iceninye.i-widget`）唔使改。
+- **設定要重新填**：roster token、交接提示設定、通知權限、每個 widget「編輯小工具」入面嘅 token（VPS token 等），同捷徑 App 入面「排交接提示」自動化（重新揀動作）。
+- 呢個 app 冇用 App Group 或其他 entitlement，所以重新簽名唔會令功能消失。
+- 免費帳戶 App ID 有數量限制（app + widget extension 用 2 個）；仍然係 7 日簽名期，只係自動續期。
+
 ## 4. 加 widget
 主畫面長按 → 左上角 **+** → 搵 **i-widget**，有三個 widget（各自加、各自設定）：
 - **今日咭**（中／大）：今日更份（頭行有服務日日期）、天氣預報（而家溫度、天氣、高低溫、降雨機會，加返工／放工嗰個鐘嘅逐小時預報）、

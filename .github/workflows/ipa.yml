@@ -1,0 +1,106 @@
+name: Build ipa
+
+# 出一個未簽名嘅 iWidget.ipa（app + widget extension），俾 AltStore 用你自己嘅 Apple ID 重新簽名安裝。
+# - PR：只編譯同打包，ipa 放喺 workflow artifact（驗證 workflow 本身冇壞，唔會發佈）。
+# - main（xcode/ 有改動）或者手動執行：另外更新固定嘅 Release `ipa-latest`，
+#   下載連結永遠係 https://github.com/iceninye/I-widget/releases/download/ipa-latest/iWidget.ipa
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "xcode/**"
+      - ".github/workflows/ipa.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/ipa.yml"
+  workflow_dispatch:
+
+# 只有發佈 Release 嗰步先需要寫入權限
+permissions:
+  contents: write
+
+# 同時間只跑一個，免得兩個 run 互相覆蓋 Release
+concurrency:
+  group: ipa
+  cancel-in-progress: false
+
+jobs:
+  ipa:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: xcode
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安裝 XcodeGen
+        run: brew install xcodegen
+
+      - name: 產生 Xcode 專案
+        run: xcodegen generate
+
+      - name: 編譯（真機 SDK，Release，唔簽名）
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project iWidget.xcodeproj \
+            -scheme iWidget \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }}
+
+      - name: 打包 ipa
+        run: |
+          set -euo pipefail
+          APP=build/Build/Products/Release-iphoneos/iWidget.app
+          test -d "$APP"
+          rm -rf Payload iWidget.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry iWidget.ipa Payload
+          ls -l iWidget.ipa
+
+      - name: 檢查 ipa 內容
+        run: |
+          set -euo pipefail
+          APP=Payload/iWidget.app
+          APPEX=$APP/PlugIns/iWidgetExtension.appex
+          test -d "$APPEX" || { echo "ipa 入面冇 widget extension"; exit 1; }
+          plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Info.plist"; }
+          APP_ID=$(plist "$APP" CFBundleIdentifier)
+          EXT_ID=$(plist "$APPEX" CFBundleIdentifier)
+          echo "app: $APP_ID"
+          echo "extension: $EXT_ID"
+          echo "version: $(plist "$APP" CFBundleShortVersionString) ($(plist "$APP" CFBundleVersion))"
+          test "$APP_ID" = "com.iceninye.i-widget" || { echo "app bundle id 唔啱"; exit 1; }
+          test "$EXT_ID" = "com.iceninye.i-widget.widget" || { echo "extension bundle id 唔啱"; exit 1; }
+          # 未簽名：唔應該有 embedded.mobileprovision
+          test ! -e "$APP/embedded.mobileprovision"
+
+      - name: 上載 ipa（workflow artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: iWidget.ipa
+          path: xcode/iWidget.ipa
+          retention-days: 14
+
+      - name: 更新 Release ipa-latest
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 刪咗重建，tag 先會跟住最新 commit；下載連結（tag + 檔名）不變
+          gh release delete ipa-latest --cleanup-tag --yes || true
+          gh release create ipa-latest iWidget.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "iWidget ipa（最新 main，未簽名）" \
+            --notes "未簽名 ipa，俾 AltStore 用自己嘅 Apple ID 重新簽名安裝。Commit ${GITHUB_SHA::7}，build #${{ github.run_number }}。見 xcode/README.md「用 AltStore 安裝」。"
