@@ -155,20 +155,49 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(cases.map(\.nature), ["聆訊", "聆訊", nil])
     }
 
-    func testMagistrateStageWordsButNeverPartiesOrCharges() {
+    func testMagistrateOffenceAndHearingButNeverDefendants() {
         let html = rows([
             ["法庭 Court :", "第 1 庭 Court No.1"],
-            ["9:30 am", "TWS 1/2026", "陳大文", "襲警", "答辯 Plea"],
-            ["", "TWS 2/2026", "李小明", "盜竊", "訊問"],
+            ["9:30 am", "TWS 1/2026", "陳大文 CHAN TAI MAN", "襲警 Assaulting police officer", "答辯 Plea"],
+            ["", "TWS 2/2026", "李小明", "(1)盜竊 (1)Theft (2)在公眾地方打鬥 (2)Fighting in public place", "D1 - 判刑 D1 - Sentence D2 - 裁決 D2 - Verdict"],
             ["10:00 am", "KCCC 5/2026", "張三", "傷人"],
         ])
         let cases = CourtList.parse(html)
-        XCTAssertEqual(cases.map(\.nature), ["答辯", "訊問", nil])
-        let leaked: Set<String> = ["陳大文", "李小明", "張三", "襲警", "盜竊", "傷人"]
+        XCTAssertEqual(cases.map(\.nature), ["答辯", "D1 - 判刑 D2 - 裁決", nil])
+        XCTAssertEqual(cases.map(\.offence), ["襲警", "(1)盜竊 (2)在公眾地方打鬥", nil])
+        XCTAssertEqual(cases[0].charge, "襲警")
+        XCTAssertEqual(cases[0].stage, "答辯")
+        XCTAssertEqual(cases[1].detailText, "傳票案件 · D1 - 判刑 D2 - 裁決")
+        // 控罪沒有獨立格（只有 4 格）就唔猜，被告絕對唔可以出現
+        XCTAssertNil(cases[2].charge)
+        let defendants: Set<String> = ["陳大文", "李小明", "張三", "CHAN TAI MAN"]
         for item in cases {
-            let fields: Set<String> = [item.nature ?? "", item.judge, item.room]
-            XCTAssertTrue(fields.isDisjoint(with: leaked), "\(fields)")
+            let fields: Set<String> = [item.nature ?? "", item.offence ?? "", item.judge, item.room]
+            XCTAssertTrue(fields.isDisjoint(with: defendants), "\(fields)")
         }
+    }
+
+    func testMagistrateOffenceNeverEqualsDefendant() {
+        let html = rows([
+            ["法庭 Court :", "第 1 庭 Court No.1"],
+            ["9:30 am", "TWS 1/2026", "陳大文", "陳大文", "答辯"],
+        ])
+        XCTAssertNil(CourtList.parse(html).first?.offence)
+    }
+
+    func testChargeFromMergedRowByHeaderOrder() {
+        // 合併儲存格令法庭、法官、時間三格消失，剩低格數同表頭「訴訟各方、性質／控罪、應訊代表」完全對得上
+        let html = rows([
+            ["法庭", "法官", "時間", "案件編號", "訴訟各方", "控罪 / 性質", "應訊代表"],
+            ["第 1 庭", "陳 法官", "9:30 am", "HCCC 1/2026", "香港特別行政區 訴 甲", "謀殺 Murder", "控方"],
+            ["HCCC 2/2026", "香港特別行政區 訴 乙", "誤殺 Manslaughter", "控方"],
+            ["HCCC 3/2026", "香港特別行政區 訴 丙", "控方"],
+        ])
+        let cases = CourtList.parse(html)
+        XCTAssertEqual(cases.map(\.caseNo), ["HCCC 1/2026", "HCCC 2/2026", "HCCC 3/2026"])
+        XCTAssertEqual(cases.map(\.charge), ["謀殺", "誤殺", nil])
+        XCTAssertEqual(cases.map(\.stage), [nil, nil, nil])
+        for item in cases { XCTAssertFalse([item.nature, item.offence].compactMap { $0 }.contains { $0.contains("訴") || $0 == "控方" }) }
     }
 
     func testChargeColumnKeptInFull() {

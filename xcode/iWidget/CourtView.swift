@@ -136,7 +136,7 @@ struct CourtView: View {
         if let category, type.category != category { return false }
         let text = query.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return true }
-        return [item.caseNo, item.room, item.judge, item.nature ?? "", type.label, type.category.title]
+        return [item.caseNo, item.room, item.judge, item.nature ?? "", item.offence ?? "", type.label, type.category.title]
             .contains { $0.localizedCaseInsensitiveContains(text) }
     }
 

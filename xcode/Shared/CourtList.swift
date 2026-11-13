@@ -43,6 +43,8 @@ struct CourtCase: Codable, Equatable {
     var caseNo: String
     /// 性質／控罪（例如「審訊」「答辯」）；只有按欄對位讀得到嘅行先有。舊快取冇呢欄，解碼成 nil。
     var nature: String? = nil
+    /// 控罪：裁判法院每行有獨立嘅控罪格（案號、被告、控罪、聆訊）先直接讀到。舊快取冇呢欄，解碼成 nil。
+    var offence: String? = nil
 
     var timeText: String {
         guard let minutes else { return "--:--" }
@@ -171,7 +173,7 @@ enum CourtLayout {
 enum CourtList {
     // MARK: 解析
 
-    private enum Column { case court, judge, time, caseNo, nature, parties }
+    private enum Column { case court, judge, time, caseNo, nature, parties, rep, kind }
 
     private typealias Fields = (room: String?, judge: String?, time: String?, caseNo: String?, nature: String?)
 
@@ -184,6 +186,8 @@ enum CourtList {
     /// - 冇案件編號嘅行（批量傳票、「見附頁」）唔算聆訊，但時間照樣沿用。
     static func parse(_ html: String) -> [CourtCase] {
         var columns: [Column: Int] = [:]
+        // 表頭入面「訴訟各方、性質／控罪、聆訊、應訊代表」嘅次序：行入面格數唔齊時，剩低嘅格按呢個次序對位
+        var tailOrder: [Column] = []
         var headerCount = 0
         var cases: [CourtCase] = []
         var room = "", judge = "", minutes: Int?
@@ -201,6 +205,7 @@ enum CourtList {
                 // 英文標題行、裁判法院嘅單格標題認唔到幾多欄，唔好當成新表頭
                 if found.count >= 2 {
                     columns = found
+                    tailOrder = found.filter { [.parties, .nature, .rep, .kind].contains($0.key) }.sorted { $0.value < $1.value }.map(\.key)
                     headerCount = raw.count
                     room = ""; judge = ""; minutes = nil
                 }
@@ -215,6 +220,8 @@ enum CourtList {
             }
 
             var fields: Fields
+            var offence: String?
+            var hearing: String?
             var positional = false
             if columns[.caseNo] != nil, raw.count == headerCount {
                 func at(_ column: Column) -> String? {
@@ -227,6 +234,16 @@ enum CourtList {
                 if let parties = at(.parties), fields.nature == parties { fields.nature = nil }
             } else {
                 fields = classify(cells, expectRoom: columns[.court] != nil, expectJudge: columns[.judge] != nil)
+                if columns[.caseNo] == nil {
+                    // 裁判法院：冇表頭，每行 [時間] 案號 被告 控罪 聆訊
+                    if let row = magistrateRow(cells) {
+                        offence = row.offence
+                        hearing = row.hearing
+                    }
+                } else if let value = tailNature(cells, fields: fields, order: tailOrder) {
+                    // 有表頭但格數唔齊（合併儲存格）：剩低嘅格按表頭次序對位，格數一定要完全對得上先用
+                    fields.nature = value
+                }
             }
 
             if let value = fields.room {
@@ -238,11 +255,60 @@ enum CourtList {
             if let value = fields.time, let parsed = parseTime(value) { minutes = parsed }
             guard let caseNo = fields.caseNo, !positional || caseNo.contains(where: \.isNumber) else { continue }
             // 冇「性質」欄（或者合併格對唔到位）就搵固定嘅聆訊字眼，例如裁判法院嘅「答辯」「訊問」
-            let nature = natureText(fields.nature) ?? cells.lazy.compactMap(HearingStage.match).first
-            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: nature))
+            let nature = hearing ?? fields.nature.flatMap(chargeText) ?? cells.lazy.compactMap(HearingStage.match).first
+            cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: nature, offence: offence))
         }
         return cases
     }
+
+    /// 裁判法院嘅行（已驗證版面）：`[時間] | 案號 | 被告 | 控罪 | 聆訊`。
+    /// 控罪格唔可以同被告格一樣（防止錯位時洩露被告），聆訊格轉成「D1 - 判刑」等。
+    private static func magistrateRow(_ cells: [String]) -> (offence: String?, hearing: String?)? {
+        let rest = cells.first.map(isTimeCell) == true ? Array(cells.dropFirst()) : cells
+        guard rest.count >= 4, isCaseCell(rest[0]) else { return nil }
+        let defendant = chinesePart(rest[1])
+        let offence = chargeText(rest[2]).flatMap { $0 == defendant ? nil : $0 }
+        return (offence, hearingText(rest[3]))
+    }
+
+    /// 有表頭但格數唔齊嘅行：除咗時間、案號、法庭、法官，剩低嘅格要同表頭「訴訟各方、性質／控罪、聆訊、應訊代表」一一對位先讀控罪。
+    private static func tailNature(_ cells: [String], fields: Fields, order: [Column]) -> String? {
+        guard let index = order.firstIndex(of: .nature) else { return nil }
+        let used = [fields.time, fields.caseNo, fields.room, fields.judge].compactMap { $0 }
+        let left = cells.filter { !used.contains($0) }
+        guard left.count == order.count else { return nil }
+        let value = left[index]
+        // 訴訟各方格嘅內容絕對唔可以當控罪
+        if let parties = order.firstIndex(of: .parties), left[parties] == value { return nil }
+        return value
+    }
+
+    /// 控罪格：`(1)甲 (1)A (2)乙 (2)B` → `(1)甲 (2)乙`（逐項控罪只留中文），單項控罪留中文部分。超長截短。
+    static func chargeText(_ text: String) -> String? {
+        if firstMatch(numberedChargeStart, in: text) != nil {
+            let items = matches(numberedCharge, in: text)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } }
+            if !items.isEmpty { return clipped(items.joined(separator: " ")) }
+        }
+        return natureText(text)
+    }
+
+    /// 聆訊格：`D1 - 判刑 D1 - Sentence D1 - 裁決` → `D1 - 判刑 D1 - 裁決`；唔係呢個格式就留中文部分。
+    static func hearingText(_ text: String) -> String? {
+        let parts = matches(hearingPattern, in: text)
+        if !parts.isEmpty { return parts.joined(separator: " ") }
+        let zh = chinesePart(text).trimmingCharacters(in: .whitespaces)
+        return zh.isEmpty || zh.count > 40 ? nil : zh
+    }
+
+    private static func clipped(_ text: String) -> String {
+        text.count > natureLimit ? String(text.prefix(natureLimit)) + "…" : text
+    }
+
+    private static let numberedChargeStart = try! NSRegularExpression(pattern: "^\\(\\d+\\)")
+    private static let numberedCharge = try! NSRegularExpression(pattern: "\\(\\d+\\)[^(]*")
+    private static let hearingPattern = try! NSRegularExpression(pattern: "D\\d+ - [^\\sA-Za-z]+")
 
     /// 格數唔齊（合併儲存格）嘅行：按內容認出時間、案件編號，必要時法庭同法官。
     private static func classify(_ cells: [String], expectRoom: Bool, expectJudge: Bool) -> Fields {
@@ -296,7 +362,9 @@ enum CourtList {
         if ["法官", "聆案官", "裁判官", "審裁", "驗屍官", "司法"].contains(where: text.contains) { return .judge }
         if text.contains("法庭") || text.contains("法院") { return .court }
         if text.contains("訴訟") || text.contains("各方") { return .parties }
+        if text.contains("應訊代表") { return .rep }
         if text.contains("性質") || text.contains("控罪") { return .nature }
+        if text.hasPrefix("聆訊") { return .kind }
         return nil
     }
 
@@ -308,7 +376,7 @@ enum CourtList {
         guard let text else { return nil }
         let zh = replace(englishNotePattern, in: chinesePart(text), with: "").trimmingCharacters(in: .whitespaces)
         guard !zh.isEmpty else { return nil }
-        return zh.count > natureLimit ? String(zh.prefix(natureLimit)) + "…" : zh
+        return clipped(zh)
     }
 
     private static let englishNotePattern = try! NSRegularExpression(pattern: "\\s*[（(][A-Za-z][^)）]*[)）]")
