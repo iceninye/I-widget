@@ -4,7 +4,7 @@ import Foundation
 /// 捷徑動作「排交接提示」：讀今日同明日更份，排好每次接車、落地嘅通知。
 /// 喺捷徑 App →「自動化」→「個人」揀每日一個時間（例如 03:30）執行，揀「立即執行」就唔使確認，
 /// 唔使開 app。
-struct ScheduleHandoverAlertsIntent: AppIntent {
+struct ScheduleHandoverAlertsIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "排交接提示"
     static var description = IntentDescription("讀今日同明日嘅更份，排好返工、每次接車、落地同用膳後接車嘅通知。")
     static var openAppWhenRun = false
@@ -23,11 +23,16 @@ struct ScheduleHandoverAlertsIntent: AppIntent {
         let settings = HandoverSettings.load()
         let alerts = data.handoverAlerts(now: now, settings: settings)
         let count = await HandoverNotifier.schedule(alerts, settings: settings, now: now)
+        // 有開更份倒數就順手更新（排提示同倒數用同一份資料）
+        var countdown = ""
+        if DutyActivityManager.isEnabled {
+            countdown = "\n" + (await DutyActivityManager.sync(events: data.dutyEvents(now: now), now: now))
+        }
         if count == 0 {
-            return .result(dialog: "今日同明日冇提示（休息，或者已經放工）。")
+            return .result(dialog: "今日同明日冇提示（休息，或者已經放工）。\(countdown)")
         }
         let first = alerts.first.map { "，第一個 \(Self.clock($0.fireAt))" } ?? ""
-        return .result(dialog: "已排好 \(count) 個交接提示\(first)。")
+        return .result(dialog: "已排好 \(count) 個交接提示\(first)。\(countdown)")
     }
 
     private static func clock(_ date: Date) -> String {
@@ -46,6 +51,18 @@ struct IWidgetShortcuts: AppShortcutsProvider {
             phrases: ["用 \(.applicationName) 排交接提示", "\(.applicationName) 交接提示"],
             shortTitle: "排交接提示",
             systemImageName: "tram.fill"
+        )
+        AppShortcut(
+            intent: UpdateDutyCountdownIntent(),
+            phrases: ["用 \(.applicationName) 更新更份倒數", "\(.applicationName) 更份倒數"],
+            shortTitle: "更新更份倒數",
+            systemImageName: "timer"
+        )
+        AppShortcut(
+            intent: EndDutyCountdownIntent(),
+            phrases: ["用 \(.applicationName) 結束更份倒數"],
+            shortTitle: "結束更份倒數",
+            systemImageName: "stop.circle"
         )
     }
 }

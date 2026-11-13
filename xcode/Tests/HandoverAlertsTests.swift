@@ -58,6 +58,11 @@ final class HandoverAlertsTests: XCTestCase {
         XCTAssertEqual(afterMeal.fireAt, ISO8601DateFormatter().date(from: "2026-11-13T03:01:18Z"))
         XCTAssertEqual(Set(alerts.map(\.id)).count, alerts.count)
         XCTAssertTrue(alerts.allSatisfy { $0.id.hasPrefix(HandoverAlerts.idPrefix) })
+        // detail = body 去走「N 分鐘後」（Live Activity 倒數用）
+        XCTAssertEqual(alerts[3].detail, "喺錦上路 2落地，接你嗰位係 118 更，之後用膳到 11:16")
+        XCTAssertEqual(alerts[4].detail, "你要喺錦上路 2接 128 更嘅 Run 18，開去烏溪沙")
+        XCTAssertEqual(alerts[5].detail, "喺烏溪沙落地，Run 18，之後收工")
+        XCTAssertTrue(alerts.allSatisfy { !$0.detail.isEmpty && $0.body.hasSuffix($0.detail) && !$0.detail.contains("分鐘後") })
     }
 
     func testLeadsFollowSettings() throws {
@@ -103,6 +108,7 @@ final class HandoverAlertsTests: XCTestCase {
         day.onPlace = "八鄉廠"
         day.offPlace = "錦上路"
         var settings = HandoverSettings()
+        XCTAssertTrue(HandoverAlerts.dutyAlerts(day: day, settings: settings).allSatisfy { $0.body.hasSuffix($0.detail) && !$0.detail.isEmpty })
         XCTAssertEqual(HandoverAlerts.dutyAlerts(day: day, settings: settings).map(\.body), [
             "1 小時後返工，05:20 喺八鄉廠，111 更",
             "15 分鐘後返工，05:20 喺八鄉廠，111 更",

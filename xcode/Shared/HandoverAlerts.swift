@@ -170,6 +170,8 @@ struct HandoverAlert: Equatable {
     var eventAt: Date
     var title: String
     var body: String
+    /// body 去走「N 分鐘後」之後嘅內容（Live Activity 倒數用）
+    var detail = ""
 }
 
 /// 由更份砌出當日全部提示（提前幾耐跟 `HandoverSettings`，預設全部 15 分鐘，上班另加 1 小時前）：
@@ -245,7 +247,7 @@ enum HandoverAlerts {
                 let chain = legs[index...last]
                 let destination = places.name(legs[last].to)
                 let whose = relief.from.map { short($0.id) + " 更嘅 " } ?? ""
-                var body = leadText(pickLead)
+                var body = ""
                 switch leg.kind {
                 case "prep":
                     body += "喺\(place)準備 Run \(leg.run)"
@@ -263,7 +265,8 @@ enum HandoverAlerts {
                     fireAt: eventAt.addingTimeInterval(-Double(pickLead * 60)),
                     eventAt: eventAt,
                     title: "接車 \(DutyDay.clock(leg.at)) · Run \(leg.run)",
-                    body: body
+                    body: leadText(pickLead) + body,
+                    detail: body
                 ))
             }
 
@@ -271,8 +274,8 @@ enum HandoverAlerts {
             if dropLead > 0, !Relief.continuesOut(legs, index), let until = Relief.end(of: legs, at: index, off: card.off),
                let eventAt = moment(date: date, second: until) {
                 let place = places.name(leg.to)
-                var body = index == lastDrop ? "最後一程，" : ""
-                body += leadText(dropLead)
+                let prefix = (index == lastDrop ? "最後一程，" : "") + leadText(dropLead)
+                var body = ""
                 if let to = relief.to {
                     body += "喺\(place)落地，接你嗰位係 \(short(to.id)) 更"
                 } else if leg.kind == "park" {
@@ -288,7 +291,8 @@ enum HandoverAlerts {
                     fireAt: eventAt.addingTimeInterval(-Double(dropLead * 60)),
                     eventAt: eventAt,
                     title: "落地 \(DutyDay.clock(until)) · \(place)",
-                    body: body
+                    body: prefix + body,
+                    detail: body
                 ))
             }
         }
@@ -308,7 +312,8 @@ enum HandoverAlerts {
                     fireAt: eventAt.addingTimeInterval(-Double(lead * 60)),
                     eventAt: eventAt,
                     title: "返工 \(DutyDay.clock(on))\(day.onPlace.isEmpty ? "" : " · \(day.onPlace)")",
-                    body: "\(leadText(lead))返工，\(DutyDay.clock(on))\(place)，\(name)"
+                    body: "\(leadText(lead))返工，\(DutyDay.clock(on))\(place)，\(name)",
+                    detail: "返工，\(DutyDay.clock(on))\(place)，\(name)"
                 ))
             }
         }
@@ -320,7 +325,8 @@ enum HandoverAlerts {
                 fireAt: eventAt.addingTimeInterval(-Double(settings.off * 60)),
                 eventAt: eventAt,
                 title: "放工 \(DutyDay.clock(off))\(day.offPlace.isEmpty ? "" : " · \(day.offPlace)")",
-                body: "\(leadText(settings.off))收工，\(DutyDay.clock(off))\(place)"
+                body: "\(leadText(settings.off))收工，\(DutyDay.clock(off))\(place)",
+                detail: "收工，\(DutyDay.clock(off))\(place)"
             ))
         }
         return result

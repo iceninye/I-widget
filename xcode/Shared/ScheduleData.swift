@@ -203,6 +203,20 @@ struct ScheduleData {
 
     /// 今日同明日（服務日）嘅提示（上班、接車、落地、放工），只留仲未響嘅。
     func handoverAlerts(now: Date, settings: HandoverSettings = HandoverSettings()) -> [HandoverAlert] {
+        allAlerts(now: now, settings: settings).filter { $0.fireAt > now }.sorted { $0.fireAt < $1.fireAt }
+    }
+
+    /// 今日同明日仲未發生嘅事（返工、接車、落地、放工），Live Activity 倒數用。
+    /// 唔受「提前幾耐提」影響：所有提前時間當 1 分鐘，咁就算設咗唔提都有事件。
+    func dutyEvents(now: Date) -> [DutyEvent] {
+        var settings = HandoverSettings()
+        settings.onFirst = 1; settings.onSecond = 1
+        settings.pickUp = 1; settings.dropOff = 1; settings.mealEnd = 1; settings.lastDrop = 1; settings.off = 1
+        return DutyEvent.upcoming(from: allAlerts(now: now, settings: settings), now: now)
+    }
+
+    /// 今日同明日全部提示（包括已經過咗響鐘時間嘅）。
+    private func allAlerts(now: Date, settings: HandoverSettings) -> [HandoverAlert] {
         guard roster != nil else { return [] }
         let today = Days.serviceDate(now)
         var result: [HandoverAlert] = []
@@ -215,7 +229,7 @@ struct ScheduleData {
                 result += HandoverAlerts.make(card: card, date: date, places: places, settings: settings)
             }
         }
-        return result.filter { $0.fireAt > now }.sorted { $0.fireAt < $1.fireAt }
+        return result
     }
 
     func nextHoliday(dayStart: Date) -> Holiday? {

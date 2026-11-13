@@ -32,6 +32,8 @@ targets:
         CFBundleDisplayName: i-widget
         UILaunchScreen: {}
         NSLocationWhenInUseUsageDescription: 用你嘅大約位置查天氣預報，位置唔會上傳到自己嘅伺服器。
+        # 更份倒數 Live Activity（本機啟動，唔使 push）
+        NSSupportsLiveActivities: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         # widget 撳入去法院詳情：iwidget://court?code=DC&case=...
@@ -85,6 +87,7 @@ targets:
       - path: Shared/BatteryEstimate.swift
       - path: Shared/DutyCards.swift
       - path: Shared/HandoverAlerts.swift
+      - path: Shared/DutyCountdown.swift
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift
