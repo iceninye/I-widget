@@ -604,9 +604,9 @@ struct TileGrid: View {
                 )
                 Tile(
                     id: "gold", symbol: "dollarsign.circle.fill", tint: .yellow,
-                    value: Formatting.gold(entry.info.gold?.usdPerOunce),
-                    caption: "黃金 USD/oz",
-                    captionColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.updatedAt) ? .orange : .secondary,
+                    value: Formatting.goldWhole(goldHKD?.perTael),
+                    caption: goldHKD?.estimated == true ? "黃金 HK$/両（估算）" : "黃金 HK$/両",
+                    captionColor: Formatting.isStale(entry.info.gold?.fetchedAt, now: entry.updatedAt) || goldHKD?.estimated == true ? .orange : .secondary,
                     flipped: entry.isFlipped("gold"), back: entry.goldBack
                 )
                 Tile(
@@ -633,6 +633,8 @@ struct TileGrid: View {
             }
         }
     }
+
+    private var goldHKD: GoldHKD? { entry.info.gold?.hkd(rates: entry.info.fx) }
 
     private var memoryTile: some View {
         let stats = entry.stats

@@ -51,10 +51,11 @@ final class LiveAlertsTests: XCTestCase {
     }
 
     func testExchangeRates() throws {
-        let json = #"{"result":"success","rates":{"HKD":1,"JPY":19.31,"CNY":0.92,"TWD":4.1,"GBP":0.098,"XXX":3}}"#
+        let json = #"{"result":"success","rates":{"HKD":1,"JPY":19.31,"CNY":0.92,"TWD":4.1,"GBP":0.098,"USD":0.128,"XXX":3}}"#
         let rates = try FXAPI.parse(Data(json.utf8))
         XCTAssertEqual(rates.jpy, 19.31)
-        XCTAssertEqual(rates.perHKD.count, 4)
+        XCTAssertEqual(rates.perHKD.count, 5)
+        XCTAssertEqual(rates.perHKD["USD"], 0.128)
         XCTAssertThrowsError(try FXAPI.parse(Data(#"{"result":"error"}"#.utf8)))
         XCTAssertThrowsError(try FXAPI.parse(Data(#"{"result":"success","rates":{"CNY":0.9}}"#.utf8)))
     }

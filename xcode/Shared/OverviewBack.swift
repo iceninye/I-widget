@@ -118,12 +118,13 @@ extension OverviewEntry {
     }
 
     var goldBack: [BackLine] {
-        guard let price = info.gold?.usdPerOunce else { return [BackLine(label: "黃金", value: "未有資料")] }
-        // 1 金衡盎司 = 31.1035 克；1 両 = 37.429 克
+        guard let quote = info.gold else { return [BackLine(label: "黃金", value: "未有資料")] }
+        let hkd = quote.hkd(rates: info.fx)
         return [
-            BackLine(label: "每克", value: "US$\(Formatting.gold(price / 31.1035))"),
-            BackLine(label: "每両", value: "US$\(Formatting.gold(price / 31.1035 * 37.429))"),
-            BackLine(label: "更新", value: clock(info.gold?.fetchedAt)),
+            BackLine(label: "每両", value: "HK$\(Formatting.gold(hkd.perTael))"),
+            BackLine(label: "每克", value: "HK$\(Formatting.gold(hkd.perGram))"),
+            BackLine(label: "國際價", value: "US$\(Formatting.gold(quote.usdPerOunce))/oz"),
+            BackLine(label: "更新", value: clock(quote.fetchedAt) + (hkd.estimated ? " · 匯率按 7.8 估算" : "")),
         ]
     }
 
