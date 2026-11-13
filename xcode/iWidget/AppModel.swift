@@ -58,6 +58,10 @@ final class AppModel: ObservableObject {
         if HandoverNotifier.isEnabled, await HandoverNotifier.isAuthorized() {
             await HandoverNotifier.schedule(alerts, settings: settings, now: now)
         }
+        // 開 app 係前景，Live Activity 一定啟動得到
+        if DutyActivityManager.isEnabled {
+            await DutyActivityManager.sync(events: entry.schedule.dutyEvents(now: now), now: now)
+        }
         return alerts
     }
 }

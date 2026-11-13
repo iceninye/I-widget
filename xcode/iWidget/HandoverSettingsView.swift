@@ -10,6 +10,8 @@ struct HandoverSettingsView: View {
     @State private var spoken = 0
     @State private var message = ""
     @State private var testing = false
+    @AppStorage(DutyActivityManager.enabledKey) private var countdownEnabled = false
+    @AppStorage(DutyActivityManager.leadKey) private var countdownLead = DutyActivityPlan.defaultLeadMinutes
 
     private static let leads = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120]
     private static let sample = "15 分鐘後你要喺錦上路 2接 128 更嘅 Run 18，開去烏溪沙"
@@ -76,6 +78,34 @@ struct HandoverSettingsView: View {
                 「試聽」唔受靜音掣影響；通知就同其他通知一樣：開咗靜音掣、專注模式，或者鈴聲音量校到好細，就聽唔到。
                 試聽有聲但測試通知冇聲：睇吓靜音掣、控制中心嘅專注模式，同 iPhone 設定 →「通知」→ i-widget →「聲音」。
                 想把聲自然啲：iPhone 設定 →「輔助使用」→「朗讀內容」→「聲音」→ 中文（粵語）下載「高音質」，再喺上面揀返。
+                """)
+            }
+
+            Section {
+                Toggle("開 app 或者排提示時更新倒數", isOn: $countdownEnabled)
+                Picker("下一件事前幾耐開始顯示", selection: $countdownLead) {
+                    ForEach([60, 120, 180, 240, 360], id: \.self) { minutes in
+                        Text("\(minutes / 60) 小時前").tag(minutes)
+                    }
+                }
+                Button("而家開始／更新倒數") {
+                    run { await DutyActivityManager.sync(events: model.entry.schedule.dutyEvents(now: Date())) }
+                }
+                .disabled(testing)
+                Button("結束倒數", role: .destructive) {
+                    run {
+                        await DutyActivityManager.endAll()
+                        return "已結束倒數。"
+                    }
+                }
+                .disabled(testing)
+            } header: {
+                Text("更份倒數（鎖定畫面）")
+            } footer: {
+                Text("""
+                鎖定畫面同動態島顯示下一件事（返工、接車、落地、放工）嘅倒數，加之後兩件事。倒數數字由系統自己跳；內容只會喺開 app、捷徑執行時更新（免費簽名冇 push）。
+                捷徑 App →「自動化」→「個人」→ 返工前幾個鐘同之後每 2 小時左右 → 動作「更新更份倒數」→ 揀「立即執行」。下一件事前幾耐先出現跟上面嘅設定；Live Activity 最長 8 小時，行咗超過 6 小時會自動開新嘅。
+                倒數去到零之後會顯示「已到時間」，直到下一次更新。
                 """)
             }
 
