@@ -15,7 +15,7 @@ final class DutyCountdownTests: XCTestCase {
     }
 
     func testStatePicksNextAndTwoLater() {
-        let events = [event(.drop, 120, "落地 B"), event(.on, 30, "返工"), event(.pick, 60, "接車 A"), event(.off, 300, "放工"), event(.drop, -10, "已過")]
+        let events = [event(.dropOff, 120, "落地 B"), event(.on, 30, "返工"), event(.pickUp, 60, "接車 A"), event(.off, 300, "放工"), event(.dropOff, -10, "已過")]
         let state = DutyActivityPlan.state(events: events, now: now)
         XCTAssertEqual(state?.kind, "on")
         XCTAssertEqual(state?.title, "返工")
@@ -25,7 +25,7 @@ final class DutyCountdownTests: XCTestCase {
 
     func testStateNilWhenNothingUpcoming() {
         XCTAssertNil(DutyActivityPlan.state(events: [], now: now))
-        XCTAssertNil(DutyActivityPlan.state(events: [event(.drop, -1, "已過")], now: now))
+        XCTAssertNil(DutyActivityPlan.state(events: [event(.dropOff, -1, "已過")], now: now))
     }
 
     func testWaitsUntilLeadWindow() {
@@ -42,7 +42,7 @@ final class DutyCountdownTests: XCTestCase {
     }
 
     func testRunningUpdatesEvenOutsideLead() {
-        let events = [event(.pick, 400, "接車")]
+        let events = [event(.pickUp, 400, "接車")]
         guard case .update(let state) = DutyActivityPlan.decide(events: events, now: now, running: true, startedAt: now.addingTimeInterval(-3_600), leadMinutes: 60) else {
             return XCTFail("行緊就更新")
         }
@@ -50,7 +50,7 @@ final class DutyCountdownTests: XCTestCase {
     }
 
     func testRestartsAfterSixHours() {
-        let events = [event(.drop, 30, "落地")]
+        let events = [event(.dropOff, 30, "落地")]
         let old = now.addingTimeInterval(-(6 * 3_600 + 60))
         guard case .start = DutyActivityPlan.decide(events: events, now: now, running: true, startedAt: old, leadMinutes: 180) else {
             return XCTFail("超過 6 小時要開新嘅")
@@ -69,8 +69,8 @@ final class DutyCountdownTests: XCTestCase {
         let alerts = [
             alert(.on, id: "a", fire: -30, event: 30, title: "返工 08:00", detail: "返工，08:00"),
             alert(.on, id: "b", fire: 15, event: 30, title: "返工 08:00", detail: "返工，08:00"),
-            alert(.drop, id: "c", fire: 100, event: 120, title: "落地 10:00", detail: "喺錦上路落地"),
-            alert(.pick, id: "d", fire: -50, event: -5, title: "接車 已過"),
+            alert(.dropOff, id: "c", fire: 100, event: 120, title: "落地 10:00", detail: "喺錦上路落地"),
+            alert(.pickUp, id: "d", fire: -50, event: -5, title: "接車 已過"),
         ]
         let events = DutyEvent.upcoming(from: alerts, now: now)
         XCTAssertEqual(events.map(\.title), ["返工 08:00", "落地 10:00"])
