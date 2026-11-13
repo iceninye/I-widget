@@ -106,7 +106,7 @@ struct CourtWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.theme) }
         }
         .configurationDisplayName("法院案件表")
-        .description("司法機構法庭日誌：按類別（刑事、民事、家事、上訴…）上色，列出時間、案號、法庭、案件類型、聆訊性質同法官；唔顯示訴訟各方。")
+        .description("司法機構法庭日誌：按類別（刑事、民事、家事、上訴…）上色，列出時間、案號、法庭、案件類型、聆訊性質、控罪同法官；唔顯示訴訟各方。")
         .supportedFamilies(withExtraLargePortrait([.systemLarge, .systemExtraLarge]))
     }
 }
@@ -121,13 +121,17 @@ struct CourtWidgetView: View {
         static let header: CGFloat = 26
         static let section: CGFloat = 50
         static let row: CGFloat = 28
+        /// 有控罪／性質嗰行多一行字
+        static let rowWithCharge: CGFloat = 38
     }
 
     var body: some View {
         GeometryReader { geometry in
             let lists = entry.days.map { $0.upcoming(afterMinute: minute) }
             let free = geometry.size.height - Metrics.header - CGFloat(entry.days.count) * Metrics.section
-            let budget = max(Int(free / Metrics.row), entry.days.count)
+            // 任何一個要畫嘅聆訊有控罪就按較高嘅行高算，放唔落嘅會收埋入「尚有 N 宗」
+            let rowHeight = lists.contains { $0.contains { $0.charge != nil } } ? Metrics.rowWithCharge : Metrics.row
+            let budget = max(Int(free / rowHeight), entry.days.count)
             let rows = CourtLayout.allocate(counts: lists.map(\.count), budget: budget)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -254,6 +258,12 @@ private struct CourtSection: View {
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
+                if let charge = item.charge {
+                    Text(charge)
+                        .font(.system(size: 9.5))
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)

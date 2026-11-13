@@ -171,6 +171,47 @@ final class CourtListTests: XCTestCase {
         }
     }
 
+    func testChargeColumnKeptInFull() {
+        let long = String(repeating: "販運危險藥物；", count: 3) + "管有危險藥物"
+        let html = rows([
+            ["法庭", "法官", "時間", "案件編號", "訴訟各方", "性質/控罪", "應訊代表"],
+            ["第 1 庭", "陳 法官", "9:30 am", "DCCC 1/2026", "香港特別行政區 訴 甲", "傷人 Wounding", "控方"],
+            ["", "", "10:00 am", "DCCC 2/2026", "香港特別行政區 訴 乙", "\(long)", "控方"],
+            ["", "", "11:00 am", "DCCC 3/2026", "香港特別行政區 訴 丙", "審訊 Trial", "控方"],
+            ["", "", "12:00 pm", "DCCC 4/2026", "香港特別行政區 訴 丁", "", "控方"],
+        ])
+        let cases = CourtList.parse(html)
+        XCTAssertEqual(cases.count, 4)
+        XCTAssertEqual(cases[0].charge, "傷人")
+        XCTAssertEqual(cases[0].detailText, "刑事案件")
+        XCTAssertEqual(cases[1].charge, long)
+        XCTAssertEqual(cases[2].stage, "審訊")
+        XCTAssertNil(cases[2].charge)
+        XCTAssertEqual(cases[2].detailText, "刑事案件 · 審訊")
+        XCTAssertNil(cases[3].nature)
+        XCTAssertNil(cases[3].charge)
+    }
+
+    func testVeryLongChargeIsTruncated() {
+        let html = rows([
+            ["法庭", "法官", "時間", "案件編號", "訴訟各方", "性質", "應訊代表"],
+            ["第 1 庭", "陳 法官", "9:30 am", "DCCC 1/2026", "甲", String(repeating: "控", count: 300), "控方"],
+        ])
+        let charge = CourtList.parse(html).first?.charge
+        XCTAssertEqual(charge?.count, CourtList.natureLimit + 1)
+        XCTAssertTrue(charge?.hasSuffix("…") == true)
+    }
+
+    func testNatureEqualToPartiesIsDropped() {
+        let html = rows([
+            ["法庭", "法官", "時間", "案件編號", "訴訟各方", "性質", "應訊代表"],
+            ["第 1 庭", "陳 法官", "9:30 am", "DCCC 1/2026", "香港特別行政區 訴 甲", "香港特別行政區 訴 甲", "控方"],
+        ])
+        let item = CourtList.parse(html).first
+        XCTAssertNil(item?.nature)
+        XCTAssertNil(item?.charge)
+    }
+
     func testCaseTypeFromPrefix() {
         XCTAssertEqual(CaseTypes.prefix(of: "DCCJ 1/2026"), "DCCJ")
         XCTAssertEqual(CaseTypes.prefix(of: "CCDI-269/2022(MC)"), "CCDI")
