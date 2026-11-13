@@ -196,6 +196,9 @@ private struct CourtRow: View {
                     Tag(text: type.category.title, color: type.category.color)
                     Text(item.detailText).font(.subheadline)
                 }
+                if let charge = item.charge {
+                    Text(charge).font(.footnote).lineLimit(3)
+                }
                 Text([item.room, item.judge].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -222,7 +225,8 @@ struct CourtDetailView: View {
                 LabeledContent("法庭", value: item.room.isEmpty ? Formatting.missing : item.room)
                 LabeledContent("法官／審理人員", value: item.judge.isEmpty ? Formatting.missing : item.judge)
                 LabeledContent("案件類型", value: "\(item.caseType.category.title) · \(item.caseType.label)")
-                if let nature = item.nature { LabeledContent("聆訊性質", value: nature) }
+                if let stage = item.stage { LabeledContent("聆訊性質", value: stage) }
+                if let charge = item.charge { LabeledContent("控罪／性質", value: charge) }
                 LabeledContent("法院", value: CourtCatalog.name(selection.code))
                 LabeledContent("日期", value: CourtList.dayText(listDate, now: Date()))
                 LabeledContent("狀態", value: item.status(atMinute: minute).text)

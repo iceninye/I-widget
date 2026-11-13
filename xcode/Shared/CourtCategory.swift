@@ -126,11 +126,20 @@ enum HearingStage {
 extension CourtCase {
     var caseType: CaseType { CaseTypes.classify(caseNo) }
 
-    /// 「民事訴訟 · 聆訊」：案件類型加網頁上嘅聆訊性質（兩者一樣就唔重複）。
+    /// 聆訊階段字眼（答辯、審訊…）；`nature` 係好短嘅階段字眼先算。
+    var stage: String? { nature.flatMap(HearingStage.match) }
+
+    /// 控罪／性質：`nature` 唔係階段字眼（例如「傷人」「販運危險藥物；管有…」）先有，widget 同 app 另起一行顯示。
+    var charge: String? {
+        guard let nature, !nature.isEmpty, stage == nil else { return nil }
+        return nature
+    }
+
+    /// 「民事訴訟 · 聆訊」：案件類型加網頁上嘅聆訊階段（兩者一樣就唔重複）。
     var detailText: String {
         let label = caseType.label
-        guard let nature, !nature.isEmpty, nature != label else { return label }
-        return "\(label) · \(nature)"
+        guard let stage, stage != label else { return label }
+        return "\(label) · \(stage)"
     }
 }
 

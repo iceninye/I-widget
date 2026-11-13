@@ -171,7 +171,7 @@ enum CourtLayout {
 enum CourtList {
     // MARK: 解析
 
-    private enum Column { case court, judge, time, caseNo, nature }
+    private enum Column { case court, judge, time, caseNo, nature, parties }
 
     private typealias Fields = (room: String?, judge: String?, time: String?, caseNo: String?, nature: String?)
 
@@ -214,7 +214,7 @@ enum CourtList {
                 continue
             }
 
-            let fields: Fields
+            var fields: Fields
             var positional = false
             if columns[.caseNo] != nil, raw.count == headerCount {
                 func at(_ column: Column) -> String? {
@@ -223,6 +223,8 @@ enum CourtList {
                 }
                 fields = (at(.court), at(.judge), at(.time), at(.caseNo), at(.nature))
                 positional = true
+                // 私隱：合併格錯位時「性質」格可能其實係訴訟各方，內容一樣就唔要
+                if let parties = at(.parties), fields.nature == parties { fields.nature = nil }
             } else {
                 fields = classify(cells, expectRoom: columns[.court] != nil, expectJudge: columns[.judge] != nil)
             }
@@ -293,17 +295,23 @@ enum CourtList {
         if text.contains("時間") { return .time }
         if ["法官", "聆案官", "裁判官", "審裁", "驗屍官", "司法"].contains(where: text.contains) { return .judge }
         if text.contains("法庭") || text.contains("法院") { return .court }
+        if text.contains("訴訟") || text.contains("各方") { return .parties }
         if text.contains("性質") || text.contains("控罪") { return .nature }
         return nil
     }
 
-    /// 性質／控罪格只留中文頭一段，太長或者似句子（備註）就唔要。
+    /// 性質／控罪格上限（字數）：多項控罪都要睇到，但超長就截短加「…」。
+    static let natureLimit = 120
+
+    /// 性質／控罪格只留中文部分（去走括號英文），好長就截短。
     private static func natureText(_ text: String?) -> String? {
         guard let text else { return nil }
-        let zh = chinesePart(text)
-        guard !zh.isEmpty, zh.count <= 24 else { return nil }
-        return zh
+        let zh = replace(englishNotePattern, in: chinesePart(text), with: "").trimmingCharacters(in: .whitespaces)
+        guard !zh.isEmpty else { return nil }
+        return zh.count > natureLimit ? String(zh.prefix(natureLimit)) + "…" : zh
     }
+
+    private static let englishNotePattern = try! NSRegularExpression(pattern: "\\s*[（(][A-Za-z][^)）]*[)）]")
 
     private static func isTimeCell(_ text: String) -> Bool {
         text.count < 80 && firstMatch(timeCellPattern, in: text) != nil
