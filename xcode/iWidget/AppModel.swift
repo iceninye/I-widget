@@ -70,6 +70,7 @@ final class AppModel: ObservableObject {
         // 開 app 係前景，Live Activity 一定啟動得到。
         // 用「開咗倒數」**或者**「而家有活動行緊」都 sync：後者係為咗撳 Live Activity 入嚟（`iwidget://duty`）
         // 嗰陣，手動／捷徑開嘅活動即使設定掣唔開都更新到內容，唔會留低一舊過期倒數。
+        // `sync` 內部已經串行化（見 `DutyActivityManager`）：呢度同捷徑、設定頁手動掣同時行都唔會開出重複活動。
         if DutyActivityManager.isEnabled || DutyActivityManager.isRunning {
             await DutyActivityManager.sync(events: entry.schedule.dutyEvents(now: now), now: now)
         }

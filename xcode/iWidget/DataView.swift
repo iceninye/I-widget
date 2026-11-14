@@ -3,7 +3,8 @@ import SwiftUI
 /// 同 widget 一樣嘅資料，逐項列出。
 struct DataView: View {
     @ObservedObject var model: AppModel
-    let onRefresh: () -> Void
+    /// 下拉更新：由 `ContentView` 提供，`await` 到呢輪真係跑完先返回（spinner 先收）。
+    let onRefresh: () async -> Void
 
     var body: some View {
         let entry = model.entry
@@ -42,37 +43,32 @@ struct DataView: View {
             }
         }
         .navigationTitle("資料")
-        .refreshable {
-            onRefresh()
-            // 回調係非同步排程：先俾佢開始，再等真正完成，唔好一開始見到 loading=false 就收 spinner。
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            while model.loading { try? await Task.sleep(nanoseconds: 100_000_000) }
-        }
+        .refreshable { await onRefresh() }
         .overlay { if model.loading { ProgressView() } }
     }
 
     @ViewBuilder private func alerts(_ entry: OverviewEntry) -> some View {
         let warnings = entry.info.warnings
-        if warnings != nil || entry.info.train != nil {
-            Section("警告、屯馬綫") {
-                if let warnings {
-                    if warnings.isEmpty {
-                        Text("暫無天氣警告").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
-                            Label(warning.text, systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(warning.severe ? .red : .orange)
-                        }
+        // app 內永遠顯示呢格（冇版面壓力，唔似 widget 會收起）：警告同列車兩樣都讀唔到時，
+        // 下面兩段要明確講「未有資料」，唔可以成格消失——消失咗用家會以為真係冇警告。
+        Section("警告、屯馬綫") {
+            if let warnings {
+                if warnings.isEmpty {
+                    Text("暫無天氣警告").foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+                        Label(warning.text, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(warning.severe ? .red : .orange)
                     }
-                } else {
-                    Text("天氣警告：未有資料").foregroundStyle(.secondary)
                 }
-                if let train = entry.info.train {
-                    LabeledContent("屯馬綫", value: train.state.text)
-                    if !train.message.isEmpty { Text(train.message).font(.footnote).foregroundStyle(.secondary) }
-                } else {
-                    Text("屯馬綫：未有資料").foregroundStyle(.secondary)
-                }
+            } else {
+                Text("天氣警告：未有資料").foregroundStyle(.secondary)
+            }
+            if let train = entry.info.train {
+                LabeledContent("屯馬綫", value: train.state.text)
+                if !train.message.isEmpty { Text(train.message).font(.footnote).foregroundStyle(.secondary) }
+            } else {
+                Text("屯馬綫：未有資料").foregroundStyle(.secondary)
             }
         }
     }

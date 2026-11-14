@@ -214,6 +214,8 @@ struct TodayCard: View {
                             BackFace(lines: entry.todayBack, size: 12)
                         } else if let day, day.hasTimes {
                             working(day)
+                        } else if let day, Self.expectsShiftTimes(day) {
+                            missingTimes(day)
                         } else if let day {
                             resting(day)
                         }
@@ -280,6 +282,10 @@ struct TodayCard: View {
         Text(text).font(.system(size: 12)).foregroundStyle(color).lineLimit(2)
     }
 
+    /// 排咗更（正常更／後備更）就應該有上落班時間；休息、假期、待定本身冇時間，唔當資料缺失。
+    /// `card`／`sheet` 未落嘅時候 `on`／`off` 都係 nil，呢種情況唔可以當放假（見 `missingTimes`）。
+    static func expectsShiftTimes(_ day: DutyDay) -> Bool { day.kind == .duty || day.kind == .spare }
+
     /// 一句可讀描述：更份＋上落班時間＋地點＋工時＋倒數。
     private func spoken(_ day: DutyDay?) -> String {
         if !entry.schedule.configured { return "未設定 tml-roster token，長按小工具編輯" }
@@ -288,7 +294,8 @@ struct TodayCard: View {
         if let times = day.times { parts.append(times) }
         if let route = day.route { parts.append("喺 \(route)") }
         if let hours = day.hoursText { parts.append(hours) }
-        // 休息日／假日本身就冇上落班時間，唔好當「資料缺失」讀出嚟；有時間先講倒數或者已放工
+        // 有時間先講倒數或者已放工；排咗更但時間讀唔到就照講資料缺失；
+        // 休息日／假日本身就冇上落班時間，唔好當「資料缺失」讀出嚟
         if day.hasTimes {
             switch countdownState(day) {
             case .at(let label, let date):
@@ -298,6 +305,8 @@ struct TodayCard: View {
             case .unknown:
                 parts.append("上落班時間未有資料")
             }
+        } else if Self.expectsShiftTimes(day) {
+            parts.append("上落班時間未有資料")
         }
         return parts.joined(separator: "，")
     }
@@ -331,6 +340,43 @@ struct TodayCard: View {
         }
         if !compact, let hint = day.hint {
             Text(hint).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(1).minimumScaleFactor(0.8)
+        }
+    }
+
+    /// 有排更（`duty`／`spare`）但上落班時間讀唔到——例如更份卡／sheet 未落，`on`／`off` 都係 nil。
+    /// 呢種情況唔可以跌落 `resting()`：用 24pt 大字列更碼睇落好似放假，實際上係資料缺失（讀 screen 亦唔會講）。
+    /// 所以用細字列更碼＋明確寫「上落班時間未有資料」；休息／假期／待定照舊行 `resting()`。
+    @ViewBuilder private func missingTimes(_ day: DutyDay) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 5) {
+            Text(day.code)
+                .font(.system(size: 16, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(day.tint)
+                .widgetAccentable()
+                .lineLimit(1)
+            Text("上落班時間未有資料")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 0)
+        }
+        if day.route != nil || day.hoursText != nil {
+            HStack(spacing: 5) {
+                if let route = day.route {
+                    Text(route)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 0)
+                if let hours = day.hoursText {
+                    Text(hours)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
@@ -496,32 +542,25 @@ struct TodayWeatherRow: View {
 
 /// 呢度唔可以用 GeometryReader：佢會食晒父層畀嘅 proposal，塞入 `ViewThatFits` 嘅候選就永遠「裝得落」，
 /// 逐級收起唔會發生。所以按 widget 家族粗估可用闊，再估文字寬度嚟決定警告 badge 擺幾個。
-/// 以下數值全部係估算（冇 Swift 工具鏈，未實測），淨係用嚟決定收幾個 badge，唔影響內容對唔對。
-private enum WidgetWidth {
-    /// 嗰行嘅內容可用闊（約數，已扣容器 padding）。
-    static func estimate(_ family: WidgetFamily) -> CGFloat {
-        switch family {
-        case .systemSmall: return 130
-        case .systemMedium: return 300
-        case .systemLarge: return 300
-        case .systemExtraLarge: return 330       // iPhone 4×6：闊好有限，高先係分別
-        case .accessoryRectangular: return 150
-        case .accessoryInline: return 200
-        default: return 620                      // iPad／Mac 大格
-        }
+/// 估值表同 budget／揀邊幾條嘅邏輯喺 `Shared/WarningLayout.swift`（純邏輯、有單元測試）；
+/// 呢度只負責 `WidgetFamily` → `WarningLayout.Size` 映射。數值仍然係估算，未喺真機量過。
+private func widgetSize(for family: WidgetFamily) -> WarningLayout.Size {
+    switch family {
+    case .systemSmall: return .small
+    case .systemMedium: return .medium
+    case .systemLarge: return .large
+    case .systemExtraLarge: return .extraLarge
+    case .accessoryRectangular: return .rectangular
+    case .accessoryInline: return .inline
+    case .accessoryCircular: return .circular
+    default:
+        // iOS 27 iPhone 4×6 係 `.systemExtraLargePortrait`，要 Xcode 27（Swift 6.4）SDK 先有呢個 case；
+        // 之前冇處理，佢跌落 iPad／Mac 大格嗰檔（900pt），估闊咗好遠。舊 SDK 唔識呢行，照走 fallback。
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, *), family == .systemExtraLargePortrait { return .extraLargePortrait }
+        #endif
+        return .wide
     }
-
-    /// 粗估一段字嘅闊：中文（CJK）一個字級，ASCII／數字約 0.55 個字級。
-    static func text(_ string: String, size: CGFloat) -> CGFloat {
-        var width: CGFloat = 0
-        for scalar in string.unicodeScalars {
-            width += scalar.value >= 0x2E80 ? size : size * 0.55
-        }
-        return width
-    }
-
-    /// Badge 嘅估計闊：文字（10pt）＋左右 padding 5+5＋同前面元素嘅 spacing 5。
-    static func badge(_ string: String) -> CGFloat { text(string, size: 10) + 15 }
 }
 
 /// 細格 caption 嘅總容量：大格一格嘅 caption 得返約 91pt，「可用 / 255.4 GB」已經貼邊，
@@ -533,23 +572,6 @@ private func compactTotalBytes(_ value: Int64?) -> String {
           text[text.index(after: space)...].hasPrefix("G"),
           number >= 100, number < 999.5 else { return text }
     return "\(Int(number.rounded())) GB"
-}
-
-/// 由嚴重嘅排起（重要警告唔可以比後面嘅擠走），再按估算寬度逐個收；
-/// 至少留一個，放唔落嘅用「+N 項」講明。
-private func pickedWarnings(_ warnings: [WeatherWarning], limit: Int, width: CGFloat) -> [WeatherWarning] {
-    guard limit > 0, !warnings.isEmpty else { return [] }
-    let ordered = warnings.filter { $0.severe } + warnings.filter { !$0.severe }
-    var picked: [WeatherWarning] = []
-    var used: CGFloat = 0
-    for warning in ordered {
-        if picked.count >= limit { break }
-        let item = WidgetWidth.badge(warning.text)
-        if !picked.isEmpty, used + item > width { break }
-        used += item
-        picked.append(warning)
-    }
-    return picked
 }
 
 /// 今日咭下面：有天氣警告、或者屯馬綫唔正常先出現；平時唔佔位。
@@ -574,10 +596,13 @@ struct TodayAlerts: View {
         let trainIssue = train.map { $0.state != .normal } ?? false
         let trainText = train.map { "屯馬綫 \($0.state.text)" } ?? ""
         // 圖標（連 spacing）、屯馬綫 badge 同可能嘅「+N 項」都要位，先扣咗先計警告放得幾個
-        let budget = WidgetWidth.estimate(family) - 8 - 22
-            - (trainIssue ? WidgetWidth.badge(trainText) : 0)
-            - (warnings.count > 1 ? 36 : 0)
-        let picked = known ? pickedWarnings(warnings, limit: limit, width: budget) : []
+        // （budget 同「至少留一條、嚴重優先」嘅規則喺 `WarningLayout`，有測試）
+        let budget = WarningLayout.budget(
+            widgetSize(for: family),
+            train: trainIssue ? trainText : nil,
+            reserveOverflow: warnings.count > 1
+        )
+        let picked = known ? WarningLayout.layout(warnings, limit: limit, width: budget) : WarningLayout.Layout.empty
         if !known || !warnings.isEmpty || trainIssue {
             HStack(spacing: 5) {
                 if !known {
@@ -590,11 +615,11 @@ struct TodayAlerts: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
                         .widgetAccentable()
-                    ForEach(Array(picked.enumerated()), id: \.offset) { _, warning in
+                    ForEach(Array(picked.shown.enumerated()), id: \.offset) { _, warning in
                         Badge(text: warning.text, color: warning.severe ? .red : .orange)
                     }
-                    if warnings.count > picked.count {
-                        Text("+\(warnings.count - picked.count) 項").foregroundStyle(.orange)
+                    if picked.overflow > 0 {
+                        Text("+\(picked.overflow) 項").foregroundStyle(.orange)
                     }
                 }
                 if trainIssue {
@@ -741,8 +766,11 @@ struct InfoSection: View {
         let warnings = entry.info.warnings ?? []
         let train = entry.info.train
         // 圖標連 spacing、可能有嘅「+N 項」都要位；行內仲有 `padding(.horizontal, 4)`
-        let budget = WidgetWidth.estimate(family) - 8 - 22 - (warnings.count > Self.maxVisible ? 36 : 0)
-        let picked = known ? pickedWarnings(warnings, limit: Self.maxVisible, width: budget) : []
+        // （budget 同「至少留一條、嚴重優先」嘅規則喺 `WarningLayout`，有測試）
+        let budget = WarningLayout.budget(widgetSize(for: family), reserveOverflow: warnings.count > Self.maxVisible)
+        let picked = known
+            ? WarningLayout.layout(warnings, limit: Self.maxVisible, width: budget)
+            : WarningLayout.Layout.empty
         VStack(alignment: .leading, spacing: 4) {
             if !known {
                 Text("天氣警告：未有資料")
@@ -757,11 +785,11 @@ struct InfoSection: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
                         .widgetAccentable()
-                    ForEach(Array(picked.enumerated()), id: \.offset) { _, warning in
+                    ForEach(Array(picked.shown.enumerated()), id: \.offset) { _, warning in
                         Badge(text: warning.text, color: warning.severe ? .red : .orange)
                     }
-                    if warnings.count > picked.count {
-                        Text("+\(warnings.count - picked.count) 項").foregroundStyle(.orange)
+                    if picked.overflow > 0 {
+                        Text("+\(picked.overflow) 項").foregroundStyle(.orange)
                     }
                     Spacer(minLength: 0)
                 }

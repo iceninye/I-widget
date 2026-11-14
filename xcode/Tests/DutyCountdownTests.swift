@@ -131,6 +131,38 @@ final class DutyCountdownTests: XCTestCase {
         XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: started, contentAt: now.addingTimeInterval(3 * 3_600), now: now), started)
     }
 
+    /// 多過一個活動同時行緊（並發 `sync` 開出嘅重複倒數）：輪替基準要攞**最舊**嗰個嘅內容時間，
+    /// 唔可以攞 `Activity.activities.first`——清單次序冇保證，如果攞到嘅係啱啱先開嗰個，舊活動就會
+    /// 一直被當「啱啱開始」更新落去，6 小時輪替永遠推後。
+    func testOldestContentAtUsesTheOldestActivityNotTheFirst() {
+        let old = now.addingTimeInterval(-(6 * 3_600 + 60))
+        let fresh = now.addingTimeInterval(-60)
+        // 新嘅排喺前面都一樣要攞最舊（兩個方向都試，因為次序冇保證）
+        XCTAssertEqual(DutyActivityPlan.oldestContentAt([fresh, old], now: now), old)
+        XCTAssertEqual(DutyActivityPlan.oldestContentAt([old, fresh], now: now), old)
+        XCTAssertEqual(DutyActivityPlan.oldestContentAt([fresh], now: now), fresh)
+        // 冇活動行緊、或者內容時間全部遲過 `now`（舊內容缺 `syncedAt` 會跌落未來嘅主事件時間）：
+        // 當唔到基準就回 nil，交返俾 `rotationBaseline` 用 `UserDefaults` 或者 `now`
+        XCTAssertNil(DutyActivityPlan.oldestContentAt([], now: now))
+        XCTAssertNil(DutyActivityPlan.oldestContentAt([now.addingTimeInterval(3 * 3_600)], now: now))
+        XCTAssertEqual(DutyActivityPlan.oldestContentAt([now.addingTimeInterval(3 * 3_600), fresh], now: now), fresh)
+        // 端到端：基準按最舊計 → 舊活動已經行超過 6 小時，呢次一定要開新嘅，唔可以一直 update 落去
+        let events = [event(.dropOff, 30, "落地")]
+        guard case .start = DutyActivityPlan.decide(
+            events: events, now: now, running: true, startedAt: nil,
+            contentAt: DutyActivityPlan.oldestContentAt([fresh, old], now: now), leadMinutes: 180
+        ) else {
+            return XCTFail("最舊嗰個已經行咗超過 6 小時，要輪替")
+        }
+        // 全部活動都仲新：照更新，唔使重開
+        guard case .update = DutyActivityPlan.decide(
+            events: events, now: now, running: true, startedAt: nil,
+            contentAt: DutyActivityPlan.oldestContentAt([fresh], now: now), leadMinutes: 180
+        ) else {
+            return XCTFail("未夠 6 小時唔使重開")
+        }
+    }
+
     /// 事件邊界：每個 +1 秒（跨過嗰一刻先醒）、只計未來、升序、最多 8 個。
     /// app 前景輪循同 widget timeline 都經呢個函數，所以規則改動要喺呢度睇到。
     func testBoundariesAreFutureShiftedSortedAndCapped() {

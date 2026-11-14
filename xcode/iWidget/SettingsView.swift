@@ -6,8 +6,13 @@ struct SettingsView: View {
     @AppStorage(AppSettings.statusURL) private var statusURL = ""
     @AppStorage(HandoverNotifier.enabledKey) private var handoverAlerts = false
     @State private var handoverStatus = ""
+    /// 已經觸發過刷新嘅 token 組合：用嚟分辨「用家真係改過嘢」同「啱啱入頁」，
+    /// 並喺 debounce 完成之後先更新（取消咗就留舊值，等最新嗰次輸入先發）。
+    @State private var firedKey: String?
     @StateObject private var location = LocationAuth()
     @ObservedObject var model: AppModel
+    /// 一定要做到嘅刷新（`ContentView` 傳入 `mustRefresh: true`）：跑緊嗰輪要排返隊補跑，
+    /// 唔然用家打完最後幾個字會被嗰輪吞咗，成個 token 永遠更新唔到。
     let onChange: () -> Void
 
     var body: some View {
@@ -76,10 +81,29 @@ struct SettingsView: View {
                 await refreshHandoverStatus()
             }
         }
-        .onChange(of: rosterToken) { _, _ in onChange() }
-        .onChange(of: vpsToken) { _, _ in onChange() }
-        .onChange(of: statusURL) { _, _ in onChange() }
+        // 改 token：停手 0.5 秒先打網（寫法同 `HandoverSettingsView` 一樣用 `.task(id:)`，
+        // id 一改就會取消上一個未起嘅刷新）。逐個字觸發會一輪接一輪打網，而且跑緊嗰輪讀嘅
+        // 係輪開始時嘅舊 token，所以一定要等到最後輸入先發；發出去用 `mustRefresh: true`，
+        // 就算嗰時有輪跑緊都會排返隊補跑，最後嗰次輸入必定做到（規則見 `RefreshQueue`）。
+        .task(id: tokenKey) {
+            switch RefreshQueue.tokenEdit(current: tokenKey, lastFired: firedKey) {
+            case .firstSeen:
+                // 啱啱入頁：而家嘅值係儲存入面既有嘅，唔算用家改嘢，唔使打網
+                firedKey = tokenKey
+            case .unchanged:
+                break
+            case .fire:
+                try? await Task.sleep(nanoseconds: RefreshQueue.settingsDebounceNanos)
+                // 期間又改咗字：呢個 task 已被取消，交俾最新嗰次輸入去發
+                guard !Task.isCancelled else { return }
+                firedKey = tokenKey
+                onChange()
+            }
+        }
     }
+
+    /// 三個輸入框合成一個 id：任何一格改過都算「改過」，唔使寫三次 debounce。
+    private var tokenKey: String { "\(rosterToken)\u{1}\(vpsToken)\u{1}\(statusURL)" }
 
     private func refreshHandoverStatus() async {
         guard handoverAlerts else {

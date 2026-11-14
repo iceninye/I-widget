@@ -10,6 +10,16 @@ enum OverviewPart {
     case info
 }
 
+extension OverviewPart {
+    /// 對應嘅天氣警告快取範圍（同一份資料、成功時間分範圍記，見 `Freshness`）。
+    var warningsScope: Freshness.Scope {
+        switch self {
+        case .today: return .today
+        case .info: return .info
+        }
+    }
+}
+
 /// 一個畫面嘅資料。三個時間語意分開：
 /// - `date`：呢個 entry（畫面）嘅產生／生效時間，倒數同進度以佢為準。
 /// - `updatedAt`：最後**任一相關來源**成功取得嘅時間（唔係「全部來源都成功」，來源範圍見 `OverviewPart`）；
@@ -29,17 +39,19 @@ struct OverviewEntry: TimelineEntry {
 
     /// 全 app 口徑（app 內預覽用）：所有來源 — 資訊各項、更份／學校日曆、VPS — 最後**任一**成功嘅時間；
     /// 一個來源嘅成功時間都冇先 nil。注意係「任一」唔係「全部」。
+    /// 取時間嘅規則喺 `Freshness`（純邏輯、有測試）。
     static func lastSuccess(info: ExtraInfo, schedule: ScheduleData) -> Date? {
-        [info.updatedAt, schedule.lastSuccessAt, DataCache.savedAt("vps")].compactMap { $0 }.max()
+        Freshness.latest([info.updatedAt, schedule.lastSuccessAt, DataCache.savedAt("vps")])
     }
 
     /// widget 標題「更新於」：只計該 widget 會畫嘅來源，取最後**任一**成功嘅時間。
-    /// 今日咭唔計黃金／空氣／匯率／最新版本／VPS；資訊 widget 唔計更份／學校日曆。
+    /// 今日咭唔計黃金／空氣／匯率／最新版本／VPS；資訊 widget 唔計更份／學校日曆；
+    /// 天氣警告兩個都畫，但各自讀自己範圍嘅成功時間（`ExtraInfo.warningsStamps`），所以唔會互相灌水。
     /// 冇任何相關來源成功過就 nil（顯示「未有資料」）。
     static func lastSuccess(info: ExtraInfo, schedule: ScheduleData, part: OverviewPart) -> Date? {
         switch part {
-        case .today: return [info.todayUpdatedAt, schedule.lastSuccessAt].compactMap { $0 }.max()
-        case .info: return [info.infoUpdatedAt, DataCache.savedAt("vps")].compactMap { $0 }.max()
+        case .today: return Freshness.latest([info.todayUpdatedAt, schedule.lastSuccessAt])
+        case .info: return Freshness.latest([info.infoUpdatedAt, DataCache.savedAt("vps")])
         }
     }
 

@@ -49,7 +49,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         let config = settings(configuration)
         let stats = SystemStats.read()
         let reading = Self.recordBattery(stats, now: now)
-        let info = ExtraInfo.cached(now: now)
+        let info = ExtraInfo.cached(now: now, part: part)
         let schedule = ScheduleData.cached(token: config.rosterToken)
         let vps = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         return OverviewEntry(
@@ -72,17 +72,17 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
 
         // 剛剛撳咗資料格反轉：用快取即刻畫，唔使等上網。
         let justFlipped = DataCache.load(Date.self, key: "flipAt").map { now.timeIntervalSince($0) < 20 } ?? false
-        var loadedInfo = ExtraInfo.cached(now: now)
+        var loadedInfo = ExtraInfo.cached(now: now, part: part)
         var loadedSchedule = ScheduleData.cached(token: config.rosterToken)
         var loadedVPS = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         if !justFlipped {
             switch part {
             case .today:
                 async let schedule = ScheduleData.load(token: config.rosterToken, now: now)
-                async let info = withDeadline(15, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.loadToday(now: now) }
+                async let info = withDeadline(15, fallback: ExtraInfo.cached(now: now, part: part)) { await ExtraInfo.loadToday(now: now) }
                 (loadedSchedule, loadedInfo) = await (schedule, info)
             case .info:
-                async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
+                async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now, part: part)) { await ExtraInfo.load(now: now) }
                 async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now)
                 (loadedInfo, loadedVPS) = await (info, vps)
             }
@@ -90,7 +90,8 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         }
 
         // 三個時間語意：entry.date = 畫面時間；updatedAt = 自己範圍內最後任一相關來源成功嘅時間
-        // （唔係「全部來源都成功」；相關來源按 part 分，冇任何記錄就 nil）
+        // （唔係「全部來源都成功」；相關來源按 part 分，冇任何記錄就 nil。
+        //  天氣警告兩個 widget 都畫，所以成功時間都分範圍記：`warnings.today`／`warnings.info`，見 `Freshness`）
         let success = OverviewEntry.lastSuccess(info: loadedInfo, schedule: loadedSchedule, part: part)
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }

@@ -233,6 +233,16 @@ enum DutyActivityPlan {
             .prefix(maxTimelineBoundaries).map { $0.at.addingTimeInterval(1) }
     }
 
+    /// 多個活動同時行緊（並發 `sync` 開出嘅重複倒數，或者一次收唔切）：輪替基準要用**最舊**嗰個
+    /// 活動嘅內容時間。
+    /// 唔可以只攞清單第一個：次序冇保證，如果攞到嘅係啱啱先開嗰個，
+    /// 舊活動就會一直被當「啱啱開始」更新落去，6 小時輪替永遠推後。
+    /// 冇任何可用基準（冇活動行緊，或者內容時間全部遲過 `now`）就回 `nil`，
+    /// 交返俾 `rotationBaseline` 用 `UserDefaults` 嘅紀錄或者 `now`。
+    static func oldestContentAt(_ syncedAt: [Date], now: Date) -> Date? {
+        syncedAt.filter { $0 <= now }.min()
+    }
+
     /// 輪替基準：攞 `startedAt`（app 自己喺 `UserDefaults` 記低嘅啟動時間）同
     /// `contentAt`（活動隨身帶住嘅內容生成時間 `content.state.syncedAt`）之中**較舊**嗰個；
     /// 兩個都冇（第一次見到個活動、舊內容又冇時間欄位）就用 `now`。
