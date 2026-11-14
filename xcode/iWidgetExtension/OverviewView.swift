@@ -232,7 +232,13 @@ struct TodayCard: View {
                 if !entry.isFlipped("today"), let weather = entry.info.weather {
                     Divider().padding(.vertical, 1)
                     HStack(spacing: 5) {
-                        TodayWeatherRow(weather: weather, day: compact ? nil : (day?.hasTimes == true ? day : nil), now: entry.date)
+                        // 天氣行都可以撳嚟反轉（同更份主體同一個 FlipIntent）；兩個掣唔可以嵌入 Button label，所以並排
+                        Button(intent: FlipIntent(tile: "today")) {
+                            TodayWeatherRow(weather: weather, day: compact ? nil : (day?.hasTimes == true ? day : nil), now: entry.date)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                         ThemeButton()
                         RefreshButton(updatedAt: entry.updatedAt)
                     }
