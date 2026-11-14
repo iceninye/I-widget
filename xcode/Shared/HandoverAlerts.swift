@@ -172,6 +172,11 @@ struct HandoverAlert: Equatable {
     var body: String
     /// body 去走「N 分鐘後」之後嘅內容（Live Activity 倒數用）
     var detail = ""
+    /// 事件發生嘅地點（Live Activity 次行「時間 · 地點」用；冇就空白）。時間喺 title 已經有，唔使重複。
+    var place = ""
+    /// Live Activity 再一行嘅補充資料：Run、交接對象、目的地、之後做咩。
+    /// 唔好重複 title 已有嘅動作名稱、時間、地點（渲染會三句一齊行出嚟）。
+    var note = ""
 }
 
 /// 由更份砌出當日全部提示（提前幾耐跟 `HandoverSettings`，預設全部 15 分鐘，上班另加 1 小時前）：
@@ -247,6 +252,10 @@ enum HandoverAlerts {
                 let chain = legs[index...last]
                 let destination = places.name(legs[last].to)
                 let whose = relief.from.map { short($0.id) + " 更嘅 " } ?? ""
+                // Live Activity 分行顯示用：Run、接嗰位、目的地（時間地點已經有欄）
+                var note = "Run \(leg.run)"
+                if let take = relief.from { note += " · 接 \(short(take.id)) 更" }
+                if !legs[last].to.isEmpty { note += " → \(destination)" }
                 var body = ""
                 switch leg.kind {
                 case "prep":
@@ -266,7 +275,9 @@ enum HandoverAlerts {
                     eventAt: eventAt,
                     title: "接車 \(DutyDay.clock(leg.at)) · Run \(leg.run)",
                     body: leadText(pickLead) + body,
-                    detail: body
+                    detail: body,
+                    place: place,
+                    note: note
                 ))
             }
 
@@ -285,6 +296,9 @@ enum HandoverAlerts {
                 }
                 let after = afterText(card: card, legs: legs, index: index, until: until, places: places)
                 if !after.isEmpty { body += "，\(after)" }
+                var note = "Run \(leg.run)"
+                if let to = relief.to { note += " · 交 \(short(to.id)) 更" }
+                if !after.isEmpty { note += " · \(after)" }
                 result.append(HandoverAlert(
                     id: "\(idPrefix)\(date).\(card.id).\(index).\(HandoverAlert.Kind.dropOff.rawValue)",
                     kind: .dropOff,
@@ -292,7 +306,9 @@ enum HandoverAlerts {
                     eventAt: eventAt,
                     title: "落地 \(DutyDay.clock(until)) · \(place)",
                     body: prefix + body,
-                    detail: body
+                    detail: body,
+                    place: place,
+                    note: note
                 ))
             }
         }
@@ -313,7 +329,9 @@ enum HandoverAlerts {
                     eventAt: eventAt,
                     title: "返工 \(DutyDay.clock(on))\(day.onPlace.isEmpty ? "" : " · \(day.onPlace)")",
                     body: "\(leadText(lead))返工，\(DutyDay.clock(on))\(place)，\(name)",
-                    detail: "返工，\(DutyDay.clock(on))\(place)，\(name)"
+                    detail: "返工，\(DutyDay.clock(on))\(place)，\(name)",
+                    place: day.onPlace,
+                    note: name
                 ))
             }
         }
@@ -326,7 +344,9 @@ enum HandoverAlerts {
                 eventAt: eventAt,
                 title: "放工 \(DutyDay.clock(off))\(day.offPlace.isEmpty ? "" : " · \(day.offPlace)")",
                 body: "\(leadText(settings.off))收工，\(DutyDay.clock(off))\(place)",
-                detail: "收工，\(DutyDay.clock(off))\(place)"
+                detail: "收工，\(DutyDay.clock(off))\(place)",
+                place: day.offPlace,
+                note: name
             ))
         }
         return result

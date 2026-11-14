@@ -138,20 +138,24 @@ struct ThemeButton: View {
     }
 }
 
-/// 「即時更新」掣，連上次更新時間。
+/// 「即時更新」掣，連最後成功取得資料嘅時間；冇記錄就寫「未有資料」。
+/// nil 嗰陣「未有資料」4 個中文字比 `HH:mm` 闊十幾 pt，所以掣本身用理想寬度、優先排位：
+/// 唔好靠縮細（0.6 字級）或者截成「未有資…」，位唔夠應該由旁邊嘅內容讓位。
 struct RefreshButton: View {
-    let updatedAt: Date
+    let updatedAt: Date?
 
     var body: some View {
         Button(intent: RefreshIntent()) {
             HStack(spacing: 3) {
-                Text(Formatting.clock(updatedAt)).monospacedDigit()
+                Text(Formatting.lastUpdated(updatedAt)).monospacedDigit().lineLimit(1)
                 Image(systemName: "arrow.clockwise")
             }
+            .fixedSize()
         }
         .buttonStyle(.plain)
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(.secondary)
+        .layoutPriority(1)
     }
 }
 

@@ -88,6 +88,9 @@ targets:
       - path: Shared/DutyCards.swift
       - path: Shared/HandoverAlerts.swift
       - path: Shared/DutyCountdown.swift
+      - path: Shared/RefreshQueue.swift
+      - path: Shared/Freshness.swift
+      - path: Shared/WarningLayout.swift
       - path: Shared/FlipState.swift
       - path: Shared/WidgetTheme.swift
       - path: Shared/LiveAlerts.swift

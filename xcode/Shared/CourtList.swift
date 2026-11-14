@@ -83,6 +83,9 @@ struct CourtDay: Codable, Equatable {
     var total: Int
     var cases: [CourtCase]
     var error = false
+    /// 呢份案件表最後**成功下載**嘅時間；用舊快取或者從來冇成功就係舊時間／nil，唔會翻新成「啱啱更新」。
+    /// 舊快取冇呢個 key，解碼成 nil（呢時用 `DataCache.savedAt` 補，見 `CourtList.lastSuccess(days:)`）。
+    var fetchedAt: Date? = nil
 
     var name: String { CourtCatalog.name(code) }
 
@@ -578,13 +581,26 @@ enum CourtList {
         if let fresh = DataCache.fresh(CourtDay.self, key: key, maxAge: maxAge, now: now) { return fresh }
         if let url = url(code: code, dateCode: dateCode), let html = try? await fetch(url) {
             let cases = parse(html)
-            let result = CourtDay(code: code, dateCode: dateCode, total: cases.count, cases: Array(cases.prefix(300)))
-            // 今次空但之前有資料：保留舊嘅，唔好蓋走
+            // 今次空但之前有資料：連舊案件表同舊成功時間一齊保留，唔好蓋走（唔係啱啱更新）
             if cases.isEmpty, let cached, cached.total > 0 { return cached }
+            let result = CourtDay(
+                code: code, dateCode: dateCode, total: cases.count,
+                cases: Array(cases.prefix(300)), fetchedAt: now
+            )
             DataCache.save(result, key: key, stamped: now)
             return result
         }
         return cached ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+    }
+
+    /// 幾個法院「最後任一成功取得案件表」嘅時間，取最新一個；全部冇成功記錄就 nil（顯示「未有資料」）。
+    /// 舊快取冇 `fetchedAt`，用同一個 key 嘅 `DataCache.savedAt` 補；失敗而又冇快取嘅法院（`error`）唔計。
+    static func lastSuccess(days: [CourtDay]) -> Date? {
+        days.compactMap { day -> Date? in
+            if let at = day.fetchedAt { return at }
+            guard !day.error else { return nil }   // 讀失敗又冇快取：冇成功時間可言
+            return DataCache.savedAt(cacheKey(day.code, day.dateCode))
+        }.max()
     }
 
     static func cached(code: String, day: Date) -> CourtDay {

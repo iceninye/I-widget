@@ -57,4 +57,19 @@ final class FormattingTests: XCTestCase {
         XCTAssertFalse(Formatting.isLowStorage(free: 10, total: 100))
         XCTAssertFalse(Formatting.isLowStorage(free: nil, total: 100))
     }
+
+    /// nil = 從來冇成功讀到，唔可以扮啱啱更新。
+    func testLastUpdated() {
+        XCTAssertEqual(Formatting.lastUpdated(date(2026, 10, 23, 14, 5)), Formatting.clock(date(2026, 10, 23, 14, 5)))
+        XCTAssertEqual(Formatting.lastUpdated(nil), "未有資料")
+    }
+
+    func testShortDuration() {
+        XCTAssertEqual(Formatting.shortDuration(3 * 86_400 + 5 * 3_600 + 20 * 60), "3天5時")
+        XCTAssertEqual(Formatting.shortDuration(5 * 3_600 + 12 * 60), "5時12分")
+        XCTAssertEqual(Formatting.shortDuration(12 * 60), "12分")
+        XCTAssertEqual(Formatting.shortDuration(0), "0分")
+        XCTAssertEqual(Formatting.shortDuration(nil), Formatting.missing)
+        XCTAssertEqual(Formatting.shortDuration(-60), Formatting.missing)
+    }
 }

@@ -82,6 +82,21 @@ enum BatteryHistory {
         }
     }
 
+    /// widget 細格 caption 用嘅短版本（純展示，唔改 `text`）：「剩 5時20分」「1時30分 充滿」。
+    /// 時長用 `Formatting.shortDuration`（「5時20分」）；冇記錄照樣 nil，交呼叫端顯示「電量」。
+    static func shortText(_ estimate: BatteryEstimate) -> String? {
+        switch estimate {
+        case .remaining(let seconds): return "剩 \(Formatting.shortDuration(atLeastAMinute(seconds)))"
+        case .untilFull(let seconds): return "\(Formatting.shortDuration(atLeastAMinute(seconds))) 充滿"
+        case .full: return "已充滿"
+        case .learning: return "估算中"
+        case .unknown: return nil
+        }
+    }
+
+    /// 唔想見到「剩 0分」呢種似壞咗嘅字：最少當一分鐘。
+    private static func atLeastAMinute(_ seconds: TimeInterval) -> TimeInterval { max(seconds, 60) }
+
     /// 「5 小時 20 分」、「45 分」、「2 日 3 小時」。
     static func duration(_ seconds: TimeInterval) -> String {
         let minutes = Int((seconds / 60).rounded())
