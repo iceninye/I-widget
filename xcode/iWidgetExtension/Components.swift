@@ -138,14 +138,14 @@ struct ThemeButton: View {
     }
 }
 
-/// 「即時更新」掣，連上次更新時間。
+/// 「即時更新」掣，連最後成功取得資料嘅時間；冇記錄就寫「未有資料」。
 struct RefreshButton: View {
-    let updatedAt: Date
+    let updatedAt: Date?
 
     var body: some View {
         Button(intent: RefreshIntent()) {
             HStack(spacing: 3) {
-                Text(Formatting.clock(updatedAt)).monospacedDigit()
+                Text(Formatting.lastUpdated(updatedAt)).monospacedDigit().lineLimit(1)
                 Image(systemName: "arrow.clockwise")
             }
         }

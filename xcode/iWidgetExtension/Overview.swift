@@ -25,7 +25,8 @@ struct InfoConfigIntent: WidgetConfigurationIntent {
 }
 
 /// 今日咭同資訊兩個 widget 共用嘅 provider：每 30 分鐘重讀一次（一日 48 次，喺 WidgetKit 預算內）；
-/// 中間每 10 分鐘一個 entry，等開機時間、更份進度條同香港午夜／04:00 轉日都會自己更新。
+/// 中間每 10 分鐘一個 entry，加返更份事件（返工／接車／落地／放工）、香港午夜／04:00 轉日同反轉格到期嘅一刻，
+/// 等開機時間、進度條同倒數喺呢啲邊界都有對應 entry。
 /// 倒數用系統計時字，唔使 entry。今日咭讀更份、學校日程、天氣預報同警告；資訊讀天氣、黃金、VPS 等。
 struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelineProvider {
     enum Part { case today, info }
@@ -47,9 +48,12 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         let config = settings(configuration)
         let stats = SystemStats.read()
         let reading = Self.recordBattery(stats, now: now)
+        let info = ExtraInfo.cached(now: now)
+        let schedule = ScheduleData.cached(token: config.rosterToken)
+        let vps = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         return OverviewEntry(
-            date: now, stats: stats, battery: reading.estimate, info: .cached(now: now),
-            schedule: .cached(token: config.rosterToken), vps: .cached(url: config.statusURL, token: config.vpsToken), updatedAt: now,
+            date: now, stats: stats, battery: reading.estimate, info: info,
+            schedule: schedule, vps: vps, updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule),
             batteryRate: reading.rate, flips: FlipState.load(), theme: WidgetTheme.load()
         )
     }
@@ -79,8 +83,11 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
                 async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now)
                 (loadedInfo, loadedVPS) = await (info, vps)
             }
-            DataCache.save(now, key: "dataAt")
+            DataCache.save(now, key: "dataAt")   // 最後「嘗試」讀取時間；同「最後成功時間」(updatedAt) 分開
         }
+
+        // 三個時間語意：entry.date = 畫面時間；updatedAt = 最後成功時間（全部來源都冇記錄就 nil）
+        let success = OverviewEntry.lastSuccess(info: loadedInfo, schedule: loadedSchedule)
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
         // 昨日夜更放工嗰一刻，今日咭先轉去新一日
@@ -91,6 +98,9 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
                 dates.append(at.addingTimeInterval(1))
             }
         }
+        // 更份事件（返工、接車、落地、放工）嗰一刻要有 entry，倒數同進度先唔會展示舊值；
+        // dutyEvents 已經只返未來嘅事件，最多取 8 個，唔塞每分鐘 entry
+        dates += loadedSchedule.dutyEvents(now: now).prefix(8).map { $0.at.addingTimeInterval(1) }
         let calendar = ICalendar.hongKong
         for hour in [0, 4] {
             if let next = calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: 0), matchingPolicy: .nextTime),
@@ -100,10 +110,10 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         }
         // 反轉咗嘅格到時自動轉返正面
         dates += flips.expiries(after: now).map { $0.addingTimeInterval(1) }
-        let entries = dates.sorted().map {
+        let entries = Array(Set(dates)).sorted().map {
             OverviewEntry(
                 date: $0, stats: stats, battery: reading.estimate, info: loadedInfo, schedule: loadedSchedule,
-                vps: loadedVPS, updatedAt: justFlipped ? (DataCache.load(Date.self, key: "dataAt") ?? now) : now,
+                vps: loadedVPS, updatedAt: success,
                 batteryRate: reading.rate, flips: flips, theme: theme
             )
         }

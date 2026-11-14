@@ -1,8 +1,9 @@
 import ActivityKit
 import Foundation
 
-/// 更份倒數 Live Activity 嘅啟動、更新、結束。全部喺本機做（免費簽名冇 push），
-/// 所以內容只會喺 app 開啟、捷徑執行或者「排交接提示」執行嗰陣更新；倒數數字由系統自己跳。
+/// 更份倒數 Live Activity 嘅啟動、更新、結束。全部喺本機做（免費簽名冇推送 capability，
+/// `pushType` 一定要留 `nil`，唔好加 push／entitlement），所以內容只會喺 app 開啟、
+/// 捷徑執行或者「排交接提示」執行嗰陣更新；倒數數字由系統自己跳。
 enum DutyActivityManager {
     /// 開 app／「排交接提示」執行時順手更新倒數
     static let enabledKey = "settings.dutyActivity"
@@ -15,6 +16,11 @@ enum DutyActivityManager {
     static var leadMinutes: Int {
         let value = UserDefaults.standard.integer(forKey: leadKey)
         return value > 0 ? value : DutyActivityPlan.defaultLeadMinutes
+    }
+
+    /// 俾用家睇嘅提前窗口：足一小時就講「3 小時」，否則講分鐘（唔好講「0 小時」）。
+    private static func windowText(_ minutes: Int) -> String {
+        minutes >= 60 && minutes % 60 == 0 ? "\(minutes / 60) 小時" : "\(minutes) 分鐘"
     }
 
     static var isRunning: Bool { !Activity<DutyActivityAttributes>.activities.isEmpty }
@@ -42,35 +48,40 @@ enum DutyActivityManager {
         )
         switch action {
         case .wait:
-            return "未到時間：下一件事前 \(leadMinutes / 60) 小時先開始顯示倒數。"
+            return "未到時間：下一件事前 \(Self.windowText(leadMinutes))先開始顯示倒數。"
         case .end:
             await endAll()
-            return "冇下一件事，已結束倒數。"
+            return "下一件事隔超過 \(Self.windowText(leadMinutes))（或者冇咗），已結束倒數；進入範圍會重新開始。"
         case .update(let state):
             let content = ActivityContent(state: state, staleDate: state.at)
             for (index, activity) in running.enumerated() {
-                if index == 0 { await activity.update(content) } else { await activity.end(nil, dismissalPolicy: .immediate) }
+                // 正常只有一個；多過一個就更新第一個、收返其餘（附上最終 content，唔好清空）
+                if index == 0 { await activity.update(content) } else { await activity.end(activity.content, dismissalPolicy: .immediate) }
             }
-            return "已更新倒數：\(state.title)"
+            return "已更新倒數：\(state.action) \(Formatting.clock(state.at))"
         case .start(let state):
-            await endAll()
+            // 先成功建立新活動，先至收返舊嘅：倒轉（endAll → request）會喺 request 失敗時兩頭空。
             do {
                 _ = try Activity.request(
                     attributes: DutyActivityAttributes(),
                     content: ActivityContent(state: state, staleDate: state.at),
                     pushType: nil
                 )
-                UserDefaults.standard.set(now, forKey: startedKey)
-                return "已開始倒數：\(state.title)"
             } catch {
-                return "開始唔到倒數：\(error.localizedDescription)"
+                let kept = running.isEmpty ? "" : "，保留原本嘅倒數"
+                return "開始唔到倒數\(kept)：\(error.localizedDescription)"
             }
+            // `running` 係 request 之前讀嘅，新活動唔會喺入面
+            for activity in running { await activity.end(activity.content, dismissalPolicy: .immediate) }
+            UserDefaults.standard.set(now, forKey: startedKey)
+            return "已開始倒數：\(state.action) \(Formatting.clock(state.at))"
         }
     }
 
+    /// 結束全部活動：附上各活動最後嘅 content（`end(nil)` 會清走狀態，鎖定畫面會閃空白／變返預設）。
     static func endAll() async {
         for activity in Activity<DutyActivityAttributes>.activities {
-            await activity.end(nil, dismissalPolicy: .immediate)
+            await activity.end(activity.content, dismissalPolicy: .immediate)
         }
         UserDefaults.standard.removeObject(forKey: startedKey)
     }

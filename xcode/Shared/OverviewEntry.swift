@@ -1,6 +1,10 @@
 import Foundation
 import WidgetKit
 
+/// 一個畫面嘅資料。三個時間語意分開：
+/// - `date`：呢個 entry（畫面）嘅產生／生效時間，倒數同進度以佢為準。
+/// - `updatedAt`：最後成功取得資料嘅時間；冇任何成功記錄就 nil（顯示「未有資料」，唔好假裝啱啱更新）。
+/// - `DataCache` 嘅 `dataAt`：最後*嘗試*讀取嘅時間（由 provider 喺每次上網時寫）。
 struct OverviewEntry: TimelineEntry {
     let date: Date
     let stats: SystemStats
@@ -8,10 +12,15 @@ struct OverviewEntry: TimelineEntry {
     let info: ExtraInfo
     let schedule: ScheduleData
     let vps: VPSState
-    let updatedAt: Date
+    let updatedAt: Date?
     var batteryRate: Double? = nil
     var flips = FlipState()
     var theme = WidgetTheme.classic
+
+    /// 各來源最後成功取得時間嘅最新一個；全部冇記錄就 nil。VPS 直接用快取嘅 `savedAt("vps")`。
+    static func lastSuccess(info: ExtraInfo, schedule: ScheduleData) -> Date? {
+        [info.updatedAt, schedule.lastSuccessAt, DataCache.savedAt("vps")].compactMap { $0 }.max()
+    }
 
     func isFlipped(_ id: String) -> Bool { flips.isFlipped(id, at: date) }
 

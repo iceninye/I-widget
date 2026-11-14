@@ -38,9 +38,17 @@ struct ScheduleData {
         )
     }
 
+    /// 各來源最後成功下載嘅時間（`DataCache.savedAt`，得自 `save(_:key:stamped:)`）取最新一個；
+    /// 全部冇記錄就 nil。fall back 舊快取時唔會翻新，所以唔會變成「啱啱更新」。
+    var lastSuccessAt: Date? {
+        let keys = ["roster", "duties", "dutySheets", "dutyCards", "places"]
+            + SchoolCalendars.sources.map { Self.schoolKey($0) }
+        return keys.compactMap { DataCache.savedAt($0) }.max()
+    }
+
     static func load(token: String?, now: Date) async -> ScheduleData {
         async let roster = withDeadline(12, fallback: (DataCache.load(Roster.self, key: "roster"), true)) {
-            await loadRoster(token: token)
+            await loadRoster(token: token, now: now)
         }
         async let basic = withDeadline(12, fallback: DataCache.load([String: DutyTime].self, key: "duties") ?? [:]) {
             await loadBasic(now: now)
@@ -73,11 +81,11 @@ struct ScheduleData {
 
     // MARK: 更份
 
-    private static func loadRoster(token: String?) async -> (Roster?, Bool) {
+    private static func loadRoster(token: String?, now: Date) async -> (Roster?, Bool) {
         guard let url = RosterAPI.url(token: token) else { return (nil, false) }
         do {
             let roster = try RosterAPI.parse(try await Fetcher.data(from: url, timeout: 10))
-            DataCache.save(roster, key: "roster")
+            DataCache.save(roster, key: "roster", stamped: now)
             return (roster, false)
         } catch {
             return (DataCache.load(Roster.self, key: "roster"), true)
@@ -136,15 +144,19 @@ struct ScheduleData {
         if recent, keys.allSatisfy({ cached[$0]?.legs != nil }) { return cached }
 
         var result: [String: DutyCard] = [:]
+        var fetched = false
         for (sheet, ids) in wanted {
             guard let file = sheets.first(where: { $0.code == sheet })?.file else { continue }
             if let data = try? await Fetcher.firstData(from: DutyData.urls("data/duties/\(file)"), timeout: 10),
                let cards = try? DutyData.parseCards(data, ids: ids) {
                 for (id, card) in cards { result[DutyDay.cardKey(sheet: sheet, id: id)] = card }
+                fetched = fetched || !cards.isEmpty
             } else {
                 for id in ids { result[DutyDay.cardKey(sheet: sheet, id: id)] = cached[DutyDay.cardKey(sheet: sheet, id: id)] }
             }
         }
+        // 全部 sheet 都失敗：成份都係舊快取，唔好蓋返原本嘅 savedAt，免得舊資料變做「新鮮」
+        guard fetched else { return cached }
         DataCache.save(result, key: "dutyCards", stamped: now)
         return result
     }

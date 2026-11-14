@@ -6,7 +6,9 @@ struct ExtraInfo {
     var weather: WeatherSnapshot?
     var gold: GoldQuote?
     var latestOS: String?
-    var updatedAt: Date
+    /// 最後成功取得其中一項資料嘅時間；全部來源都冇成功記錄就 nil（即係「未有資料」，唔係「啱啱更新」）。
+    /// fall back 舊快取時唔會翻新呢個時間。
+    var updatedAt: Date?
     /// nil = 讀唔到（唔係「冇警告」）
     var warnings: [WeatherWarning]?
     var train: TrainStatus?
@@ -20,16 +22,32 @@ struct ExtraInfo {
 
     /// 唔使網絡：讀返上次快取。
     static func cached(now: Date = Date()) -> ExtraInfo {
-        ExtraInfo(
+        var info = ExtraInfo(
             weather: DataCache.load(WeatherSnapshot.self, key: "weather"),
             gold: DataCache.load(GoldQuote.self, key: "gold"),
             latestOS: DataCache.load(String.self, key: "latestOS"),
-            updatedAt: now,
+            updatedAt: nil,
             warnings: DataCache.fresh([WeatherWarning].self, key: "warnings", maxAge: liveMaxAge, now: now),
             train: DataCache.fresh(TrainStatus.self, key: "train", maxAge: liveMaxAge, now: now),
             air: DataCache.load(AirQuality.self, key: "air"),
             fx: DataCache.load(ExchangeRates.self, key: "fx")
         )
+        info.updatedAt = lastSuccess(of: info)
+        return info
+    }
+
+    /// 各來源自己嘅成功時間（模型內嘅 `fetchedAt`，或者只有快取有時間嘅來源用 `DataCache.savedAt`）取最新一個；
+    /// 全部冇記錄就 nil。用快取 fallback 時會攞到舊時間，唔會當做啱啱更新。
+    private static func lastSuccess(of info: ExtraInfo) -> Date? {
+        [
+            info.weather?.fetchedAt,
+            info.gold?.fetchedAt,
+            info.train?.fetchedAt,
+            info.air?.fetchedAt,
+            info.fx?.fetchedAt,
+            DataCache.savedAt("warnings"),
+            DataCache.savedAt("latestOS")
+        ].compactMap { $0 }.max()
     }
 
     /// 警告同列車狀況係「而家」資料：超過呢段時間冇更新就唔再顯示，免得見到舊警告。
@@ -44,10 +62,12 @@ struct ExtraInfo {
         async let train = loadTrain(now: now)
         async let air = loadAir(now: now)
         async let fx = loadFX(now: now)
-        return ExtraInfo(
-            weather: await weather, gold: await gold, latestOS: await latestOS, updatedAt: now,
+        var info = ExtraInfo(
+            weather: await weather, gold: await gold, latestOS: await latestOS, updatedAt: nil,
             warnings: await warnings, train: await train, air: await air, fx: await fx
         )
+        info.updatedAt = lastSuccess(of: info)
+        return info
     }
 
     /// 今日咭：天氣（10 分鐘內讀過就用返）、天氣警告、屯馬綫；其餘（黃金、匯率等）用快取。
@@ -59,6 +79,7 @@ struct ExtraInfo {
         info.weather = await weather
         info.warnings = await warnings
         info.train = await train
+        info.updatedAt = lastSuccess(of: info)
         return info
     }
 
@@ -139,15 +160,10 @@ struct ExtraInfo {
     }
 
     private static func loadLatestOS(now: Date) async -> String? {
-        let checkedAt = DataCache.load(Date.self, key: "latestOSChecked")
-        if let checkedAt, now.timeIntervalSince(checkedAt) < 6 * 3_600,
-           let cached = DataCache.load(String.self, key: "latestOS") {
-            return cached
-        }
+        if let fresh = DataCache.fresh(String.self, key: "latestOS", maxAge: 6 * 3_600, now: now) { return fresh }
         do {
             let latest = try OSVersion.parseLatest(try await Fetcher.data(from: OSVersion.latestURL))
-            DataCache.save(latest, key: "latestOS")
-            DataCache.save(now, key: "latestOSChecked")
+            DataCache.save(latest, key: "latestOS", stamped: now)
             return latest
         } catch {
             return DataCache.load(String.self, key: "latestOS")

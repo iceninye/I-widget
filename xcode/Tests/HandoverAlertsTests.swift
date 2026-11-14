@@ -141,4 +141,75 @@ final class HandoverAlertsTests: XCTestCase {
         XCTAssertEqual(HandoverAlerts.short("8027118"), "118")
         XCTAssertEqual(HandoverAlerts.short("SLP"), "SLP")
     }
+
+    /// Live Activity 分行渲染（動作 / 時間 · 地點 / 補充）：`place`、`note` 要啱，
+    /// 而 `note` 唔可以重複 `title` 已有嘅動作名稱；通知 title、body 完全唔變。
+    func testHandoverPlaceAndNoteForLiveActivity() throws {
+        let alerts = HandoverAlerts.make(card: try card(), date: "2026-11-13", places: places)
+        XCTAssertEqual(alerts.count, 6)
+        for alert in alerts {
+            XCTAssertFalse(alert.place.isEmpty, "要交代地點：\(alert.title)")
+            XCTAssertFalse(alert.note.isEmpty, "要有關鍵交接資料：\(alert.title)")
+            XCTAssertTrue(alert.note.contains("Run"), alert.note)
+            for word in ["返工", "接車", "落地", "放工"] {
+                XCTAssertFalse(alert.note.contains(word), "note 重複 title 嘅動作：\(alert.title) / \(alert.note)")
+            }
+            XCTAssertNotEqual(alert.note, alert.title)
+            XCTAssertFalse(alert.title.contains(alert.note))
+            // 通知文案原樣保留
+            XCTAssertTrue(alert.body.hasSuffix(alert.detail))
+        }
+        // 用膳後接車：地點喺 place，Run／接嗰位／目的地喺 note，兩邊唔重複
+        let afterMeal = alerts[4]
+        XCTAssertEqual(afterMeal.kind, .pickUp)
+        XCTAssertEqual(afterMeal.title, "接車 11:16 · Run 18")
+        XCTAssertEqual(afterMeal.place, "錦上路 2")
+        XCTAssertEqual(afterMeal.note, "Run 18 · 接 128 更 → 烏溪沙")
+        // 接車嘅 note 唔好再包含地點（地點已經喺次行）
+        for alert in alerts where alert.kind == .pickUp {
+            XCTAssertFalse(alert.note.contains(alert.place), "\(alert.title)：\(alert.place) / \(alert.note)")
+        }
+        // 落地：有交接對象就講交俾邊個更，並保留「之後…」
+        let beforeMeal = alerts[3]
+        XCTAssertEqual(beforeMeal.kind, .dropOff)
+        XCTAssertEqual(beforeMeal.place, "錦上路 2")
+        XCTAssertEqual(beforeMeal.note, "Run 16 · 交 118 更 · 之後用膳到 11:16")
+        // 最後一程：冇交接對象，只剩 Run 同「之後收工」
+        XCTAssertEqual(alerts[5].kind, .dropOff)
+        XCTAssertEqual(alerts[5].place, "烏溪沙")
+        XCTAssertEqual(alerts[5].note, "Run 18 · 之後收工")
+    }
+
+    /// 上班／放工：地點用 `day.onPlace`／`offPlace`，note 只係更號，唔重複 title 嘅動作、時間、地點。
+    func testDutyAlertsCarryPlaceAndShift() {
+        var day = DutyDay(date: "2026-11-13", code: "8027113", kind: .duty, title: "早更 8027113")
+        day.on = 19200
+        day.off = 49800
+        day.onPlace = "八鄉廠"
+        day.offPlace = "錦上路"
+        var settings = HandoverSettings()
+        settings.off = 15
+        let alerts = HandoverAlerts.dutyAlerts(day: day, settings: settings)
+        // 上班前兩次（60、15 分鐘）+ 放工前一次
+        XCTAssertEqual(alerts.count, 3)
+        XCTAssertEqual(alerts.map(\.kind), [.on, .on, .off])
+        let on = alerts[0]
+        XCTAssertEqual(on.title, "返工 05:20 · 八鄉廠")
+        XCTAssertEqual(on.place, "八鄉廠")
+        XCTAssertEqual(on.note, "113 更")
+        XCTAssertFalse(on.note.contains("05:20"))
+        XCTAssertFalse(on.note.contains("八鄉廠"))
+        XCTAssertFalse(on.note.contains("返工"))
+        let off = alerts[2]
+        XCTAssertEqual(off.kind, .off)
+        XCTAssertEqual(off.title, "放工 13:50 · 錦上路")
+        XCTAssertEqual(off.place, "錦上路")
+        XCTAssertEqual(off.note, "113 更")
+        XCTAssertFalse(off.note.contains("13:50"))
+        XCTAssertFalse(off.note.contains("錦上路"))
+        XCTAssertFalse(off.note.contains("放工"))
+        // 通知文案唔變
+        XCTAssertEqual(on.body, "1 小時後返工，05:20 喺八鄉廠，113 更")
+        XCTAssertEqual(off.body, "15 分鐘後收工，13:50 喺錦上路")
+    }
 }

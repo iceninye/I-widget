@@ -21,11 +21,13 @@ final class AppModel: ObservableObject {
 
     init() {
         let now = Date()
+        let info = ExtraInfo.cached(now: now)
+        let schedule = ScheduleData.cached(token: AppSettings.string(AppSettings.rosterToken))
+        let vps = VPSState.cached(url: AppSettings.string(AppSettings.statusURL), token: AppSettings.string(AppSettings.vpsToken))
         entry = OverviewEntry(
-            date: now, stats: SystemStats.read(), battery: .unknown, info: .cached(now: now),
-            schedule: .cached(token: AppSettings.string(AppSettings.rosterToken)),
-            vps: .cached(url: AppSettings.string(AppSettings.statusURL), token: AppSettings.string(AppSettings.vpsToken)),
-            updatedAt: now
+            date: now, stats: SystemStats.read(), battery: .unknown, info: info,
+            schedule: schedule, vps: vps,
+            updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule)
         )
     }
 
@@ -43,7 +45,9 @@ final class AppModel: ObservableObject {
         let loaded = await (info, schedule, vps)
         entry = OverviewEntry(
             date: now, stats: SystemStats.read(), battery: .unknown, info: loaded.0,
-            schedule: loaded.1, vps: loaded.2, updatedAt: now
+            schedule: loaded.1, vps: loaded.2,
+            // 真係成功取得嘅時間；全部失敗（淨係 fallback 快取）就係快取入面嘅舊時間
+            updatedAt: OverviewEntry.lastSuccess(info: loaded.0, schedule: loaded.1)
         )
         // 每次開 app 都重排交接提示，跟最新更表
         await rescheduleHandover()

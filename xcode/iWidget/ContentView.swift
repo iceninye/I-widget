@@ -23,8 +23,13 @@ struct ContentView: View {
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
-        // widget 嘅法院連結：跳去法院分頁，有案號就打開該聆訊嘅詳情
+        // widget 嘅連結：法院詳情 `iwidget://court?code=…`；更份倒數 `iwidget://duty`（Live Activity 撳入去）
         .onOpenURL { url in
+            if url.scheme == "iwidget", url.host == "duty" {
+                tab = .data
+                Task { await refresh() }
+                return
+            }
             guard let link = CourtLink(url: url) else { return }
             tab = .court
             court.open(link)
@@ -40,6 +45,9 @@ struct ContentView: View {
 
     private func refresh() async {
         await model.refresh()
-        WidgetCenter.shared.reloadAllTimelines()
+        // 只重讀受影響嘅 kind（今日咭同資訊），唔令無關嘅法院 widget 一齊重讀
+        for kind in ["IWidgetOverview", "IWidgetInfo"] {
+            WidgetCenter.shared.reloadTimelines(ofKind: kind)
+        }
     }
 }

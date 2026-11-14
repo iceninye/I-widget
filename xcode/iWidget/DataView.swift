@@ -33,7 +33,11 @@ struct DataView: View {
                 }
             }
             Section {
-                Text("更新於 \(Formatting.clock(entry.updatedAt))").foregroundStyle(.secondary)
+                if let at = entry.updatedAt {
+                    Text("更新於 \(Formatting.clock(at))").foregroundStyle(.secondary)
+                } else {
+                    Text("未有資料").foregroundStyle(.secondary)
+                }
             }
         }
         .navigationTitle("資料")
