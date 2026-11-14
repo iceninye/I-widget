@@ -29,7 +29,8 @@ struct InfoConfigIntent: WidgetConfigurationIntent {
 /// 等開機時間、進度條同倒數喺呢啲邊界都有對應 entry。
 /// 倒數用系統計時字，唔使 entry。今日咭讀更份、學校日程、天氣預報同警告；資訊讀天氣、黃金、VPS 等。
 struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelineProvider {
-    enum Part { case today, info }
+    /// 今日咭／各項資訊；來源範圍見 `OverviewPart`。
+    typealias Part = OverviewPart
 
     struct Settings {
         var rosterToken: String?
@@ -53,7 +54,9 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         let vps = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         return OverviewEntry(
             date: now, stats: stats, battery: reading.estimate, info: info,
-            schedule: schedule, vps: vps, updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule),
+            schedule: schedule, vps: vps,
+            // 自己範圍內「最後任一相關來源成功」嘅時間，唔使對方 widget 啱啱讀過嘅來源灌水
+            updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule, part: part),
             batteryRate: reading.rate, flips: FlipState.load(), theme: WidgetTheme.load()
         )
     }
@@ -86,8 +89,9 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
             DataCache.save(now, key: "dataAt")   // 最後「嘗試」讀取時間；同「最後成功時間」(updatedAt) 分開
         }
 
-        // 三個時間語意：entry.date = 畫面時間；updatedAt = 最後成功時間（全部來源都冇記錄就 nil）
-        let success = OverviewEntry.lastSuccess(info: loadedInfo, schedule: loadedSchedule)
+        // 三個時間語意：entry.date = 畫面時間；updatedAt = 自己範圍內最後任一相關來源成功嘅時間
+        // （唔係「全部來源都成功」；相關來源按 part 分，冇任何記錄就 nil）
+        let success = OverviewEntry.lastSuccess(info: loadedInfo, schedule: loadedSchedule, part: part)
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
         // 昨日夜更放工嗰一刻，今日咭先轉去新一日
@@ -100,7 +104,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         }
         // 更份事件（返工、接車、落地、放工）嗰一刻要有 entry，倒數同進度先唔會展示舊值；
         // dutyEvents 已經只返未來嘅事件，最多取 8 個，唔塞每分鐘 entry
-        dates += loadedSchedule.dutyEvents(now: now).prefix(8).map { $0.at.addingTimeInterval(1) }
+        dates += DutyActivityPlan.boundaries(events: loadedSchedule.dutyEvents(now: now), now: now)
         let calendar = ICalendar.hongKong
         for hour in [0, 4] {
             if let next = calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: 0), matchingPolicy: .nextTime),

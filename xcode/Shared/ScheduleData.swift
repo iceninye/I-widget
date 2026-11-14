@@ -38,8 +38,9 @@ struct ScheduleData {
         )
     }
 
-    /// 各來源最後成功下載嘅時間（`DataCache.savedAt`，得自 `save(_:key:stamped:)`）取最新一個；
-    /// 全部冇記錄就 nil。fall back 舊快取時唔會翻新，所以唔會變成「啱啱更新」。
+    /// 各來源最後成功下載嘅時間（`DataCache.savedAt`，得自 `save(_:key:stamped:)`）取最新一個，
+    /// 即「最後任一來源成功」；全部冇記錄就 nil。fall back 舊快取時唔會翻新，所以唔會變成「啱啱更新」。
+    /// 呢啲來源（更份、更份卡、地點、學校日曆）只有今日咭會畫，所以資訊 widget 唔應該計入（見 `OverviewPart`）。
     var lastSuccessAt: Date? {
         let keys = ["roster", "duties", "dutySheets", "dutyCards", "places"]
             + SchoolCalendars.sources.map { Self.schoolKey($0) }

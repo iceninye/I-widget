@@ -1,9 +1,19 @@
 import Foundation
 import WidgetKit
 
+/// 邊個 widget 計邊啲來源：兩個 widget 喺同一個 extension 入面共用同一份快取，
+/// 所以「更新於」一定要按來源分，否則會互相用對方啱啱成功嘅時間灌水。
+enum OverviewPart {
+    /// 今日咭：更份（roster／duties／dutySheets／dutyCards／places）、學校日曆、天氣、天氣警告、屯馬綫。
+    case today
+    /// 各項資訊：天氣、天氣警告、屯馬綫、黃金、空氣、匯率、最新系統版本、VPS。
+    case info
+}
+
 /// 一個畫面嘅資料。三個時間語意分開：
 /// - `date`：呢個 entry（畫面）嘅產生／生效時間，倒數同進度以佢為準。
-/// - `updatedAt`：最後成功取得資料嘅時間；冇任何成功記錄就 nil（顯示「未有資料」，唔好假裝啱啱更新）。
+/// - `updatedAt`：最後**任一相關來源**成功取得嘅時間（唔係「全部來源都成功」，來源範圍見 `OverviewPart`）；
+///   冇任何成功記錄就 nil（顯示「未有資料」，唔好假裝啱啱更新）。
 /// - `DataCache` 嘅 `dataAt`：最後*嘗試*讀取嘅時間（由 provider 喺每次上網時寫）。
 struct OverviewEntry: TimelineEntry {
     let date: Date
@@ -17,9 +27,20 @@ struct OverviewEntry: TimelineEntry {
     var flips = FlipState()
     var theme = WidgetTheme.classic
 
-    /// 各來源最後成功取得時間嘅最新一個；全部冇記錄就 nil。VPS 直接用快取嘅 `savedAt("vps")`。
+    /// 全 app 口徑（app 內預覽用）：所有來源 — 資訊各項、更份／學校日曆、VPS — 最後**任一**成功嘅時間；
+    /// 一個來源嘅成功時間都冇先 nil。注意係「任一」唔係「全部」。
     static func lastSuccess(info: ExtraInfo, schedule: ScheduleData) -> Date? {
         [info.updatedAt, schedule.lastSuccessAt, DataCache.savedAt("vps")].compactMap { $0 }.max()
+    }
+
+    /// widget 標題「更新於」：只計該 widget 會畫嘅來源，取最後**任一**成功嘅時間。
+    /// 今日咭唔計黃金／空氣／匯率／最新版本／VPS；資訊 widget 唔計更份／學校日曆。
+    /// 冇任何相關來源成功過就 nil（顯示「未有資料」）。
+    static func lastSuccess(info: ExtraInfo, schedule: ScheduleData, part: OverviewPart) -> Date? {
+        switch part {
+        case .today: return [info.todayUpdatedAt, schedule.lastSuccessAt].compactMap { $0 }.max()
+        case .info: return [info.infoUpdatedAt, DataCache.savedAt("vps")].compactMap { $0 }.max()
+        }
     }
 
     func isFlipped(_ id: String) -> Bool { flips.isFlipped(id, at: date) }

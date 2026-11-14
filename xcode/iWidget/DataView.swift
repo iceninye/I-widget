@@ -3,6 +3,7 @@ import SwiftUI
 /// 同 widget 一樣嘅資料，逐項列出。
 struct DataView: View {
     @ObservedObject var model: AppModel
+    let onRefresh: () -> Void
 
     var body: some View {
         let entry = model.entry
@@ -41,21 +42,36 @@ struct DataView: View {
             }
         }
         .navigationTitle("資料")
-        .refreshable { await model.refresh() }
+        .refreshable {
+            onRefresh()
+            // 回調係非同步排程：先俾佢開始，再等真正完成，唔好一開始見到 loading=false 就收 spinner。
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            while model.loading { try? await Task.sleep(nanoseconds: 100_000_000) }
+        }
         .overlay { if model.loading { ProgressView() } }
     }
 
     @ViewBuilder private func alerts(_ entry: OverviewEntry) -> some View {
-        let warnings = entry.info.warnings ?? []
-        if !warnings.isEmpty || entry.info.train != nil {
+        let warnings = entry.info.warnings
+        if warnings != nil || entry.info.train != nil {
             Section("警告、屯馬綫") {
-                ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
-                    Label(warning.text, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(warning.severe ? .red : .orange)
+                if let warnings {
+                    if warnings.isEmpty {
+                        Text("暫無天氣警告").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+                            Label(warning.text, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(warning.severe ? .red : .orange)
+                        }
+                    }
+                } else {
+                    Text("天氣警告：未有資料").foregroundStyle(.secondary)
                 }
                 if let train = entry.info.train {
                     LabeledContent("屯馬綫", value: train.state.text)
                     if !train.message.isEmpty { Text(train.message).font(.footnote).foregroundStyle(.secondary) }
+                } else {
+                    Text("屯馬綫：未有資料").foregroundStyle(.secondary)
                 }
             }
         }

@@ -6,8 +6,10 @@ struct ExtraInfo {
     var weather: WeatherSnapshot?
     var gold: GoldQuote?
     var latestOS: String?
-    /// 最後成功取得其中一項資料嘅時間；全部來源都冇成功記錄就 nil（即係「未有資料」，唔係「啱啱更新」）。
-    /// fall back 舊快取時唔會翻新呢個時間。
+    /// 全部來源（唔分 widget）之中，最後成功取得其中一項資料嘅時間；一個來源都冇成功記錄就 nil
+    /// （即係「未有資料」，唔係「啱啱更新」）。fall back 舊快取時唔會翻新呢個時間。
+    /// app 內預覽用呢個；widget 標題要用自己範圍嘅 `todayUpdatedAt`／`infoUpdatedAt`，
+    /// 否則今日咭會顯示「各項資訊」啱啱讀嘅時間、反之亦然（互相灌水）。
     var updatedAt: Date?
     /// nil = 讀唔到（唔係「冇警告」）
     var warnings: [WeatherWarning]?
@@ -38,6 +40,7 @@ struct ExtraInfo {
 
     /// 各來源自己嘅成功時間（模型內嘅 `fetchedAt`，或者只有快取有時間嘅來源用 `DataCache.savedAt`）取最新一個；
     /// 全部冇記錄就 nil。用快取 fallback 時會攞到舊時間，唔會當做啱啱更新。
+    /// 呢個係「唔分 widget」嘅全 app 口徑（`updatedAt`）；widget 用下面兩個分範圍嘅版本。
     private static func lastSuccess(of info: ExtraInfo) -> Date? {
         [
             info.weather?.fetchedAt,
@@ -47,6 +50,28 @@ struct ExtraInfo {
             info.fx?.fetchedAt,
             DataCache.savedAt("warnings"),
             DataCache.savedAt("latestOS")
+        ].compactMap { $0 }.max()
+    }
+
+    // MARK: 按 widget 分範圍嘅「最後任一相關來源成功」時間
+    //
+    // 呢啲係「相關來源入面最遲成功嗰個」，唔係「全部來源都成功」；某個來源一直失敗、
+    // 另一個來源成功，都會顯示成功嗰個嘅時間。
+    // 另外，`DataCache.savedAt` 讀嘅係同一 extension 共用嘅快取記錄：如果將來有多個 widget
+    // 都會讀同一個來源（例如天氣警告），對方嘅成功時間一樣會出現喺呢度。
+
+    /// 今日咭畫嘅來源：天氣、天氣警告、屯馬綫。
+    /// 唔計黃金／空氣／匯率／最新系統版本——呢啲由「各項資訊」widget 更新，計入嚟會令今日咭嘅更新時間灌水。
+    var todayUpdatedAt: Date? {
+        [weather?.fetchedAt, train?.fetchedAt, DataCache.savedAt("warnings")].compactMap { $0 }.max()
+    }
+
+    /// 「各項資訊」畫嘅來源：天氣、天氣警告、屯馬綫、黃金、空氣、匯率、最新系統版本。
+    /// 唔計更份／學校日曆（呢啲由今日咭更新）；VPS 嘅時間喺 `OverviewEntry` 嗰邊補。
+    var infoUpdatedAt: Date? {
+        [
+            weather?.fetchedAt, train?.fetchedAt, gold?.fetchedAt, air?.fetchedAt, fx?.fetchedAt,
+            DataCache.savedAt("warnings"), DataCache.savedAt("latestOS")
         ].compactMap { $0 }.max()
     }
 

@@ -100,6 +100,69 @@ final class DutyCountdownTests: XCTestCase {
         XCTAssertLessThan(DutyActivityPlan.maxAge, 8 * 3_600)
     }
 
+    /// 6 小時輪替唔可以只靠 `UserDefaults`（重裝／清資料會令 `startedAt` 消失）：
+    /// 活動自己隨身帶住嘅內容時間（`content.state.syncedAt`）都要可以證明個活動已經好舊。
+    func testRotationBaselineUsesContentTimeWhenStartedAtMissing() {
+        let events = [event(.dropOff, 30, "落地")]
+        let old = now.addingTimeInterval(-(6 * 3_600 + 60))
+        // `startedAt` 冇咗，但內容時間話你知活動已經行超過 6 小時 → 照輪替，唔可以當佢啱啱開始
+        guard case .start = DutyActivityPlan.decide(events: events, now: now, running: true, startedAt: nil, contentAt: old, leadMinutes: 180) else {
+            return XCTFail("內容好舊都要輪替，唔可以靠 UserDefaults 有冇就當新開始")
+        }
+        // 內容先係 5 小時前砌嘅：未使重開
+        guard case .update = DutyActivityPlan.decide(events: events, now: now, running: true, startedAt: nil, contentAt: now.addingTimeInterval(-5 * 3_600), leadMinutes: 180) else {
+            return XCTFail("5 小時未使重開")
+        }
+        // 兩樣都冇（第一次先見到個活動）：基準補寫成 `now`——唔即刻重開，但 6 小時後一定輪替，唔會冇基準咁長駐
+        guard case .update = DutyActivityPlan.decide(events: events, now: now, running: true, startedAt: nil, contentAt: nil, leadMinutes: 180) else {
+            return XCTFail("冇任何基準就當而家開始，下一次先計 6 小時")
+        }
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: nil, contentAt: nil, now: now), now)
+        // 有 `startedAt` 就照佢計；內容時間再新都推後唔到輪替（基準攞**較舊**嗰個）
+        let started = now.addingTimeInterval(-4 * 3_600)
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: started, contentAt: now.addingTimeInterval(-60), now: now), started)
+        // 相反（`startedAt` 比內容新，即係 app 記錯／補寫遲咗）：都用較舊嘅內容時間，輪替只會早唔會遲
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: started, contentAt: old, now: now), old)
+        // 遲過 `now` 嘅候選唔當基準：舊內容缺 `syncedAt` 會跌落主事件時間，而主事件可能仲未發生，
+        // 當佢係基準就會令輪替無限期推後（即係長駐）。
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: nil, contentAt: now.addingTimeInterval(3 * 3_600), now: now), now)
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: now.addingTimeInterval(2 * 3_600), contentAt: nil, now: now), now)
+        // 有真正用得上嘅基準就唔會被將來時間污染
+        XCTAssertEqual(DutyActivityPlan.rotationBaseline(startedAt: started, contentAt: now.addingTimeInterval(3 * 3_600), now: now), started)
+    }
+
+    /// 事件邊界：每個 +1 秒（跨過嗰一刻先醒）、只計未來、升序、最多 8 個。
+    /// app 前景輪循同 widget timeline 都經呢個函數，所以規則改動要喺呢度睇到。
+    func testBoundariesAreFutureShiftedSortedAndCapped() {
+        let events = (0..<12).map { event(.dropOff, Double($0) * 10, "落地 \($0)") }   // 而家、+10 分鐘、+20 分鐘…
+        let boundaries = DutyActivityPlan.boundaries(events: events, now: now)
+        // 「而家」嗰個已經唔算未來，所以第一個邊界係 +10 分鐘嗰個 + 1 秒
+        XCTAssertEqual(boundaries.first, now.addingTimeInterval(10 * 60 + 1))
+        XCTAssertEqual(boundaries.count, DutyActivityPlan.maxTimelineBoundaries)
+        XCTAssertEqual(DutyActivityPlan.maxTimelineBoundaries, 8)
+        XCTAssertEqual(boundaries, boundaries.sorted())
+        XCTAssertTrue(boundaries.allSatisfy { $0 > now })
+        XCTAssertTrue(DutyActivityPlan.boundaries(events: [], now: now).isEmpty)
+        // 全部已過：唔好留低任何會即刻醒嘅邊界
+        XCTAssertTrue(DutyActivityPlan.boundaries(events: [event(.on, -60, "返工"), event(.off, -1, "放工")], now: now).isEmpty)
+    }
+
+    /// 動作名要覆蓋晒 `HandoverAlert.Kind` 四個 case；認唔到（舊內容、缺欄位、空字串）先跌落 fallback。
+    func testActionNamesMapEveryKindAndFallbackOnUnknown() {
+        XCTAssertEqual(DutyAction.name("on"), "返工")
+        XCTAssertEqual(DutyAction.name("pick"), "接車")
+        XCTAssertEqual(DutyAction.name("drop"), "落地")
+        XCTAssertEqual(DutyAction.name("off"), "放工")
+        for kind in [HandoverAlert.Kind.on, .pickUp, .dropOff, .off] {
+            XCTAssertNotEqual(DutyAction.name(kind.rawValue), DutyAction.fallback, kind.rawValue)
+            XCTAssertEqual(DutyEvent(kind: kind, at: now, title: "X", detail: "").action, DutyAction.name(kind.rawValue))
+        }
+        // 唔係 `Kind` 嘅 raw value：一律 fallback，唔可以當佢係某個動作
+        XCTAssertEqual(DutyAction.name(""), DutyAction.fallback)
+        XCTAssertEqual(DutyAction.name("meal"), DutyAction.fallback)
+        XCTAssertEqual(DutyAction.name("ON"), DutyAction.fallback)
+    }
+
     func testEndsWhenNothingLeft() {
         XCTAssertEqual(DutyActivityPlan.decide(events: [], now: now, running: true, startedAt: nil, leadMinutes: 180), .end)
         XCTAssertEqual(DutyActivityPlan.decide(events: [], now: now, running: false, startedAt: nil, leadMinutes: 180), .wait)
@@ -141,6 +204,8 @@ final class DutyCountdownTests: XCTestCase {
         XCTAssertTrue(staleText.contains("待更新"), staleText)
         XCTAssertTrue(staleText.contains("上次事件"), staleText)
         XCTAssertTrue(staleText.contains("返工"), staleText)
+        // `syncedAt` 只係用嚟講內容幾時生成（等用家知「待更新」幾舊），唔靠佢驅動「待更新」
+        XCTAssertTrue(staleText.contains("內容建於"), staleText)
         XCTAssertFalse(staleText.contains("已到"), staleText)
         XCTAssertFalse(staleText.contains("之後"), staleText)
         let freshText = state.accessibilityText(now: now, stale: false)
@@ -199,20 +264,43 @@ final class DutyCountdownTests: XCTestCase {
         XCTAssertLessThanOrEqual(DutyActivityPlan.byteCount(built), DutyActivityPlan.contentByteLimit)
     }
 
+    /// 舊版內容 shape：得 `kind`/`title`/`detail`/`at`/`later: [String]`，冇 `place`/`note`/`syncedAt`。
+    private struct LegacyStateShape: Codable {
+        var kind: String
+        var title: String
+        var detail: String
+        var at: Date
+        var later: [String]
+    }
+
     /// 舊版（title/detail/later:[String]）嘅 Live Activity 內容：更新 app 之後都要讀到，唔可以 throw。
     func testDecodesLegacyStateShape() throws {
-        let legacy = #"{"kind":"on","title":"返工 05:20 · 八鄉廠","detail":"返工，05:20","at":1800000000,"later":["接車 06:00"]}"#
-        let state = try JSONDecoder().decode(DutyActivityState.self, from: Data(legacy.utf8))
+        // fixture 由 `JSONEncoder` 砌出，唔寫死魔術數：`Date` 嘅預設編碼策略係「由 2001-01-01
+        // reference date 計嘅秒數」，所以 `now`（Unix 1,800,000,000）喺舊內容入面會係
+        // 821,692,800（= 1,800,000,000 − 978,307,200）。直接抄 Unix 數會解碼到完全唔同嘅一刻。
+        let legacy = LegacyStateShape(
+            kind: "on", title: "返工 05:20 · 八鄉廠", detail: "返工，05:20", at: now, later: ["接車 06:00"]
+        )
+        let data = try JSONEncoder().encode(legacy)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        // 確係舊 shape：多咗而家冇嘅 title/detail，少咗 place/note/syncedAt，`later` 仲係字串
+        XCTAssertEqual(object.keys.sorted(), ["at", "detail", "kind", "later", "title"])
+        XCTAssertEqual(object["at"] as? Double, now.timeIntervalSinceReferenceDate)
+        XCTAssertEqual(object["later"] as? [String], ["接車 06:00"])
+
+        let state = try JSONDecoder().decode(DutyActivityState.self, from: data)
         XCTAssertEqual(state.kind, "on")
         XCTAssertEqual(state.action, "返工")
-        XCTAssertEqual(state.at, now)
-        XCTAssertEqual(state.syncedAt, now)
+        XCTAssertEqual(state.at, now, "新舊內容都用 reference date 秒數，解出嚟要啱返同一刻")
+        XCTAssertEqual(state.syncedAt, now, "缺 `syncedAt` 就用主事件時間兜底")
         XCTAssertEqual(state.place, "")
         XCTAssertEqual(state.note, "")
-        XCTAssertTrue(state.later.isEmpty)
-        // 新版編码之後照樣讀返（round-trip）
+        XCTAssertTrue(state.later.isEmpty, "`later` 由 [String] 變成 [DutyLaterItem]：舊內容當冇，唔可以 throw")
+        // 過咗頭嘅舊內容照樣判到 expired（靠主事件時間，唔靠 `syncedAt`）
+        XCTAssertTrue(state.isPast(now: now))
+        XCTAssertFalse(state.isPast(now: now.addingTimeInterval(-1)))
+        // 新版編碼之後照樣讀返（round-trip）
         let fresh = try XCTUnwrap(DutyActivityPlan.state(events: [event(.on, 30, "返工", place: "八鄉廠", note: "111 更")], now: now))
-        let data = try JSONEncoder().encode(fresh)
-        XCTAssertEqual(try JSONDecoder().decode(DutyActivityState.self, from: data), fresh)
+        XCTAssertEqual(try JSONDecoder().decode(DutyActivityState.self, from: try JSONEncoder().encode(fresh)), fresh)
     }
 }

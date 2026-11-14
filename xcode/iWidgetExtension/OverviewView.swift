@@ -34,58 +34,53 @@ struct TodayLayout: View {
     let entry: OverviewEntry
 
     /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起學校，再收明日、本週概況、7 日色條；
-    /// 最後先收今日咭嘅次要行（提示、逐時預報）同警告列，確保 systemMedium 唔會截尾。
+    /// 最後先收今日咭嘅次要行（提示、逐時預報）。警告列係重要資料，幾細都唔收。
+    /// 注意：`Spacer` 必須喺 ViewThatFits 嘅外面——放咗入每個候選，每個候選都會「裝得落」，逐級收起就永遠唔會觸發。
     var body: some View {
         GeometryReader { geometry in
             let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
-            ViewThatFits(in: .vertical) {
-                stack(rows: rows, strip: true, week: true, tomorrow: true, school: true)
-                stack(rows: rows, strip: true, week: true, tomorrow: true, school: false)
-                stack(rows: rows, strip: true, week: true, tomorrow: false, school: false)
-                stack(rows: rows, strip: true, week: false, tomorrow: false, school: false)
-                stack(rows: rows, strip: false, week: false, tomorrow: false, school: false)
-                stack(rows: rows, strip: false, week: false, tomorrow: false, school: false, compact: true)
-                stack(rows: rows, strip: false, week: false, tomorrow: false, school: false, compact: true, alerts: false)
+            VStack(alignment: .leading, spacing: 7) {
+                ViewThatFits(in: .vertical) {
+                    stack(rows: rows, strip: true, week: true, tomorrow: true, school: true)
+                    stack(rows: rows, strip: true, week: true, tomorrow: true, school: false)
+                    stack(rows: rows, strip: true, week: true, tomorrow: false, school: false)
+                    stack(rows: rows, strip: true, week: false, tomorrow: false, school: false)
+                    stack(rows: rows, strip: false, week: false, tomorrow: false, school: false)
+                    stack(rows: rows, strip: false, week: false, tomorrow: false, school: false, compact: true)
+                }
+                Spacer(minLength: 0)
             }
         }
     }
 
     private func stack(
-        rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool,
-        compact: Bool = false, alerts: Bool = true
+        rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool, compact: Bool = false
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             TodayCard(entry: entry, compact: compact)
-            if alerts { TodayAlerts(entry: entry) }
+            TodayAlerts(entry: entry)
             if strip { WeekStrip(entry: entry) }
             if week { WeekLine(entry: entry) }
             if tomorrow { TomorrowLine(entry: entry) }
             if school { SchoolSection(entry: entry, maxRows: rows) }
-            Spacer(minLength: 0)
         }
     }
 }
 
 struct InfoLayout: View {
-    @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
 
-    /// 資料格一行三格：多一行就多三格，所以要睇尺寸俾幾多，唔好一次過攤 12 格。
-    private var maxExtraRows: Int {
-        switch family {
-        case .systemSmall, .systemMedium: return 0
-        case .systemLarge: return 1
-        default: return 2                      // iPad 特大等比 large 更大嘅尺寸
-        }
-    }
-
-    /// 位唔夠就由最底一行開始收起（第 4 行記憶體、降雨、低耗電；第 3 行紫外線、空氣、匯率）。
+    /// 資料格一行三格：12 格（4 行）係上限，位唔夠就由最底一行開始收起
+    /// （第 4 行記憶體、降雨、低耗電；第 3 行紫外線、空氣、匯率）。
+    /// `Spacer` 同樣要喺 ViewThatFits 外面，否則每個候選都裝得落，逐級收起唔會發生。
     var body: some View {
-        let extra = maxExtraRows
-        ViewThatFits(in: .vertical) {
-            stack(extraRows: extra)
-            stack(extraRows: max(0, extra - 1))
-            stack(extraRows: 0)
+        VStack(alignment: .leading, spacing: 7) {
+            ViewThatFits(in: .vertical) {
+                stack(extraRows: 2)
+                stack(extraRows: 1)
+                stack(extraRows: 0)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -101,7 +96,6 @@ struct InfoLayout: View {
             .font(.system(size: 12))
             .padding(.horizontal, 4)
             InfoSection(entry: entry)
-            Spacer(minLength: 0)
             TileGrid(entry: entry, extraRows: extraRows)
             VPSLine(vps: entry.vps, flipped: entry.isFlipped("vps"), back: entry.vpsBack)
         }
@@ -229,18 +223,35 @@ struct TodayCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(spoken(day))
-                if !entry.isFlipped("today"), let weather = entry.info.weather {
-                    Divider().padding(.vertical, 1)
-                    HStack(spacing: 5) {
-                        // 天氣行都可以撳嚟反轉（同更份主體同一個 FlipIntent）；兩個掣唔可以嵌入 Button label，所以並排
-                        Button(intent: FlipIntent(tile: "today")) {
-                            TodayWeatherRow(weather: weather, day: compact ? nil : (day?.hasTimes == true ? day : nil), now: entry.date)
+                if !entry.isFlipped("today") {
+                    if let weather = entry.info.weather {
+                        Divider().padding(.vertical, 1)
+                        HStack(spacing: 5) {
+                            // 天氣行都可以撳嚟反轉（同更份主體同一個 FlipIntent）；兩個掣唔可以嵌入 Button label，所以並排
+                            Button(intent: FlipIntent(tile: "today")) {
+                                TodayWeatherRow(
+                                    weather: weather, day: day?.hasTimes == true ? day : nil,
+                                    now: entry.date, compact: compact
+                                )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            ThemeButton()
+                            RefreshButton(updatedAt: entry.updatedAt)
                         }
-                        .buttonStyle(.plain)
-                        ThemeButton()
-                        RefreshButton(updatedAt: entry.updatedAt)
+                    } else {
+                        // 天氣讀唔到（nil）：講明「未有資料」，唔好淨係剩兩個掣，睇落似冇天氣呢回事
+                        HStack(spacing: 5) {
+                            Text("天氣：未有資料")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
+                            ThemeButton()
+                            RefreshButton(updatedAt: entry.updatedAt)
+                        }
                     }
                 } else {
                     HStack(spacing: 5) {
@@ -277,10 +288,16 @@ struct TodayCard: View {
         if let times = day.times { parts.append(times) }
         if let route = day.route { parts.append("喺 \(route)") }
         if let hours = day.hoursText { parts.append(hours) }
-        if let next = upcoming(day) {
-            parts.append("距\(next.label)仲有 \(Formatting.shortDuration(next.at.timeIntervalSince(entry.date)))")
-        } else if day.hasTimes {
-            parts.append("已放工")
+        // 休息日／假日本身就冇上落班時間，唔好當「資料缺失」讀出嚟；有時間先講倒數或者已放工
+        if day.hasTimes {
+            switch countdownState(day) {
+            case .at(let label, let date):
+                parts.append("距\(label)仲有 \(Formatting.shortDuration(date.timeIntervalSince(entry.date)))")
+            case .done:
+                parts.append("已放工")
+            case .unknown:
+                parts.append("上落班時間未有資料")
+            }
         }
         return parts.joined(separator: "，")
     }
@@ -317,24 +334,43 @@ struct TodayCard: View {
         }
     }
 
-    /// 下一個要倒數嘅時刻：未返工就返工，返緊工就放工，放咗工就下一更。
-    private func upcoming(_ day: DutyDay) -> (label: String, at: Date)? {
-        guard let on = day.on.flatMap(day.moment(atServiceSecond:)),
-              let off = day.off.flatMap(day.moment(atServiceSecond:)) else { return nil }
-        if entry.date < on { return ("返工", on) }
-        if entry.date < off { return ("放工", off) }
-        if let next = entry.schedule.nextDuty(after: day.date), let at = next.on.flatMap(next.moment(atServiceSecond:)) {
-            return ("下一更", at)
+    /// 上落班時間嘅倒數結論。分三種：要倒數（邊個時刻）、真係放咗工、資料唔夠（唔好亂講已放工）。
+    private enum CountdownState {
+        case at(label: String, date: Date)
+        case done
+        case unknown
+    }
+
+    /// 有 on 而未到就先倒數返工；有 off 而未到就倒數放工；
+    /// 只有 off 有效而已經過咗，先講「已放工」（有下一更就倒數下一更）；
+    /// 冇 off（或者時間讀唔出）就當未知，唔好斷言放咗工。
+    private func countdownState(_ day: DutyDay) -> CountdownState {
+        let onTime = day.on.flatMap(day.moment(atServiceSecond:))
+        let offTime = day.off.flatMap(day.moment(atServiceSecond:))
+        if let onTime, entry.date < onTime { return .at(label: "返工", date: onTime) }
+        if let offTime {
+            if entry.date < offTime { return .at(label: "放工", date: offTime) }
+            if let next = entry.schedule.nextDuty(after: day.date), let at = next.on.flatMap(next.moment(atServiceSecond:)) {
+                return .at(label: "下一更", date: at)
+            }
+            return .done
         }
-        return nil
+        return .unknown
     }
 
     /// 返工前倒數返工；返緊工倒數放工；放咗工就顯示下一更。系統計時字，自己會更新。
+    /// 上落班時間讀唔到（nil／無效）就顯示「—」，唔好假裝已經放工。
     @ViewBuilder private func countdown(_ day: DutyDay) -> some View {
-        if let next = upcoming(day) {
-            timer(next.label, next.at)
-        } else if day.hasTimes {
+        switch countdownState(day) {
+        case .at(let label, let date):
+            timer(label, date)
+        case .done:
             Text("已放工").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+        case .unknown:
+            Text(Formatting.missing)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("上落班時間未有資料")
         }
     }
 
@@ -370,6 +406,9 @@ struct TodayWeatherRow: View {
     let weather: WeatherSnapshot
     let day: DutyDay?
     let now: Date
+    /// systemMedium 嗰行仲要跟調色掣、「即時更新」掣爭寬度：收起天氣描述、今日高低溫、降雨同逐時呢啲次要字，
+    /// 只保留而家溫度（讀唔到照樣顯示「—」）。
+    var compact = false
 
     /// 而家溫度：讀唔到就顯示「—」，唔好攞最高溫冒充。
     private var tempText: String { Formatting.degrees(weather.currentTemp) }
@@ -387,17 +426,21 @@ struct TodayWeatherRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
                     .accessibilityLabel(tempSpoken)
-                Text(WeatherCode.text(weather.today.code))
-                Text("今日 \(Formatting.tempRange(weather.today))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                    // 擁擠時先保住而家溫度（同「—」），次要字讓位
+                    .layoutPriority(1)
+                if !compact {
+                    Text(WeatherCode.text(weather.today.code))
+                    Text("今日 \(Formatting.tempRange(weather.today))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer(minLength: 0)
-                if let rain = weather.today.rainChance {
+                if !compact, let rain = weather.today.rainChance {
                     rainLabel(rain)
                 }
             }
-            if let day, !shifts(day).isEmpty {
+            if !compact, let day, !shifts(day).isEmpty {
                 HStack(spacing: 10) {
                     ForEach(Array(shifts(day).enumerated()), id: \.offset) { _, item in
                         shiftForecast(item.label, item.hour)
@@ -451,38 +494,112 @@ struct TodayWeatherRow: View {
     }
 }
 
+/// 呢度唔可以用 GeometryReader：佢會食晒父層畀嘅 proposal，塞入 `ViewThatFits` 嘅候選就永遠「裝得落」，
+/// 逐級收起唔會發生。所以按 widget 家族粗估可用闊，再估文字寬度嚟決定警告 badge 擺幾個。
+/// 以下數值全部係估算（冇 Swift 工具鏈，未實測），淨係用嚟決定收幾個 badge，唔影響內容對唔對。
+private enum WidgetWidth {
+    /// 嗰行嘅內容可用闊（約數，已扣容器 padding）。
+    static func estimate(_ family: WidgetFamily) -> CGFloat {
+        switch family {
+        case .systemSmall: return 130
+        case .systemMedium: return 300
+        case .systemLarge: return 300
+        case .systemExtraLarge: return 330       // iPhone 4×6：闊好有限，高先係分別
+        case .accessoryRectangular: return 150
+        case .accessoryInline: return 200
+        default: return 620                      // iPad／Mac 大格
+        }
+    }
+
+    /// 粗估一段字嘅闊：中文（CJK）一個字級，ASCII／數字約 0.55 個字級。
+    static func text(_ string: String, size: CGFloat) -> CGFloat {
+        var width: CGFloat = 0
+        for scalar in string.unicodeScalars {
+            width += scalar.value >= 0x2E80 ? size : size * 0.55
+        }
+        return width
+    }
+
+    /// Badge 嘅估計闊：文字（10pt）＋左右 padding 5+5＋同前面元素嘅 spacing 5。
+    static func badge(_ string: String) -> CGFloat { text(string, size: 10) + 15 }
+}
+
+/// 細格 caption 嘅總容量：大格一格嘅 caption 得返約 91pt，「可用 / 255.4 GB」已經貼邊，
+/// 所以 100～999 嘅 GB 數抹走小數（255.4 GB → 255 GB），唔使靠縮字級。其他情況照用 `Formatting.bytes`。
+private func compactTotalBytes(_ value: Int64?) -> String {
+    let text = Formatting.bytes(value)
+    guard let space = text.firstIndex(of: " "),
+          let number = Double(String(text[..<space])),
+          text[text.index(after: space)...].hasPrefix("G"),
+          number >= 100, number < 999.5 else { return text }
+    return "\(Int(number.rounded())) GB"
+}
+
+/// 由嚴重嘅排起（重要警告唔可以比後面嘅擠走），再按估算寬度逐個收；
+/// 至少留一個，放唔落嘅用「+N 項」講明。
+private func pickedWarnings(_ warnings: [WeatherWarning], limit: Int, width: CGFloat) -> [WeatherWarning] {
+    guard limit > 0, !warnings.isEmpty else { return [] }
+    let ordered = warnings.filter { $0.severe } + warnings.filter { !$0.severe }
+    var picked: [WeatherWarning] = []
+    var used: CGFloat = 0
+    for warning in ordered {
+        if picked.count >= limit { break }
+        let item = WidgetWidth.badge(warning.text)
+        if !picked.isEmpty, used + item > width { break }
+        used += item
+        picked.append(warning)
+    }
+    return picked
+}
+
 /// 今日咭下面：有天氣警告、或者屯馬綫唔正常先出現；平時唔佔位。
-/// 一次過列晒好擠：最多兩條，其餘寫成「+N 項」；讀唔到（nil）同真係冇警告（空）要分開講。
+/// 一次過列晒好擠：視寬度最多一或兩條，其餘寫成「+N 項」；讀唔到（nil）同真係冇警告（空）要分開講，
+/// 而屯馬綫延誤係獨立資料，警告讀唔到都唔可以一齊吞咗。
 struct TodayAlerts: View {
+    @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
 
-    private static let maxVisible = 2
+    /// medium 嗰行最細，一條都嫌多；large／extraLarge／iPad 先容許兩條。
+    private var limit: Int {
+        switch family {
+        case .systemSmall, .systemMedium: return 1
+        default: return 2
+        }
+    }
 
     var body: some View {
         let known = entry.info.warnings != nil
         let warnings = entry.info.warnings ?? []
         let train = entry.info.train
         let trainIssue = train.map { $0.state != .normal } ?? false
-        if !known {
-            Text("天氣警告：未有資料")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.horizontal, 4)
-        } else if !warnings.isEmpty || trainIssue {
+        let trainText = train.map { "屯馬綫 \($0.state.text)" } ?? ""
+        // 圖標（連 spacing）、屯馬綫 badge 同可能嘅「+N 項」都要位，先扣咗先計警告放得幾個
+        let budget = WidgetWidth.estimate(family) - 8 - 22
+            - (trainIssue ? WidgetWidth.badge(trainText) : 0)
+            - (warnings.count > 1 ? 36 : 0)
+        let picked = known ? pickedWarnings(warnings, limit: limit, width: budget) : []
+        if !known || !warnings.isEmpty || trainIssue {
             HStack(spacing: 5) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
-                    .widgetAccentable()
-                ForEach(Array(warnings.prefix(Self.maxVisible).enumerated()), id: \.offset) { _, warning in
-                    Badge(text: warning.text, color: warning.severe ? .red : .orange)
+                if !known {
+                    Text("天氣警告：未有資料")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                } else if !warnings.isEmpty {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
+                        .widgetAccentable()
+                    ForEach(Array(picked.enumerated()), id: \.offset) { _, warning in
+                        Badge(text: warning.text, color: warning.severe ? .red : .orange)
+                    }
+                    if warnings.count > picked.count {
+                        Text("+\(warnings.count - picked.count) 項").foregroundStyle(.orange)
+                    }
                 }
-                if warnings.count > Self.maxVisible {
-                    Text("+\(warnings.count - Self.maxVisible) 項").foregroundStyle(.orange)
-                }
-                if let train, trainIssue {
-                    Badge(text: "屯馬綫 \(train.state.text)", color: .orange)
+                if trainIssue {
+                    // 獨立於警告之外嘅資料：就算警告讀唔到（上面走「未有資料」嗰條路）都要照顯示
+                    Badge(text: trainText, color: .orange)
                 }
                 Spacer(minLength: 0)
             }
@@ -611,9 +728,10 @@ struct SchoolSection: View {
     }
 }
 
-/// 警告、屯馬綫狀況：有事先顯眼；一次過列晒會太擠，所以最多三條，其餘寫成「+N 項」。
-/// nil（讀唔到）同空陣列（真係冇警告）要分開講，唔好令人誤會。
+/// 警告、屯馬綫狀況：有事先顯眼；一次過列晒會太擠，所以最多三條（再按估算寬度收），其餘寫成「+N 項」。
+/// nil（讀唔到）同空陣列（真係冇警告）要分開講，唔好令人誤會；屯馬綫讀唔到都要講，唔好留行空白。
 struct InfoSection: View {
+    @Environment(\.widgetFamily) private var family
     let entry: OverviewEntry
 
     private static let maxVisible = 3
@@ -622,6 +740,9 @@ struct InfoSection: View {
         let known = entry.info.warnings != nil
         let warnings = entry.info.warnings ?? []
         let train = entry.info.train
+        // 圖標連 spacing、可能有嘅「+N 項」都要位；行內仲有 `padding(.horizontal, 4)`
+        let budget = WidgetWidth.estimate(family) - 8 - 22 - (warnings.count > Self.maxVisible ? 36 : 0)
+        let picked = known ? pickedWarnings(warnings, limit: Self.maxVisible, width: budget) : []
         VStack(alignment: .leading, spacing: 4) {
             if !known {
                 Text("天氣警告：未有資料")
@@ -636,11 +757,11 @@ struct InfoSection: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(warnings.contains { $0.severe } ? Color.red : .orange)
                         .widgetAccentable()
-                    ForEach(Array(warnings.prefix(Self.maxVisible).enumerated()), id: \.offset) { _, warning in
+                    ForEach(Array(picked.enumerated()), id: \.offset) { _, warning in
                         Badge(text: warning.text, color: warning.severe ? .red : .orange)
                     }
-                    if warnings.count > Self.maxVisible {
-                        Text("+\(warnings.count - Self.maxVisible) 項").foregroundStyle(.orange)
+                    if warnings.count > picked.count {
+                        Text("+\(warnings.count - picked.count) 項").foregroundStyle(.orange)
                     }
                     Spacer(minLength: 0)
                 }
@@ -656,6 +777,10 @@ struct InfoSection: View {
                     Text("屯馬綫 \(train.state.text)")
                         .fontWeight(.semibold)
                         .foregroundStyle(train.state == .normal ? Color.primary : .orange)
+                } else {
+                    // 讀唔到（nil）唔好留行空白俾人以為冇事
+                    Text("屯馬綫：未有資料")
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -667,11 +792,11 @@ struct InfoSection: View {
     }
 }
 
-/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、iOS；有位再加紫外線、空氣、匯率，同記憶體、降雨、低耗電。
-/// 預設只多加一行（9 格），多過咁就要呼叫端按 widget 尺寸決定。
+/// 3 × 2 細格：電量、儲存、開機／天氣、黃金、系統；有位再加紫外線、空氣、匯率，同記憶體、降雨、低耗電。
+/// 上限 12 格（`extraRows = 2`）；呼叫端（`InfoLayout`）用 `ViewThatFits` 由 12 → 9 → 6 逐級收。
 struct TileGrid: View {
     let entry: OverviewEntry
-    var extraRows = 1
+    var extraRows = 2
 
     var body: some View {
         let stats = entry.stats
@@ -682,14 +807,15 @@ struct TileGrid: View {
                 Tile(
                     id: "battery", symbol: entry.batterySymbol, tint: entry.batteryTone.color,
                     value: Formatting.percent(stats.batteryLevel),
-                    caption: BatteryHistory.text(entry.battery) ?? "電量",
+                    caption: BatteryHistory.shortText(entry.battery) ?? "電量",
                     fraction: stats.batteryLevel,
                     flipped: entry.isFlipped("battery"), back: entry.batteryBack
                 )
                 Tile(
                     id: "storage", symbol: "internaldrive.fill", tint: lowStorage ? .red : .blue,
+                    // 大字係「可用」空間；淨寫「共 X」會令人估唔到大字邊個數，所以要寫明「可用 / 總容量」
                     value: Formatting.bytes(stats.freeBytes),
-                    caption: "共 \(Formatting.bytes(stats.totalBytes))",
+                    caption: "可用 / \(compactTotalBytes(stats.totalBytes))",
                     fraction: Formatting.usedFraction(free: stats.freeBytes, total: stats.totalBytes),
                     flipped: entry.isFlipped("storage"), back: entry.storageBack
                 )
@@ -748,7 +874,8 @@ struct TileGrid: View {
         return Tile(
             id: "ram", symbol: "memorychip.fill", tint: (used ?? 0) > 0.9 ? .orange : .teal,
             value: Formatting.bytes(stats.memoryAvailable),
-            caption: "共 \(Formatting.bytes(stats.memoryTotal))",
+            // 同儲存格一樣：大字係「可用」，caption 寫明「可用 / 總量」，唔好淨寫「共 X」
+            caption: "可用 / \(compactTotalBytes(stats.memoryTotal))",
             fraction: used,
             flipped: entry.isFlipped("ram"), back: entry.memoryBack
         )
@@ -997,7 +1124,8 @@ struct RectangularView: View {
             HStack(spacing: 4) {
                 Image(systemName: entry.batterySymbol)
                 Text(Formatting.percent(entry.stats.batteryLevel))
-                if let text = BatteryHistory.text(entry.battery) { Text(text) }
+                // 鎖定畫面嗰行好窄：用短版「剩 5時20分」，唔係「約剩 5 小時 20 分」
+                if let text = BatteryHistory.shortText(entry.battery) { Text(text) }
             }
             .font(.system(size: 11))
         }

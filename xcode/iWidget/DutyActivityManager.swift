@@ -9,6 +9,10 @@ enum DutyActivityManager {
     static let enabledKey = "settings.dutyActivity"
     /// 下一件事前幾多分鐘先開始顯示
     static let leadKey = "settings.dutyActivityLead"
+    /// 本 app 啟動倒數嗰一刻寫低嘅時間，用嚟計 6 小時輪替。
+    /// **唔可以只靠佢**：`UserDefaults` 會因重裝／清資料而冇咗，到時舊活動會被當做啱啱先開始、一直更新落去。
+    /// 所以 `sync` 另外用活動自己帶住嘅內容時間（`content.state.syncedAt`）做第二手基準，
+    /// 見 `DutyActivityPlan.rotationBaseline`。ActivityKit 現行文件冇公開可靠嘅「活動開始時間」可用。
     private static let startedKey = "dutyActivity.startedAt"
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
@@ -42,9 +46,16 @@ enum DutyActivityManager {
             return "Live Activity 未開：iPhone 設定 → i-widget →「即時動態」開啟。"
         }
         let running = Activity<DutyActivityAttributes>.activities
-        let started = UserDefaults.standard.object(forKey: startedKey) as? Date
+        let stored = UserDefaults.standard.object(forKey: startedKey) as? Date
+        // 活動隨身帶住嘅內容生成時間：唔靠 UserDefaults 都計得到個活動幾舊（冇行緊就冇得計）。
+        let contentAt = running.first?.content.state.syncedAt
+        // 基準唔係純粹讀返嘅 `stored`：如果佢消失咗（或者內容比佢更舊），要把計低嘅時間補寫／修正返，
+        // 下次先至有同一個基準可以用。呢步就係「running 但 startedAt 冇咗」嘅保守處理。
+        let baseline = DutyActivityPlan.rotationBaseline(startedAt: stored, contentAt: contentAt, now: now)
+        if !running.isEmpty, stored != baseline { UserDefaults.standard.set(baseline, forKey: startedKey) }
         let action = DutyActivityPlan.decide(
-            events: events, now: now, running: !running.isEmpty, startedAt: started, leadMinutes: leadMinutes
+            events: events, now: now, running: !running.isEmpty,
+            startedAt: stored, contentAt: contentAt, leadMinutes: leadMinutes
         )
         switch action {
         case .wait:

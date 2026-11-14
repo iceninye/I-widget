@@ -3,9 +3,11 @@ import SwiftUI
 import WidgetKit
 
 /// 更份倒數：鎖定畫面同動態島顯示「下一件事」——主行只係動作、右側只係倒數、
-/// 次行「時間 · 地點」、再一行補充資料，之後嘅事另外列（最多兩個，過期嘅唔列）。
-/// 倒數數字由系統自己跳；`staleDate` = 事件時間，過咗之後 `isStale` 變 true：
-/// 改講「待更新」+「上次事件：HH:mm 動作」，唔好再當件事已完成、亦唔好當過期事件即將發生。
+/// 次行「時間 · 地點」、再一行補充資料，之後嘅事另外列（最多兩個）。
+/// 倒數數字由系統自己跳；主事件過咗時間就靠 `ActivityContent.staleDate`（= `state.at`）兜底：
+/// `isStale` 變 true → 改講「待更新」+「上次事件：HH:mm 動作」，唔好當件事已完成、亦唔好當過期事件即將發生。
+/// 「之後」兩行只係喺**渲染嗰一刻**用 `Date.now` 過濾，Live Activity 唔會自己重畫，
+/// 所以唔好當佢哋會自動收起／自動過期——真過咗頭就靠上面個 `staleDate` 轉「待更新」。
 struct DutyLiveActivity: Widget {
     /// 撳入 Live Activity 就返去 app 嘅更份頁（app 側由 `iwidget://` handler 處理）。
     /// 用 `widgetURL` 唔用 Button：extension 讀唔到 app 嘅 token，相關 AppIntent 亦只喺 app target。
@@ -90,21 +92,26 @@ struct DutyLiveActivity: Widget {
 }
 
 enum DutyActivityStyle {
-    static func symbol(_ kind: String) -> String {
-        switch kind {
-        case "on": return "sunrise.fill"
-        case "pick": return "tram.fill"
-        case "drop": return "arrow.down.circle.fill"
-        default: return "house.fill"
+    /// 動作 → 圖標／顏色：一律經 `HandoverAlert.Kind(rawValue:)` 映射，唔喺呢度重複寫 raw string。
+    /// 認唔到（舊內容缺 `kind`、空字串）用中性圖標＋灰色，唔會冒充某個動作；
+    /// 兩邊都唔寫 `default`：`Kind` 將來加 case 時編譯器會話你知要補。
+    static func symbol(_ raw: String) -> String {
+        switch HandoverAlert.Kind(rawValue: raw) {
+        case .on: return "sunrise.fill"
+        case .pickUp: return "tram.fill"
+        case .dropOff: return "arrow.down.circle.fill"
+        case .off: return "house.fill"
+        case nil: return "clock.fill"
         }
     }
 
-    static func tint(_ kind: String) -> Color {
-        switch kind {
-        case "on": return .orange
-        case "pick": return .green
-        case "drop": return .blue
-        default: return .purple
+    static func tint(_ raw: String) -> Color {
+        switch HandoverAlert.Kind(rawValue: raw) {
+        case .on: return .orange
+        case .pickUp: return .green
+        case .dropOff: return .blue
+        case .off: return .purple
+        case nil: return .gray
         }
     }
 }
@@ -160,7 +167,9 @@ struct DutyPlaceLine: View {
     }
 }
 
-/// stale：只講「上次事件」；未 stale：列仲未過期嘅之後事項（過期項目唔顯示）。
+/// stale：只講「上次事件」；未 stale：列渲染嗰一刻仲未過期嘅之後事項。
+/// 呢個過濾只係展示層（`upcoming` 每次重畫先計一次），唔係逐行自動收起；
+/// 主事件真係過咗頭，系統會因 `staleDate` 將成個活動變 `isStale`，轉做「待更新」。
 struct DutyFollowUpLines: View {
     let state: DutyActivityState
     let stale: Bool
