@@ -35,7 +35,8 @@ struct CourtEntry: TimelineEntry {
     let date: Date
     let days: [CourtDay]
     let listDate: Date
-    let updatedAt: Date
+    /// 最後**任一**法院成功取得案件表嘅時間（唔係「全部法院都成功」）；一個都冇成功記錄就 nil，標題顯示「未有資料」。
+    let updatedAt: Date?
     let theme: WidgetTheme
 
     static let sample = CourtEntry(
@@ -67,9 +68,11 @@ struct CourtProvider: AppIntentTimelineProvider {
         if context.isPreview { return .sample }
         let now = Date()
         let day = CourtList.listDate(now: now, holidays: PublicHolidays.cached())
+        // snapshot 唔上網，用快取：更新時間都要用快取入面嘅真實成功時間，唔可以話係「而家」
+        let days = codes(configuration).map { CourtList.cached(code: $0, day: day) }
         return CourtEntry(
-            date: now, days: codes(configuration).map { CourtList.cached(code: $0, day: day) },
-            listDate: day, updatedAt: now, theme: WidgetTheme.load()
+            date: now, days: days,
+            listDate: day, updatedAt: CourtList.lastSuccess(days: days), theme: WidgetTheme.load()
         )
     }
 
@@ -81,6 +84,8 @@ struct CourtProvider: AppIntentTimelineProvider {
         let cached = codes.map { CourtList.cached(code: $0, day: day) }
         let days = await withDeadline(20, fallback: cached) { await CourtList.loadAll(codes: codes, day: day, now: now) }
         let theme = WidgetTheme.load()
+        // 只有真係成功取得案件表嘅法院先計；全部失敗／冇快取就 nil（標題顯示「未有資料」），唔使 now 灌水
+        let success = CourtList.lastSuccess(days: days)
 
         var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
         // 18:30 轉去下一個工作天嘅案件表
@@ -90,7 +95,7 @@ struct CourtProvider: AppIntentTimelineProvider {
             dates.append(next)
         }
         let entries = dates.sorted().map {
-            CourtEntry(date: $0, days: days, listDate: day, updatedAt: now, theme: theme)
+            CourtEntry(date: $0, days: days, listDate: day, updatedAt: success, theme: theme)
         }
         return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
     }

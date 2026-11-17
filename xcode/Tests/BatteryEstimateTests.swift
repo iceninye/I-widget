@@ -57,4 +57,32 @@ final class BatteryEstimateTests: XCTestCase {
         XCTAssertEqual(BatteryHistory.duration(12 * 3_600 + 20 * 60), "12 小時")
         XCTAssertEqual(BatteryHistory.duration(50 * 3_600), "2 日 2 小時")
     }
+
+    // MARK: - shortText（widget 細格 caption 用，比 text 短）
+
+    func testShortTextRemaining() {
+        XCTAssertEqual(BatteryHistory.shortText(.remaining(5 * 3_600 + 20 * 60)), "剩 5時20分")
+        XCTAssertEqual(BatteryHistory.shortText(.remaining(45 * 60)), "剩 45分")
+        XCTAssertEqual(BatteryHistory.shortText(.remaining(26 * 3_600)), "剩 1天2時")
+        // 唔好出現「剩 0分」
+        XCTAssertEqual(BatteryHistory.shortText(.remaining(0)), "剩 1分")
+    }
+
+    func testShortTextCharging() {
+        XCTAssertEqual(BatteryHistory.shortText(.untilFull(3_600)), "1時0分 充滿")
+        XCTAssertEqual(BatteryHistory.shortText(.untilFull(3 * 3_600 + 40 * 60)), "3時40分 充滿")
+    }
+
+    func testShortTextOtherStates() {
+        XCTAssertEqual(BatteryHistory.shortText(.full), "已充滿")
+        XCTAssertEqual(BatteryHistory.shortText(.learning), "估算中")
+        XCTAssertNil(BatteryHistory.shortText(.unknown))
+    }
+
+    func testShortTextShorterThanText() {
+        let estimate = BatteryEstimate.remaining(5 * 3_600 + 20 * 60)
+        let long = BatteryHistory.text(estimate) ?? ""
+        let short = BatteryHistory.shortText(estimate) ?? ""
+        XCTAssertLessThan(short.count, long.count)
+    }
 }
