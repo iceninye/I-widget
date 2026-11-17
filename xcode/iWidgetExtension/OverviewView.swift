@@ -33,36 +33,44 @@ struct InfoWidgetView: View {
 struct TodayLayout: View {
     let entry: OverviewEntry
 
-    /// 放得落就全部顯示；拉大 widget 嘅時候學校多幾行。裝唔晒就先收起學校，再收明日、本週概況、7 日色條；
-    /// 最後先收今日咭嘅次要行（提示、逐時預報）。警告列係重要資料，幾細都唔收。
+    /// 放得落就全部顯示；位唔夠就逐級讓位。讓位次序同學校留幾行都喺 `Shared/TodayPlan.swift`
+    /// （純邏輯、有單元測試）：**學校日程最尾先收**，收佢之前先收本週概況、今日咭嘅提示同逐時預報、
+    /// 假期行、7 日色條、明日；學校自己內部亦先減行，唔好一見位唔夠就成塊消失，
+    /// 底部剩低一大舊空白（之前正正係咁：大格 widget 都睇唔到學校，連「學校」標題都冇）。
+    /// 警告列係重要資料，幾細都唔收。
     /// 注意：`Spacer` 必須喺 ViewThatFits 嘅外面——放咗入每個候選，每個候選都會「裝得落」，逐級收起就永遠唔會觸發。
     var body: some View {
         GeometryReader { geometry in
-            let rows = geometry.size.height > 480 ? 10 : (geometry.size.height > 420 ? 6 : 3)
+            let rows = TodayPlan.schoolRowBudget(height: geometry.size.height)
             VStack(alignment: .leading, spacing: 7) {
                 ViewThatFits(in: .vertical) {
-                    stack(rows: rows, strip: true, week: true, tomorrow: true, school: true)
-                    stack(rows: rows, strip: true, week: true, tomorrow: true, school: false)
-                    stack(rows: rows, strip: true, week: true, tomorrow: false, school: false)
-                    stack(rows: rows, strip: true, week: false, tomorrow: false, school: false)
-                    stack(rows: rows, strip: false, week: false, tomorrow: false, school: false)
-                    stack(rows: rows, strip: false, week: false, tomorrow: false, school: false, compact: true)
+                    // 由最齊到最精簡。數量要同 `TodayPlan.levelCount` 一致，而且要逐格寫死：
+                    // ForEach 擺入 ViewThatFits 只會當一個子視圖，逐級收起唔會發生。
+                    stack(TodayPlan.level(0, maxSchoolRows: rows))
+                    stack(TodayPlan.level(1, maxSchoolRows: rows))
+                    stack(TodayPlan.level(2, maxSchoolRows: rows))
+                    stack(TodayPlan.level(3, maxSchoolRows: rows))
+                    stack(TodayPlan.level(4, maxSchoolRows: rows))
+                    stack(TodayPlan.level(5, maxSchoolRows: rows))
+                    stack(TodayPlan.level(6, maxSchoolRows: rows))
+                    stack(TodayPlan.level(7, maxSchoolRows: rows))
+                    stack(TodayPlan.level(8, maxSchoolRows: rows))
                 }
                 Spacer(minLength: 0)
             }
         }
     }
 
-    private func stack(
-        rows: Int, strip: Bool, week: Bool, tomorrow: Bool, school: Bool, compact: Bool = false
-    ) -> some View {
+    private func stack(_ level: TodayPlan.Level) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            TodayCard(entry: entry, compact: compact)
+            TodayCard(entry: entry, compact: level.compactCard)
             TodayAlerts(entry: entry)
-            if strip { WeekStrip(entry: entry) }
-            if week { WeekLine(entry: entry) }
-            if tomorrow { TomorrowLine(entry: entry) }
-            if school { SchoolSection(entry: entry, maxRows: rows) }
+            if level.strip { WeekStrip(entry: entry) }
+            if level.week { WeekLine(entry: entry) }
+            if level.tomorrow { TomorrowLine(entry: entry) }
+            if level.schoolRows > 0 {
+                SchoolSection(entry: entry, maxRows: level.schoolRows, showHoliday: level.holiday)
+            }
         }
     }
 }
@@ -690,10 +698,12 @@ struct TomorrowLine: View {
     }
 }
 
-/// 學校：循環周 + 今日、明日活動（最多 3 行）。
+/// 學校：循環周 + 今日、明日活動（行數由 `TodayPlan` 逐級減），下面可加一行假期。
 struct SchoolSection: View {
     let entry: OverviewEntry
     var maxRows = 3
+    /// 位唔夠時可以淨收起假期嗰行，學校活動本身照留。
+    var showHoliday = true
 
     private struct Row {
         var prefix: String
@@ -738,7 +748,7 @@ struct SchoolSection: View {
             if rows.count > maxRows {
                 Text("另有 \(rows.count - maxRows) 項").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            if let holiday = entry.nextHoliday {
+            if showHoliday, let holiday = entry.nextHoliday {
                 HStack(spacing: 5) {
                     Image(systemName: "sun.max.fill").foregroundStyle(.orange).widgetAccentable()
                     Text(holiday.rangeText).foregroundStyle(.secondary).monospacedDigit()
