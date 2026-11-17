@@ -36,6 +36,9 @@ targets:
         NSSupportsLiveActivities: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # 只支援豎屏嘅 universal app 必須聲明全屏，否則 Xcode 出
+        # "All interface orientations must be supported unless the app requires full screen"
+        UIRequiresFullScreen: true
         # widget 撳入去法院詳情：iwidget://court?code=DC&case=...
         CFBundleURLTypes:
           - CFBundleURLName: com.iceninye.i-widget
