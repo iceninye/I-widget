@@ -75,10 +75,11 @@ struct ContentView: View {
                 if wentToBackground {
                     wentToBackground = false
                     requestRefresh(mustRefresh: true)
-                } else {
-                    // 由通知遮罩／app switcher 返嚟：可能已經跨過事件，但唔使重新下載。
+                } else {                    // 由通知遮罩／app switcher 返嚟：可能已經跨過事件，但唔使重新下載。
                     tick(now: Date())
                 }
+            @unknown default:
+                break   // 未來新加嘅 phase：照 inactive 咁處理，唔好亂 refresh 或者誤判落過背景
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
