@@ -242,14 +242,16 @@ if (require.main === module) (async () => {
       });
     }
   }
-  await test("parameter view 分流；未知值安全 fallback clock", async () => {
+  await test("parameter view 分流；未知值安全 fallback today", async () => {
     equal(has((await run({ view: "today", parameterValues: { view: "court" }, iCloud: JSON.stringify(fixture()) })).widget, "法院案件"), true);
-    const fallback = await run({ parameterValues: { view: "unknown" } });
-    equal(all(fallback.widget, (e) => e.kind === "date").length, 1);
+    const fallback = await run({ parameterValues: { view: "unknown" }, iCloud: JSON.stringify(fixture()) });
+    equal(has(fallback.widget, "今日"), true);
+    equal(all(fallback.widget, (e) => e.kind === "date").length, 0);
   });
-  await test("舊 config 無 parameterValues 時保留 clock", async () => {
-    const state = await run({ parameterValues: null });
-    equal(all(state.widget, (e) => e.kind === "date").length, 1);
+  await test("舊 config 無 parameterValues 時預設 today", async () => {
+    const state = await run({ parameterValues: null, iCloud: JSON.stringify(fixture()) });
+    equal(has(state.widget, "今日"), true);
+    equal(all(state.widget, (e) => e.kind === "date").length, 0);
   });
 
   console.log("\n【F】iCloud、cache、schema 驗證");

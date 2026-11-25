@@ -77,7 +77,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 2. 用 Files 進入 **iCloud Drive／Scriptable**。喺 app「設定」→「Scriptable 同步」→「選擇 Scriptable 資料夾」，揀 **Scriptable 資料夾本身**，唔好揀入面子資料夾。
 3. 喺同一頁揀「Scriptable 主題」，再按「立即寫入 JSON」。主題只影響 Scriptable；原生 Widget 調色風格獨立。
 4. 喺 Scriptable 新增 `i-widget` script，貼入 [`scriptable/i-widget.js`](scriptable/i-widget.js) 全文。
-5. Home Screen 加入 Scriptable widget，`Script` 揀 `i-widget`；`view` 參數用 `today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時出廠預設 `clock`。
+5. Home Screen 加入 Scriptable widget，`Script` 揀 `i-widget`；`view` 參數用 `today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時出廠預設 `today`。
 
 正常路徑由 app 寫 JSON，唔使預先手放。手動 JSON 只可以作進階診斷，唔可以冒充 app bridge 驗收。Scriptable 讀唔到儲存空間、開機時間、低耗電模式；呢三項由 app 快照提供。授權、cache、20 分鐘法院視窗、重新整理語意同疑難排解見 [Scriptable 文件](scriptable/README.md)。
 

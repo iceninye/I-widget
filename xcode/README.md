@@ -82,7 +82,7 @@ Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」
 3. 開 iWidget「設定」→「Scriptable 同步」→「選擇 Scriptable 資料夾」，揀 **Scriptable 資料夾本身**，唔好揀入面子資料夾。狀態應由「未選擇」變成已授權；按「立即寫入 JSON」。
 4. 同頁揀「Scriptable 主題」：預設、海藍、日落、森林、紫羅蘭或單色。主題寫落 JSON，只影響 Scriptable；原生 Widget 調色掣獨立。
 5. 喺 Scriptable 新增 `i-widget` script，貼入 [`scriptable/i-widget.js`](../scriptable/i-widget.js) 全文；加入 Scriptable widget，`Script` 揀 `i-widget`。
-6. Widget 編輯頁嘅 `Parameter` 用 `view=today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時用 script 嘅 `previewView`（出廠 `clock`）。鎖屏可用 Scriptable 行內／圓形／長方形。
+6. Widget 編輯頁嘅 `Parameter` 用 `view=today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時用 script 嘅 `previewView`（出廠 `today`）。鎖屏可用 Scriptable 行內／圓形／長方形。
 
 正常資料路徑係 app 寫入，唔使先手放 JSON。手動 JSON 只適合進階診斷，唔可以當成 app bridge 驗收。詳細 view、schema、cache 同法院規則見 [`scriptable/README.md`](../scriptable/README.md)。
 

@@ -21,7 +21,7 @@
 
 Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩者要分開確認。iOS 首次要求存取 iCloud Drive 時請按允許。Folder 路徑以 `FileManager.iCloud().documentsDirectory()` 為準，唔寫死個人路徑。
 
-如果仍見到舊式時鐘，先確認 Scriptable widget 嘅 `Script` 指向更新後嘅 `i-widget`，並將 `view` parameter 設做 `today`、`info` 或 `court`。冇 parameter 時沿用 `clock`，而 `clock` 為保留兼容性會用回原本時鐘版面；另外，改動 repo 入面嘅 JS 唔會自動更新手機 Scriptable script，必須手動貼上全文。
+如果仍見到舊式時鐘，先確認 Scriptable widget 嘅 `Script` 指向更新後嘅 `i-widget`，以及 `view` parameter 冇明確設做 `clock`。出廠而家預設 `today`；如要時鐘，先明確設定 `view=clock`。另外，改動 repo 入面嘅 JS 唔會自動更新手機 Scriptable script，必須手動貼上全文。
 
 正常路徑唔使預先手放 JSON。手動放一份合法 JSON 可以作進階診斷，但**唔係正常 app bridge**，亦唔可以冒充 Swift 真機匯出驗收。
 
@@ -35,7 +35,7 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 | `clock` | 小／中／大時鐘、日期、電量；鎖屏 family 用日期／時間／電量 |
 | `accessory` | 電量為主的鎖屏式版面；普通 family 顯示電量卡 |
 
-五個 view 都支援 `small`、`medium`、`large`、`extraLarge` 同三個 accessory family；較小尺寸會減少內容。冇 parameter 時用 `CONFIG.previewView`（出廠 `clock`）；未知值亦 fallback 到同一個設定。
+五個 view 都支援 `small`、`medium`、`large`、`extraLarge` 同三個 accessory family；較小尺寸會減少內容。冇 parameter 時用 `CONFIG.previewView`（出廠 `today`）；未知值亦 fallback 到同一個設定。
 
 點選深度連結：`today` → `iwidget://duty`，`info` → `iwidget://info`，`court` → `iwidget://court?code=…`；個別案件帶 `case`／`t` query。`clock`／`accessory` 開啟 `iwidget://duty`。
 

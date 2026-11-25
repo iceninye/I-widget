@@ -8,7 +8,7 @@ const CONFIG = {
   showDayProgress: true,
   reloadMinutes: 30,
   previewFamily: "large",
-  previewView: "clock",
+  previewView: "today",
   maxPayloadBytes: 512 * 1024,
   cacheName: "i-widget-last-good.json",
 };
