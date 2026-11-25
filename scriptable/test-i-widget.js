@@ -181,7 +181,7 @@ function fixture(now = DEFAULT_NOW) {
 async function run({
   family = "large", view = "clock", now = DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
-  parameterValues = { view }, fileManager = true, args, alerts,
+  parameterValues = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
 } = {}) {
   const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
   const dev = {
@@ -189,8 +189,12 @@ async function run({
     systemName: () => "iOS", systemVersion: () => "27.0.1", screenBrightness: () => 0.4,
     ...device,
   };
+  const RuntimeColor = opaqueDynamicColors ? class {
+    constructor(hex, alpha = 1) { this.hex = hex; this.alpha = alpha; }
+    static dynamic() { return new RuntimeColor("#dynamic", 1); }
+  } : Color;
   const globals = {
-    Color, Font, Size, ListWidget,
+    Color: RuntimeColor, Font, Size, ListWidget,
     SFSymbol: { named: (name) => (noSymbols ? null : { image: { symbol: name } }) },
     Device: dev,
     config: { widgetFamily: family === "app" ? null : family, runsInWidget, parameterValues },
@@ -566,6 +570,12 @@ if (require.main === module) (async () => {
   });
 
   console.log("\n【M】app 主題與 deep links");
+  await test("真實 Scriptable 式不透明 Color.dynamic 回傳值唔會被讀取內部屬性", async () => {
+    const state = await run({ view: "today", iCloud: JSON.stringify(planningFixture()), opaqueDynamicColors: true });
+    ok(state.widget && state.completed);
+    ok(has(state.widget, "00157 錦上路"));
+    ok(has(state.widget, "KSR"));
+  });
   await test("六個主題實際改變畫面 accent／背景，mono 所有畫面色為灰階", async () => {
     const accents = new Set();
     const backgrounds = new Set();

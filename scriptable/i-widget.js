@@ -39,18 +39,18 @@ const BASE_COLORS = {
 const C = { ...BASE_COLORS };
 const themeState = { name: "classic" };
 const DUTY_TONES = {
-  dawn: dyn(rgba("#f06b59", 1), rgba("#f06b59", 1)),
-  early: dyn(rgba("#e6a83d", 1), rgba("#e6a83d", 1)),
-  mid: dyn(rgba("#4a9ee0", 1), rgba("#4a9ee0", 1)),
-  late: dyn(rgba("#9c7df0", 1), rgba("#9c7df0", 1)),
-  night: dyn(rgba("#6b5cd9", 1), rgba("#6b5cd9", 1)),
-  rest: dyn(rgba("#e6404d", 1), rgba("#e6404d", 1)),
-  leave: dyn(rgba("#4a9ee0", 1), rgba("#4a9ee0", 1)),
-  pending: dyn(rgba("#e3a83b", 1), rgba("#e3a83b", 1)),
-  spare: dyn(rgba("#8e8e93", 1), rgba("#a1a1a1", 1)),
-  other: dyn(rgba("#8e8e93", 1), rgba("#a1a1a1", 1)),
-  duty: dyn(rgba("#b5471f", 1), rgba("#d9683c", 1)),
-  unknown: dyn(rgba("#8e8e93", 1), rgba("#a1a1a1", 1)),
+  dawn: ["#f06b59", "#f06b59"],
+  early: ["#e6a83d", "#e6a83d"],
+  mid: ["#4a9ee0", "#4a9ee0"],
+  late: ["#9c7df0", "#9c7df0"],
+  night: ["#6b5cd9", "#6b5cd9"],
+  rest: ["#e6404d", "#e6404d"],
+  leave: ["#4a9ee0", "#4a9ee0"],
+  pending: ["#e3a83b", "#e3a83b"],
+  spare: ["#8e8e93", "#a1a1a1"],
+  other: ["#8e8e93", "#a1a1a1"],
+  duty: ["#b5471f", "#d9683c"],
+  unknown: ["#8e8e93", "#a1a1a1"],
 };
 const THEME_COLORS = {
   classic: {},
@@ -80,12 +80,15 @@ function applyTheme(theme) {
 }
 
 function dutyColor(tone) {
-  return themeState.name === "mono" ? C.gray : (DUTY_TONES[tone] || DUTY_TONES.unknown);
+  if (themeState.name === "mono") return C.gray;
+  const pair = DUTY_TONES[tone] || DUTY_TONES.unknown;
+  return dyn(rgba(pair[0], 1), rgba(pair[1], 1));
 }
 
 function dutyCardColor(tone) {
-  const color = dutyColor(tone);
-  return Color.dynamic(new Color(color.light.hex, 0.14), new Color(color.dark.hex, 0.24));
+  if (themeState.name === "mono") return C.card;
+  const pair = DUTY_TONES[tone] || DUTY_TONES.unknown;
+  return dyn(rgba(pair[0], 0.14), rgba(pair[1], 0.24));
 }
 
 const NOW = typeof IWIDGET_NOW !== "undefined" ? IWIDGET_NOW : new Date();
@@ -902,7 +905,7 @@ function badge(parent, label, color = C.accent, size = 9) {
   row.centerAlignContent();
   row.setPadding(2, 5, 2, 5);
   row.cornerRadius = 5;
-  row.backgroundColor = Color.dynamic(new Color(color.light.hex, 0.18), new Color(color.dark.hex, 0.30));
+  row.backgroundColor = C.card;
   const value = text(row, label, size, color, true);
   value.centerAlignText();
   return row;
