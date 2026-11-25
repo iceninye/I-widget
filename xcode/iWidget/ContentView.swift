@@ -35,21 +35,21 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { DataView(model: model) { await self.refreshAndWait() } }
+            NavigationStack { DataView(model: model, bridge: model.bridge) { await self.refreshAndWait() } }
                 .tabItem { Label("資料", systemImage: "rectangle.grid.2x2.fill") }
                 .tag(Tab.data)
-            NavigationStack { CourtView(model: court) }
+            NavigationStack { CourtView(model: court, bridge: model.bridge) }
                 .tabItem { Label("法院", systemImage: "building.columns.fill") }
                 .tag(Tab.court)
             // 設定頁嘅輸入框已經 debounce（見 `SettingsView`），所以呢度可以安全用 `mustRefresh: true`：
             // 一定要做到，唔可以俾跑緊嗰輪吞咗——否則用家最後嗰幾個字（即係成個 token）永遠輸唔入去。
-            NavigationStack { SettingsView(model: model) { requestRefresh(mustRefresh: true) } }
+            NavigationStack { SettingsView(model: model, bridge: model.bridge) { requestRefresh(mustRefresh: true) } }
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
         // widget 嘅連結：法院詳情 `iwidget://court?code=…`；更份倒數 `iwidget://duty`（Live Activity 撳入去）
         .onOpenURL { url in
-            if url.scheme == "iwidget", url.host == "duty" {
+            if url.scheme == "iwidget", (url.host == "duty" || url.host == "info") {
                 tab = .data
                 // 如果冷啟本身係由 deep link 開進 app，`.task` 嗰輪可能正喺度跑：排佢返隊，完咗補跑一次，
                 // 呢次更新一定做到；而 `AppModel.rescheduleHandover` 會順手更新 Live Activity 內容。
@@ -68,6 +68,7 @@ struct ContentView: View {
             switch phase {
             case .background:
                 wentToBackground = true
+                WidgetBackgroundRefresh.flush(model.bridge)
             case .inactive:
                 break   // 落通知遮罩、app switcher 唔算離開，唔使多打一次網
             case .active:

@@ -1,9 +1,26 @@
 # i-widget
 
-iPhone Home Screen 嘅 widget。
+iPhone Home Screen 嘅 widget。本 repo 保留三條並行路徑：
 
-**主線版本係 Xcode（原生 WidgetKit）版**，放喺 [`xcode/`](xcode/README.md)：更份、交接提示、法院、天氣、黃金同 VPS 狀態都係呢邊。
-下面講嘅 **Pyto 版**（Python，唔需要 Mac、唔需要 Xcode）同 [Scriptable 版](scriptable/README.md) 係早期版本，保留作備用，唔再加新功能。
+- **Swift app＋原生 WidgetKit**（[`xcode/README.md`](xcode/README.md)）：更份、交接通知、AppIntents、法院、天氣、黃金、VPS，同鎖屏／動態島 `DutyLiveActivity`。
+- **Swift app → Scriptable**（[`scriptable/README.md`](scriptable/README.md)）：app 透過 security-scoped iCloud folder 匯出 `i-widget.json`，Scriptable 顯示今日、資訊、法院、時鐘或鎖屏元件。呢條係正式並行路徑，唔係備份。
+- **Pyto**（Python）：獨立時鐘／系統資訊 widget，保留原有自動更新機制。
+
+## Swift app → Scriptable 架構
+
+```text
+Swift app（app 設定獨有 roster／VPS token 同私人 VPS URL）
+  → WidgetSnapshotService／WidgetSnapshotBuilder
+  → ScriptableBridgeController／ScriptableBridgeWriter
+  → iCloud Drive／Scriptable／i-widget.json
+  → scriptable/i-widget.js → Scriptable Widget
+```
+
+`iWidgetExtension` 同 `DutyLiveActivity` 必須保留；原生 Widget 同 Scriptable 唔取捨。橋樑失敗只會更新同步狀態，唔會阻止 app 刷新資料、排交接通知、執行 AppIntents 或更新 Live Activity。呢條橋接唔需要新增 App Group 或 push entitlement。
+
+Scriptable 路徑只使用 app 設定保存嘅認證；原生 Widget 仍沿用自己的 widget 設定 token，兩者唔經 JSON 共享。JSON **唔包含** roster／VPS token、`Authorization` header 或私人 VPS URL，只包含顯示用快照。
+
+「app 已寫入」、「iCloud 已同步」、「Scriptable Widget 已實際刷新」係三件獨立事。完整設定、schema、離線 last-good cache 同未完成嘅真機驗收清單見 [`scriptable/README.md`](scriptable/README.md) 同 [`xcode/README.md`](xcode/README.md)。
 
 ## 顯示內容
 
@@ -54,11 +71,15 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 2. 完整事故分析見 [docs/POSTMORTEM.md](docs/POSTMORTEM.md)（真因：`DynamicDate` 帶 `color` 參數喺 extension 入面令 process 被殺）。
 3. 當時用嘅診斷腳本（`i_widget_trace.py`、`i_widget_safe.py`、`i_widget_probe.py` 等）已經刪咗，需要可以喺 git 歷史搵返（commit `da34004` 或之前）。
 
-## 其他選擇：Scriptable 版
+## 設定 Scriptable 並行路徑
 
-Pyto 要喺 widget extension 入面行成個 CPython，記憶體緊、排版工具有限，所以另外寫咗
-[Scriptable 版](scriptable/README.md)（JavaScript）：真正嘅 stack 排版、真進度條、鎖屏 widget。
-取捨：Scriptable 讀唔到儲存空間、開機時間、低耗電模式。
+1. iPhone 裝好 **iWidget** app 同 **Scriptable**，兩者用同一個 iCloud 帳戶；開啟 iCloud Drive 同 Scriptable 開關。
+2. 用 Files 進入 **iCloud Drive／Scriptable**。喺 app「設定」→「Scriptable 同步」→「選擇 Scriptable 資料夾」，揀 **Scriptable 資料夾本身**，唔好揀入面子資料夾。
+3. 喺同一頁揀「Scriptable 主題」，再按「立即寫入 JSON」。主題只影響 Scriptable；原生 Widget 調色風格獨立。
+4. 喺 Scriptable 新增 `i-widget` script，貼入 [`scriptable/i-widget.js`](scriptable/i-widget.js) 全文。
+5. Home Screen 加入 Scriptable widget，`Script` 揀 `i-widget`；`view` 參數用 `today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時出廠預設 `clock`。
+
+正常路徑由 app 寫 JSON，唔使預先手放。手動 JSON 只可以作進階診斷，唔可以冒充 app bridge 驗收。Scriptable 讀唔到儲存空間、開機時間、低耗電模式；呢三項由 app 快照提供。授權、cache、20 分鐘法院視窗、重新整理語意同疑難排解見 [Scriptable 文件](scriptable/README.md)。
 
 ## 安裝
 
@@ -113,9 +134,16 @@ Pyto 要喺 widget extension 入面行成個 CPython，記憶體緊、排版工�
 | `test_launcher.py` | 更新邏輯測試（72 項斷言） | 改 launcher 時 |
 | `test_widget.py` | widget 本體 smoke test（用 mock Pyto 砌齊四個尺寸） | 改 `i_widget.py` 時 |
 | `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
-| `scriptable/i-widget.js` | **Scriptable 版**（JavaScript），見 [scriptable/README.md](scriptable/README.md) | 改版面時 |
-| `scriptable/test-i-widget.js` | Scriptable 版測試（`node scriptable/test-i-widget.js`） | 改 Scriptable 版時 |
-| `docs/AUTO-UPDATE.md` | 自更新設計文檔 | 唔使 |
+| `scriptable/i-widget.js` | Scriptable widget，讀 app 匯出嘅 iCloud JSON | 改 Scriptable 版面時 |
+| `scriptable/test-i-widget.js` | Scriptable fake environment 測試 | 改 Scriptable 版時 |
+| `xcode/` | Swift app、原生 Widget extension、Live Activity 同 Scriptable bridge | 改 app／原生功能時 |
+| `xcode/Shared/WidgetExport.swift` | schemaVersion 1 資料模型 | 改 JSON 契約時 |
+| `xcode/Shared/WidgetSnapshotBuilder.swift` | app 資料轉成 Scriptable 快照 | 改匯出內容時 |
+| `xcode/iWidget/WidgetSnapshotService.swift` | 並行載入更份／資訊／VPS／法院 | 改資料收集時 |
+| `xcode/iWidget/ScriptableBridgeController.swift` | 授權、快取最新 entry、排程寫入 | 改 app 橋接時 |
+| `xcode/iWidget/ScriptableFolderStore.swift` | Keychain 內本機 folder bookmark | 改授權儲存時 |
+| `xcode/iWidget/WidgetBackgroundRefresh.swift` | 前景 flush 同 BGTask 匯出 | 改背景匯出時 |
+| `docs/AUTO-UPDATE.md` | Pyto 自更新設計文檔 | 唔使 |
 | `docs/POSTMORTEM.md` | 綠色事故分析 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
 
@@ -125,11 +153,16 @@ Pyto 要喺 widget extension 入面行成個 CPython，記憶體緊、排版工�
 ## 改程式碼之後
 
 ```bash
-python3 make_fingerprint.py    # 重算指紋（正常唔使，Action 會自動做）
-python3 test_widget.py         # widget 本體喺 mock Pyto 行唔行到
-python3 test_launcher.py       # 72 項斷言，確認更新邏輯冇壞
-git commit -am "..." && git push
+# 喺 repo 根目錄
+node scriptable/test-i-widget.js   # Scriptable schema、cache、view 同版面
+python3 test_widget.py            # Pyto widget smoke test
+python3 test_launcher.py          # Pyto launcher 更新邏輯
+
+# 喺 xcode/ 產生專案；完整 xcodebuild test 指令見 xcode/README.md
+(cd xcode && xcodegen generate)
 ```
+
+自動測試唔等於真機驗收；iCloud bookmark、Scriptable extension 權限、離線 cache 同 Widget 實際 reload 要跟 [`xcode/README.md`](xcode/README.md) 嘅清單逐項試。
 
 Push 咗之後，GitHub Action 會自動更新 `i_widget.fingerprint`，
 手機下次 reload 就會自己攞新版。

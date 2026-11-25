@@ -2,6 +2,19 @@
 
 需要：Mac、Xcode 15 或以上、iPhone（iOS 17+）、USB 線、Apple ID（免費即可）。
 
+## 架構與並行策略
+
+Swift app 同時支援原生 WidgetKit 同 Scriptable，兩者並行：
+
+- **原生 Widget**：`iWidgetExtension` 提供今日咭、各項資訊、法院案件；同 extension 內嘅 `DutyLiveActivity` 必須保留。通知、AppIntents、更份倒數唔依賴 Scriptable。
+- **Scriptable**：`WidgetSnapshotService` 收集更份／資訊／VPS／法院 → `WidgetSnapshotBuilder` 正規化 → `ScriptableBridgeController` 排程 → `ScriptableBridgeWriter` 對授權 folder 做 coordinated atomic write，寫入 `i-widget.json`。`scriptable/i-widget.js` 只讀 JSON，唔連線。
+- **授權**：`ScriptableFolderStore` 用 Keychain 保存 device-only folder bookmark；每次寫入先 resolve bookmark，再 `startAccessingSecurityScopedResource()`。搬走／取代 folder 或 bookmark 失效要重新授權。
+- **背景**：`WidgetBackgroundRefresh` 喺有授權時排 `BGAppRefreshTask`，到期獨立匯出；前景落背景亦會嘗試 flush。
+
+app 設定獨有 roster／VPS token 同私人 VPS URL；JSON 唔包含 token、`Authorization` header 或私人 VPS URL。原生 Widget 仍沿用自己「編輯小工具」入面嘅 token，唔係由 Scriptable JSON 共享。橋樑未授權、斷線或寫入失敗只影響同步狀態，`AppModel.refresh()` 仍會排通知／同步 Live Activity；唔可以為咗 Scriptable 刪 extension 或改壞原生功能。
+
+`project.yml` 沿用本機 Live Activity、`fetch` background mode 同 Scriptable refresh BGTask identifier；**毋須新增 App Group 或 push entitlement**，`pushType` 維持 `nil`。
+
 ## 1. 產生專案
 ```sh
 brew install xcodegen
@@ -18,6 +31,7 @@ open iWidget.xcodeproj
 3. Bundle id 係 `com.iceninye.i-widget`（Extension：`com.iceninye.i-widget.widget`）。如果再被佔用，就改做自己獨有嘅（例如加你個名），
    Extension 要保持以 app id 開頭（`.widget` 結尾）。改喺 `project.yml` 再 `xcodegen generate` 最穩陣。
    亦可以喺 `project.yml` 填 `DEVELOPMENT_TEAM` 嘅 Team ID，重新產生專案後就唔使逐個揀。
+   保留 `iWidgetExtension`；Scriptable bridge 唔使 App Group、push 或其他新 entitlement。
 
 ## 3. 安裝
 1. iPhone 用線接 Mac，解鎖並㩒「信任此電腦」。
@@ -61,6 +75,25 @@ open iWidget.xcodeproj
 
 Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」要重新填一次 VPS token。
 
+## 4b. Swift app → Scriptable（同原生 Widget 並行）
+
+1. iPhone 設定 → Apple Account → iCloud 打開 **Drive**，亦要開啟 **Scriptable**。app 同 Scriptable 用同一個 iCloud 帳戶。
+2. 用 Files 進入 **iCloud Drive／Scriptable**。未有 folder 時，可以先喺 Scriptable 跑一次 script 或喺 Files 新增同名 folder。
+3. 開 iWidget「設定」→「Scriptable 同步」→「選擇 Scriptable 資料夾」，揀 **Scriptable 資料夾本身**，唔好揀入面子資料夾。狀態應由「未選擇」變成已授權；按「立即寫入 JSON」。
+4. 同頁揀「Scriptable 主題」：預設、海藍、日落、森林、紫羅蘭或單色。主題寫落 JSON，只影響 Scriptable；原生 Widget 調色掣獨立。
+5. 喺 Scriptable 新增 `i-widget` script，貼入 [`scriptable/i-widget.js`](../scriptable/i-widget.js) 全文；加入 Scriptable widget，`Script` 揀 `i-widget`。
+6. Widget 編輯頁嘅 `Parameter` 用 `view=today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時用 script 嘅 `previewView`（出廠 `clock`）。鎖屏可用 Scriptable 行內／圓形／長方形。
+
+正常資料路徑係 app 寫入，唔使先手放 JSON。手動 JSON 只適合進階診斷，唔可以當成 app bridge 驗收。詳細 view、schema、cache 同法院規則見 [`scriptable/README.md`](../scriptable/README.md)。
+
+### 三件獨立事
+
+- **app 寫入成功**：畫面顯示「已寫入，等待 iCloud 同步」，只證明 JSON 已 atomically 落入授權 folder。
+- **iCloud 同步**：由 iCloud／File Provider 決定，app 冇提供同步完成通知。
+- **Scriptable Widget 實際刷新**：要 Scriptable extension 真係執行並重新渲染；app 只直接 reload 原生 Overview／Info timeline，唔保證 Scriptable 何時更新。
+
+`WidgetBackgroundRefresh.scheduleNext()` 請求 30 分鐘後嘅 `earliestBeginDate`；Scriptable `refreshAfterDate` 亦以 30 分鐘為一般最早間隔，午夜／01:00 會提前。兩者都**唔保證固定間隔**：iOS reload 預算、低耗電、背景限制、iCloud 下載同 extension 啟動時間都會影響實際結果。
+
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
 鎖屏：長按鎖屏 → 自訂 → 加入元件 → 今日咭有行內／長方形，各項資訊有圓形（電量）。
 
@@ -99,8 +132,76 @@ App「設定」填 tml-roster token，再開「交接提示」，允許通知。
 - **要開權限**：iPhone 設定 → i-widget →「即時動態」。
 - **未驗證（要喺真機試）**：免費簽名下 Live Activity 出唔出到；捷徑喺鎖機狀態下（背景）能否啟動；`待更新` 有冇自動轉。出事請話我知錯誤訊息。
 
+## 真機驗收清單（尚未執行）
+
+以下項目**未完成**；Node／XCTest／Python mock 測試唔可以當成已通過。每一項要由真機、真 iCloud、真 Scriptable extension 記錄結果。
+
+### 1. 資料橋樑
+
+- [ ] app 同 Scriptable 用同一個 iCloud 帳戶，Drive／Scriptable 開關已開；揀嘅係 **iCloud Drive／Scriptable 本身**。
+- [ ] 用測試 build 將一個 schema 內可見、非敏感嘅欄位（例如 `duty.detailLines[0].value`，並用會顯示佢嘅 `today` 大尺寸 view）設成 **UUID A**；由 Swift app 真正啟動匯出，唔人手放 JSON。Scriptable app 預覽同 Home Screen widget 都讀到 A，而且冇「快取」標記。
+- [ ] 將測試資料改成 **UUID B** 後重啟 app，確認 app 狀態顯示新一次成功寫入，Scriptable 其後讀到 B。
+- [ ] 若重啟後仍讀 A，分開查三處：① bookmark 是否指向正確 folder、是否 device-only／失效而要重新授權；② iCloud 是否延遲或檔案仍係 A；③ Scriptable 是否顯示「快取」而 fallback 返 local last-good。唔好將三者混為一次失敗。
+
+### 2. 離線快取
+
+- [ ] 先連網成功讀取有效 iCloud JSON，令 Scriptable 寫好 local `i-widget-last-good.json`；確認畫面有資料。
+- [ ] 保持有效 cache，開啟飛行模式，再次執行 Scriptable（app 預覽同 widget 分開確認）。資料仍顯示，保留原本 freshness 時間，並有「快取」標記；舊畫面靜止不動唔算 cache 測試成功。
+- [ ] 恢復網絡，等 iCloud 下載最新 JSON，再確認 Scriptable 讀到最新資料、移除「快取」標記。
+
+### 3. Widget 更新
+
+- [ ] 記錄 app 寫入、iCloud 可見最新 JSON、Scriptable extension 執行、Home Screen 實際轉畫嘅時間；確認 widget 真係由 A 轉 B。
+- [ ] 分開寫低三項結論：**「資料橋樑成立」**、**「離線快取成立」**、**「Widget 更新成立」**。第三項只證明真機曾更新，唔證明 `refreshAfterDate`／`earliestBeginDate` 會固定每 30 分鐘執行。
+
+### 4. 原生功能不受橋接影響
+
+- [ ] 移除 folder 授權或模擬 bridge 斷線／寫入失敗，確認 app 通知仍可排程／測試，AppIntents 仍可執行，已開啟嘅 `DutyLiveActivity` 仍可開始／更新。
+- [ ] 確認 `iWidgetExtension` 保留，原生 Widget 同 Scriptable 可同時存在；冇新增 App Group 或 push entitlement。
+- [ ] 真機結果未記錄前，文件同回報都唔可以寫「已完成驗收」。
+
+## 測試指令
+
+喺 repo 根目錄：
+
+```sh
+node scriptable/test-i-widget.js
+python3 test_widget.py
+python3 test_launcher.py
+```
+
+喺 `xcode/` 產生專案：
+
+```sh
+xcodegen generate
+```
+
+`xcodebuild test` 使用 CI（`.github/workflows/ios.yml`）相同嘅 simulator 指令：
+
+```sh
+UDID=$(xcrun simctl list devices available -j | python3 -c "
+import json, sys
+devices = json.load(sys.stdin)['devices']
+for runtime, items in devices.items():
+    if 'iOS' not in runtime:
+        continue
+    for item in items:
+        if 'iPhone' in item['name']:
+            print(item['udid']); sys.exit(0)
+sys.exit('搵唔到 iPhone simulator')
+")
+xcodebuild test \
+  -project iWidget.xcodeproj \
+  -scheme iWidget \
+  -destination "id=$UDID" \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+呢啲指令只覆蓋自動測試；真機清單仍要另做。
+
 ## 常見問題
 - **免費 Apple ID 簽名 7 日有效**：過期後 app 開唔到，接機再 Run 一次就得。付費開發者帳號為一年。
 - **Widget 搵唔到**：確認 `iWidget` app 已裝並開過一次；重啟 iPhone。
+- **Scriptable 仍讀舊 A**：先分清 bookmark／folder、iCloud 延遲、local cache，再按上面真機清單排查。
 - **改完 `project.yml`**：要重新 `xcodegen generate`。`.xcodeproj` 係產生出嚟嘅，唔使 commit。
 - **跑單元測試**：Xcode 揀 scheme iWidget，按 ⌘U；CI（`.github/workflows/ios.yml`）都會自動跑。

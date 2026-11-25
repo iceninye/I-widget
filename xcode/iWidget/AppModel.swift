@@ -1,16 +1,21 @@
 import Foundation
 import SwiftUI
 
-/// App 內嘅設定同資料預覽。Widget 嘅設定存喺各自嘅 widget 入面，免費簽名冇 App Group 可以共用，
-/// 所以 app 要另外填一次 token，先預覽到更份同 VPS；唔填都睇到其他資料。
+/// App 內嘅設定、資料預覽同 Scriptable 匯出。Token 只留喺 app；
+/// Scriptable 由 app 寫入授權資料夾嘅 JSON 讀資料，唔需要再填 token。
 enum AppSettings {
     static let rosterToken = "settings.rosterToken"
     static let vpsToken = "settings.vpsToken"
     static let statusURL = "settings.statusURL"
+    static let scriptableTheme = "settings.scriptableTheme"
 
     static func string(_ key: String) -> String? {
         let value = UserDefaults.standard.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (value ?? "").isEmpty ? nil : value
+    }
+
+    static func loadScriptableTheme() -> WidgetTheme {
+        WidgetTheme(rawValue: UserDefaults.standard.string(forKey: scriptableTheme) ?? "") ?? .classic
     }
 }
 
@@ -18,6 +23,7 @@ enum AppSettings {
 final class AppModel: ObservableObject {
     @Published private(set) var entry: OverviewEntry
     @Published private(set) var loading = false
+    let bridge = ScriptableBridgeController()
 
     init() {
         let now = Date()
@@ -27,8 +33,10 @@ final class AppModel: ObservableObject {
         entry = OverviewEntry(
             date: now, stats: SystemStats.read(), battery: .unknown, info: info,
             schedule: schedule, vps: vps,
-            updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule)
+            updatedAt: OverviewEntry.lastSuccess(info: info, schedule: schedule),
+            theme: AppSettings.loadScriptableTheme()
         )
+        bridge.setEntry(entry)
     }
 
     /// 拉一次全部資料。回傳 `true` = 呢次真係跑完一輪（呼叫者先至值得叫 widget 重讀）；
@@ -40,21 +48,16 @@ final class AppModel: ObservableObject {
         loading = true
         defer { loading = false }
         let now = Date()
-        let roster = AppSettings.string(AppSettings.rosterToken)
-        let url = AppSettings.string(AppSettings.statusURL)
-        let token = AppSettings.string(AppSettings.vpsToken)
-        async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now)) { await ExtraInfo.load(now: now) }
-        async let schedule = ScheduleData.load(token: roster, now: now)
-        async let vps = VPSState.load(url: url, token: token, now: now)
-        let loaded = await (info, schedule, vps)
-        entry = OverviewEntry(
-            date: now, stats: SystemStats.read(), battery: .unknown, info: loaded.0,
-            schedule: loaded.1, vps: loaded.2,
-            // 真係成功取得嘅時間；全部失敗（淨係 fallback 快取）就係快取入面嘅舊時間
-            updatedAt: OverviewEntry.lastSuccess(info: loaded.0, schedule: loaded.1)
-        )
-        // 每次開 app 都重排交接提示，跟最新更表
+        let loaded = await WidgetSnapshotService.load(now: now)
+        entry = loaded
+        bridge.setEntry(loaded)
+        // 先排通知同 Live Activity，唔使等法院／Scriptable 同步。
         await rescheduleHandover()
+        if bridge.hasAuthorization {
+            let courts = await WidgetSnapshotService.loadCourts(now: now)
+            bridge.setCourts(courts.days, listDate: courts.listDate)
+            WidgetBackgroundRefresh.scheduleNext()
+        }
         return true
     }
 

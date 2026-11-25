@@ -34,6 +34,10 @@ targets:
         NSLocationWhenInUseUsageDescription: 用你嘅大約位置查天氣預報，位置唔會上傳到自己嘅伺服器。
         # 更份倒數 Live Activity（本機啟動，唔使 push）
         NSSupportsLiveActivities: true
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.iceninye.i-widget.scriptable-refresh
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         # 只支援豎屏嘅 universal app 必須聲明全屏，否則 Xcode 出
@@ -76,32 +80,7 @@ targets:
     platform: iOS
     sources:
       - path: Tests
-      - path: Shared/Formatting.swift
-      - path: Shared/ClockTimeline.swift
-      - path: Shared/BatteryStyle.swift
-      - path: Shared/RebootHint.swift
-      - path: Shared/WeatherModels.swift
-      - path: Shared/GoldModels.swift
-      - path: Shared/OSVersion.swift
-      - path: Shared/InfoFormatting.swift
-      - path: Shared/RosterModels.swift
-      - path: Shared/ICalendar.swift
-      - path: Shared/VPSStatus.swift
-      - path: Shared/BatteryEstimate.swift
-      - path: Shared/DutyCards.swift
-      - path: Shared/HandoverAlerts.swift
-      - path: Shared/DutyCountdown.swift
-      - path: Shared/RefreshQueue.swift
-      - path: Shared/Freshness.swift
-      - path: Shared/WarningLayout.swift
-      - path: Shared/TodayPlan.swift
-      - path: Shared/FlipState.swift
-      - path: Shared/WidgetTheme.swift
-      - path: Shared/LiveAlerts.swift
-      - path: Shared/CourtList.swift
-      - path: Shared/CourtCategory.swift
-      - path: Shared/PublicHolidays.swift
-      - path: Shared/DataCache.swift
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.iceninye.i-widget.tests

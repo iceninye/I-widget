@@ -121,12 +121,12 @@ struct ExtraInfo {
     static let liveMaxAge: TimeInterval = 30 * 60
 
     /// 天氣同黃金每次 reload 都重讀（「即時更新」先有用）；最新 iOS 版本 6 小時一次。
-    /// 警告記入「各項資訊」範圍（app 內刷新都算呢邊，因為畫警告嘅 app 頁同資訊 widget 同一組來源）。
-    static func load(now: Date = Date()) async -> ExtraInfo {
+    /// 警告一般記入「各項資訊」範圍；app 匯出同時畀今日咭用，先將同一份成功資料記入兩個範圍。
+    static func load(now: Date = Date(), warningScopes: [Freshness.Scope] = [.info]) async -> ExtraInfo {
         async let weather = loadWeather(now: now)
         async let gold = loadGold(now: now)
         async let latestOS = loadLatestOS(now: now)
-        async let warnings = loadWarnings(scope: .info, now: now)
+        async let warnings = loadWarnings(scopes: warningScopes, now: now)
         async let train = loadTrain(now: now)
         async let air = loadAir(now: now)
         async let fx = loadFX(now: now)
@@ -144,7 +144,7 @@ struct ExtraInfo {
     /// 警告記入 **today 範圍**，所以資訊 widget 啱啱成功讀過警告唔會令今日咭嘅「更新於」變啱啱。
     static func loadToday(now: Date = Date()) async -> ExtraInfo {
         async let weather = loadWeather(now: now, reuseWithin: 10 * 60)
-        async let warnings = loadWarnings(scope: .today, now: now)
+        async let warnings = loadWarnings(scopes: [.today], now: now)
         async let train = loadTrain(now: now)
         var info = cached(now: now, part: .today)
         info.weather = await weather
@@ -183,15 +183,21 @@ struct ExtraInfo {
         }
     }
 
-    /// 讀天氣警告：成功就喺**自己範圍**嘅 key 記低本次時間；失敗就沿用該範圍嘅快取，
+    /// 讀天氣警告：成功就喺要求嘅每個範圍記低同一時間；失敗就逐範圍沿用快取，
     /// 時間照用快取原本嗰個（`Freshness.stamp`／`warningsStamp`），唔會因為又試咗一次就翻新。
-    private static func loadWarnings(scope: Freshness.Scope, now: Date) async -> [WeatherWarning]? {
+    private static func loadWarnings(scopes: [Freshness.Scope], now: Date) async -> [WeatherWarning]? {
+        guard !scopes.isEmpty else { return nil }
         do {
             let warnings = try HKOWarnings.parse(try await Fetcher.data(from: HKOWarnings.url))
-            DataCache.save(warnings, key: Freshness.warningsKey(scope), stamped: now)
+            for scope in scopes {
+                DataCache.save(warnings, key: Freshness.warningsKey(scope), stamped: now)
+            }
             return warnings
         } catch {
-            return cachedWarnings(scope: scope, now: now)
+            for scope in scopes.sorted(by: { (warningsStamp($0) ?? .distantPast) > (warningsStamp($1) ?? .distantPast) }) {
+                if let cached = cachedWarnings(scope: scope, now: now) { return cached }
+            }
+            return nil
         }
     }
 

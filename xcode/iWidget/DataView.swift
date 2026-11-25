@@ -3,6 +3,7 @@ import SwiftUI
 /// 同 widget 一樣嘅資料，逐項列出。
 struct DataView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var bridge: ScriptableBridgeController
     /// 下拉更新：由 `ContentView` 提供，`await` 到呢輪真係跑完先返回（spinner 先收）。
     let onRefresh: () async -> Void
 
@@ -32,6 +33,16 @@ struct DataView: View {
                     lines(entry.vpsBack)
                 } else {
                     Text("未設定，請去「設定」填 VPS token。").foregroundStyle(.secondary)
+                }
+            }
+            Section("Scriptable") {
+                LabeledContent("同步狀態", value: bridge.status.message)
+                if let at = bridge.status.lastSuccessAt {
+                    Text("上次寫入 \(Formatting.clock(at))").font(.footnote).foregroundStyle(.secondary)
+                }
+                if bridge.status.state != .notConfigured, bridge.status.state != .needsReauthorization {
+                    Button("立即寫入 JSON") { bridge.writeNow() }
+                        .disabled(bridge.status.state == .writing)
                 }
             }
             Section {
