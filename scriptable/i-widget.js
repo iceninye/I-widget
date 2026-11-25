@@ -281,8 +281,8 @@ function validatePayload(raw, now) {
       title: string(required(day.title, `${path}.title`), `${path}.title`, 200),
       group: nullableString(day.group, `${path}.group`, 80),
       datedSheet: nullableString(day.datedSheet, `${path}.datedSheet`, 80),
-      isOverride: boolean(required(day.isOverride, `${path}.isOverride`), `${path}.isOverride`),
-      tone: string(required(day.tone, `${path}.tone`), `${path}.tone`, 40, true),
+      isOverride: day.isOverride === undefined ? false : boolean(day.isOverride, `${path}.isOverride`),
+      tone: day.tone === undefined ? "unknown" : string(day.tone, `${path}.tone`, 40, true),
       times: nullableString(day.times, `${path}.times`, 200),
       route: nullableString(day.route, `${path}.route`, 500),
       mealText: nullableString(day.mealText, `${path}.mealText`, 200),
@@ -309,7 +309,7 @@ function validatePayload(raw, now) {
         note: string(required(event.note, `${path}.note`), `${path}.note`, 1000),
       };
     }),
-    week: array(required(duty.week, "$.duty.week"), "$.duty.week", 7).map((item, index) => {
+    week: duty.week === undefined ? [] : array(duty.week, "$.duty.week", 7).map((item, index) => {
       const entry = object(item, `$.duty.week[${index}]`);
       const path = `$.duty.week[${index}]`;
       return {

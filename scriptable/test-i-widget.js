@@ -301,6 +301,21 @@ if (require.main === module) (async () => {
     ok(has(state.widget, "未有資料"));
     ok(has(state.widget, "iOS 27.0.1"));
   });
+  await test("舊 app JSON 缺少更份徽章、tone 同 week 仍可用基本主卡", async () => {
+    const data = fixture();
+    delete data.duty.today.group;
+    delete data.duty.today.datedSheet;
+    delete data.duty.today.isOverride;
+    delete data.duty.today.tone;
+    delete data.duty.tomorrow;
+    delete data.duty.week;
+    const raw = JSON.stringify(data);
+    const state = await run({ view: "today", iCloud: raw });
+    ok(has(state.widget, "00157 錦上路"));
+    ok(has(state.widget, "15:05–23:15"));
+    equal(state.local.files.get(cachePath(state)), raw);
+    ok(!texts(state.widget).some((value) => value === "五23"));
+  });
   for (const [name, iCloud] of [
     ["corrupt", "{not json"],
     ["unsupported schema", JSON.stringify({ ...fixture(), schemaVersion: 2 })],
@@ -308,6 +323,7 @@ if (require.main === module) (async () => {
     ["損壞日期", JSON.stringify({ ...fixture(), generatedAt: "2026-02-30T14:05:30Z" })],
     ["日期沒有時區", JSON.stringify({ ...fixture(), generatedAt: "2026-10-23T14:05:30" })],
     ["電量越界", JSON.stringify({ ...fixture(), system: { ...fixture().system, battery: { ...fixture().system.battery, level: 1.1 } } })],
+    ["改更標記類型錯誤", JSON.stringify({ ...fixture(), duty: { ...fixture().duty, today: { ...fixture().duty.today, isOverride: "yes" } } })],
     ["儲存越界", JSON.stringify({ ...fixture(), system: { ...fixture().system, storage: { ...fixture().system.storage, freeBytes: -1 } } })],
     ["案件 minutes 越界", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], cases: [caseEntry(1440, "bad")] }] } })],
     ["過大 payload", " ".repeat(513 * 1024)],
