@@ -189,7 +189,7 @@ enum WidgetSnapshotBuilder {
             total: day.total,
             truncated: relevant.count > WidgetSchema.maxCasesPerCourt,
             categories: day.categoryCounts.map {
-                WidgetCategoryCount(category: $0.category.rawValue, title: $0.category.title, count: $0.count)
+                WidgetCategoryCount(category: $0.category.rawValue, categoryTitle: $0.category.title, count: $0.count)
             },
             deepLink: CourtLink(code: day.code).url.absoluteString,
             cases: shown.map { item in

@@ -228,7 +228,7 @@ struct WidgetCourtDay: Codable, Sendable, Equatable {
 
 struct WidgetCategoryCount: Codable, Sendable, Equatable {
     let category: String
-    let title: String
+    let categoryTitle: String
     let count: Int
 }
 

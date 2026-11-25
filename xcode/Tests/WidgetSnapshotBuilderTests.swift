@@ -44,6 +44,23 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
         XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("2026-13-01"), "2026-13-01")
     }
 
+    func testCourtCategoriesUseScriptableSchemaKey() throws {
+        let now = hongKongDate(2026, 10, 23, 14, 5)
+        let day = CourtDay(
+            code: "DC", dateCode: "23102026", total: 1,
+            cases: [courtCase(minutes: 900, number: "DCCJ 1/2026")]
+        )
+        let data = try WidgetSnapshotBuilder.build(entry: entry(at: now), courts: [day], now: now).jsonData()
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let courts = try XCTUnwrap(root["courts"] as? [String: Any])
+        let items = try XCTUnwrap(courts["items"] as? [[String: Any]])
+        let categories = try XCTUnwrap(items[0]["categories"] as? [[String: Any]])
+
+        XCTAssertFalse(categories.isEmpty)
+        XCTAssertNotNil(categories[0]["categoryTitle"])
+        XCTAssertNil(categories[0]["title"])
+    }
+
     func testCourtFiltersFinishedCasesBeforeApplyingLimit() {
         let now = hongKongDate(2026, 10, 23, 14, 5)
         let finished = (100..<200).map { courtCase(minutes: $0, number: "finished-\($0)") }
