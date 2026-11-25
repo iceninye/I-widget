@@ -17,7 +17,7 @@ enum WidgetSnapshotBuilder {
         return WidgetExport(
             schemaVersion: WidgetSchema.version,
             generatedAt: now,
-            serviceDate: entry.serviceToday,
+            serviceDate: exportDateCode(entry.serviceToday),
             theme: entry.theme.rawValue,
             freshness: WidgetFreshness(
                 today: OverviewEntry.lastSuccess(info: info, schedule: schedule, part: .today),
@@ -123,7 +123,7 @@ enum WidgetSnapshotBuilder {
 
     private static func dutyDay(_ day: DutyDay, calendar: Calendar) -> WidgetDutyDay {
         WidgetDutyDay(
-            date: day.date,
+            date: exportDateCode(day.date),
             code: day.code,
             title: day.title,
             times: day.times,
@@ -159,7 +159,7 @@ enum WidgetSnapshotBuilder {
             today: weatherDay(snapshot.today),
             tomorrow: snapshot.tomorrow.map(weatherDay),
             daily: Array(snapshot.days ?? []).prefix(7).map {
-                WidgetDatedWeather(date: $0.date, day: weatherDay($0.day))
+                WidgetDatedWeather(date: exportDateCode($0.date), day: weatherDay($0.day))
             }
         )
     }
@@ -211,10 +211,27 @@ enum WidgetSnapshotBuilder {
         )
     }
 
-    /// 原站同快取用 DDMMYYYY；跨 app schema 統一用 YYYYMMDD。
+    /// 更份／天氣用 YYYY-MM-DD，法院用 DDMMYYYY；跨 app schema 統一轉做 YYYYMMDD。
     static func exportDateCode(_ value: String) -> String {
-        guard value.count == 8, value.allSatisfy(\.isNumber) else { return value }
-        return String(value.suffix(4)) + String(value.dropFirst(2).prefix(2)) + String(value.prefix(2))
+        let dashed = value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        let normalized = dashed ? value.replacingOccurrences(of: "-", with: "") : value
+        guard normalized.count == 8, normalized.allSatisfy(\.isNumber) else { return value }
+
+        let year = Int(normalized.suffix(4))
+        let firstMonth = Int(normalized.dropFirst(4).prefix(2))
+        let firstDay = Int(normalized.suffix(2))
+        if (2000...2100).contains(Int(normalized.prefix(4)) ?? 0),
+           (1...12).contains(firstMonth ?? 0), (1...31).contains(firstDay ?? 0) {
+            return normalized
+        }
+
+        let day = Int(normalized.prefix(2))
+        let month = Int(normalized.dropFirst(2).prefix(2))
+        guard (1...31).contains(day ?? 0), (1...12).contains(month ?? 0),
+              (2000...2100).contains(year ?? 0) else { return value }
+        return String(normalized.suffix(4))
+            + String(normalized.dropFirst(2).prefix(2))
+            + String(normalized.prefix(2))
     }
 
     private static func osStatusText(_ status: OSVersionStatus) -> String {

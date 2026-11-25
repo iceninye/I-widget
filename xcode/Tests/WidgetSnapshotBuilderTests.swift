@@ -8,6 +8,42 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
         XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("2026102"), "2026102")
     }
 
+    func testRosterAndWeatherDatesUseExportSchema() {
+        let now = hongKongDate(2026, 10, 23, 14, 5)
+        let info = ExtraInfo(
+            weather: WeatherSnapshot(
+                currentTemp: 28,
+                today: WeatherDay(code: 3, minTemp: 24, maxTemp: 31, rainChance: 30, uvIndex: 5),
+                tomorrow: nil,
+                fetchedAt: now,
+                days: [DatedWeather(
+                    date: "2026-10-23",
+                    day: WeatherDay(code: 3, minTemp: 24, maxTemp: 31, rainChance: 30, uvIndex: 5)
+                )]
+            ),
+            gold: nil, latestOS: nil, updatedAt: now,
+            warnings: nil, train: nil, air: nil, fx: nil
+        )
+        let exported = WidgetSnapshotBuilder.build(
+            entry: OverviewEntry(
+                date: now, stats: .sample, battery: .unknown, info: info,
+                schedule: .empty, vps: VPSState(status: nil, configured: false, failed: false),
+                updatedAt: nil
+            ),
+            now: now
+        )
+
+        XCTAssertEqual(exported.serviceDate, "20261023")
+        XCTAssertEqual(exported.weather.daily.first?.date, "20261023")
+    }
+
+    func testExportDateCodePreservesYYYYMMDDAndConvertsDMY() {
+        XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("2026-10-23"), "20261023")
+        XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("20261023"), "20261023")
+        XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("20012026"), "20260120")
+        XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("2026-13-01"), "2026-13-01")
+    }
+
     func testCourtFiltersFinishedCasesBeforeApplyingLimit() {
         let now = hongKongDate(2026, 10, 23, 14, 5)
         let finished = (100..<200).map { courtCase(minutes: $0, number: "finished-\($0)") }
