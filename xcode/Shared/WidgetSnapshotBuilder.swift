@@ -78,6 +78,7 @@ enum WidgetSnapshotBuilder {
                     )
                 },
                 week: dutyWeek(entry: entry),
+                shiftForecast: shiftForecast(entry: entry, now: now, calendar: calendar),
                 weekText: entry.weekSummary?.text,
                 nextHoliday: entry.nextHoliday.map {
                     WidgetHoliday(title: $0.title, rangeText: $0.rangeText, daysAway: $0.daysAway)
@@ -133,7 +134,25 @@ enum WidgetSnapshotBuilder {
                 weekday: Days.weekdayIndex(sourceDate).flatMap { weekdays.indices.contains($0) ? weekdays[$0] : nil } ?? "—",
                 dayNumber: parts.last.map(String.init) ?? "—",
                 label: day?.shortLabel ?? "—",
-                tone: day.map(dutyTone) ?? "unknown"
+                tone: day.map(dutyTone) ?? "unknown",
+                weather: entry.info.weather?.day(sourceDate).map(weatherDay)
+            )
+        }
+    }
+
+    private static func shiftForecast(entry: OverviewEntry, now: Date, calendar: Calendar) -> [WidgetShiftForecast] {
+        guard let day = entry.dutyToday, let weather = entry.info.weather else { return [] }
+        let moments: [(String, Int?)] = [("返工", day.on), ("放工", day.off)]
+        return moments.compactMap { label, seconds in
+            guard let seconds, let at = day.moment(atServiceSecond: seconds),
+                  at > now.addingTimeInterval(-3_600),
+                  let hour = weather.hour(at: at, calendar: calendar) else { return nil }
+            return WidgetShiftForecast(
+                label: "\(label) \(DutyDay.clock(seconds))",
+                code: hour.code,
+                symbol: hour.code.map(WeatherCode.symbol),
+                tempText: Formatting.degrees(hour.temp),
+                rainChance: hour.rainChance
             )
         }
     }

@@ -323,6 +323,17 @@ function validatePayload(raw, now) {
         tone: string(required(entry.tone, `${path}.tone`), `${path}.tone`, 40, true),
       };
     }),
+    shiftForecast: duty.shiftForecast === undefined ? [] : array(duty.shiftForecast, "$.duty.shiftForecast", 4).map((item, index) => {
+      const entry = object(item, `$.duty.shiftForecast[${index}]`);
+      const path = `$.duty.shiftForecast[${index}]`;
+      return {
+        label: string(required(entry.label, `${path}.label`), `${path}.label`, 80, true),
+        code: nullableNumber(entry.code, `${path}.code`, 0, 9999, true),
+        symbol: nullableString(entry.symbol, `${path}.symbol`, 100),
+        tempText: string(required(entry.tempText, `${path}.tempText`), `${path}.tempText`, 40),
+        rainChance: nullableNumber(entry.rainChance, `${path}.rainChance`, 0, 100, true),
+      };
+    }),
     weekText: nullableString(duty.weekText, "$.duty.weekText", 300),
     nextHoliday: duty.nextHoliday === null || duty.nextHoliday === undefined ? null : object(duty.nextHoliday, "$.duty.nextHoliday"),
     detailLines: lines(required(duty.detailLines, "$.duty.detailLines"), "$.duty.detailLines"),
@@ -377,6 +388,11 @@ function validatePayload(raw, now) {
     const path = `$.weather.daily[${index}]`;
     dateCode(required(day.date, `${path}.date`), `${path}.date`);
     weatherDay(required(day.day, `${path}.day`), `${path}.day`);
+  });
+  (Array.isArray(duty.week) ? duty.week : []).forEach((item, index) => {
+    if (item && item.weather !== null && item.weather !== undefined) {
+      weatherDay(item.weather, `$.duty.week[${index}].weather`);
+    }
   });
 
   const warnings = object(required(root.warnings, "$.warnings"), "$.warnings");
@@ -627,7 +643,7 @@ function text(parent, string, size, color, bold) {
   t.font = bold ? Font.boldSystemFont(size) : Font.systemFont(size);
   t.textColor = color;
   t.lineLimit = 1;
-  t.minimumScaleFactor = 0.7;
+  t.minimumScaleFactor = 0.8;
   return t;
 }
 
@@ -899,7 +915,7 @@ function dutyCountdown(day) {
   return `${label} ${hours ? `${hours} 小時 ` : ""}${minutes} 分`;
 }
 
-function badge(parent, label, color = C.accent, size = 9) {
+function badge(parent, label, color = C.accent, size = 10) {
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
@@ -986,21 +1002,40 @@ function todayDutyCard(w, data, family, snapshot) {
   weatherRow.centerAlignContent();
   if (weather) {
     if (symbol(weatherRow, weather.symbol, C.blue, 14)) weatherRow.addSpacer(4);
-    text(weatherRow, data.weather.currentTemp === null ? "—" : `${Math.round(data.weather.currentTemp)}°`, 13, C.label, true);
+    text(weatherRow, data.weather.currentTemp === null ? "—" : `${Math.round(data.weather.currentTemp)}°`, 14, C.label, true);
     weatherRow.addSpacer(5);
-    text(weatherRow, weather.codeText, 11, C.secondary, false);
+    text(weatherRow, weather.codeText, 12, C.secondary, false);
     weatherRow.addSpacer(5);
-    text(weatherRow, weather.tempText, 11, C.secondary, false);
+    text(weatherRow, weather.tempText, 12, C.secondary, false);
     if (weather.rainChance !== null && weather.rainChance !== undefined) {
       weatherRow.addSpacer(5);
-      if (symbol(weatherRow, "umbrella.fill", C.blue, 10)) weatherRow.addSpacer(2);
-      text(weatherRow, `${weather.rainChance}%`, 10, C.blue, false);
+      if (symbol(weatherRow, "umbrella.fill", C.blue, 11)) weatherRow.addSpacer(2);
+      text(weatherRow, `${weather.rainChance}%`, 11, C.blue, false);
     }
   } else {
-    text(weatherRow, "天氣未有資料", 11, C.secondary, false);
+    text(weatherRow, "天氣未有資料", 12, C.secondary, false);
+  }
+  const forecasts = data.duty.shiftForecast || [];
+  if (family !== "medium" && forecasts.length) {
+    const shiftRow = box.addStack();
+    shiftRow.layoutHorizontally();
+    shiftRow.centerAlignContent();
+    forecasts.slice(0, 2).forEach((item, index) => {
+      if (index) shiftRow.addSpacer(10);
+      text(shiftRow, item.label, 11, C.secondary, false);
+      shiftRow.addSpacer(4);
+      if (item.symbol && symbol(shiftRow, item.symbol, C.blue, 11)) shiftRow.addSpacer(3);
+      text(shiftRow, item.tempText, 12, C.label, true);
+      if (item.rainChance !== null && item.rainChance !== undefined) {
+        shiftRow.addSpacer(4);
+        if (symbol(shiftRow, "umbrella.fill", C.blue, 10)) shiftRow.addSpacer(2);
+        text(shiftRow, `${item.rainChance}%`, 11, C.blue, false);
+      }
+    });
+    shiftRow.addSpacer();
   }
   weatherRow.addSpacer();
-  if (snapshot) text(weatherRow, freshnessText("today", snapshot), 9, C.secondary, false);
+  if (snapshot) text(weatherRow, freshnessText("today", snapshot), 10, C.secondary, false);
   return box;
 }
 
@@ -1039,7 +1074,7 @@ function todayWeekStrip(w, data) {
     const cell = row.addStack();
     cell.layoutVertically();
     cell.centerAlignContent();
-    text(cell, `${item.weekday}${item.dayNumber}`, 9, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
+    text(cell, `${item.weekday}${item.dayNumber}`, 10, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
     const label = cell.addStack();
     label.layoutHorizontally();
     label.centerAlignContent();
@@ -1051,14 +1086,14 @@ function todayWeekStrip(w, data) {
       label.borderColor = C.label;
       label.borderWidth = 1;
     }
-    text(label, item.label, 10, WHITE, true).centerAlignText();
-    const weather = (data.weather.daily || []).find((entry) => entry.date === item.date);
+    text(label, item.label, 11, WHITE, true).centerAlignText();
+    const weather = item.weather || ((data.weather.daily || []).find((entry) => entry.date === item.date) || {}).day;
     if (weather) {
       const temp = cell.addStack();
       temp.layoutHorizontally();
       temp.centerAlignContent();
-      if (symbol(temp, weather.day.symbol, C.secondary, 9)) temp.addSpacer(2);
-      text(temp, `${Math.round(weather.day.maxTemp)}°`, 9, C.secondary, false);
+      if (symbol(temp, weather.symbol, C.secondary, 10)) temp.addSpacer(2);
+      text(temp, `${Math.round(weather.maxTemp)}°`, 10, C.secondary, false);
     }
   });
   return true;
@@ -1071,9 +1106,11 @@ function todayNextEvent(w, data) {
   const row = w.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
-  if (symbol(row, "clock", C.accent, 11)) row.addSpacer(4);
-  text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}${event.place ? ` · ${event.place}` : ""}${event.detail ? ` · ${event.detail}` : ""}`, 10, C.secondary, false);
+  if (symbol(row, "clock", C.accent, 12)) row.addSpacer(4);
+  text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
   row.addSpacer();
+  const detail = [event.place, event.detail].filter(Boolean).join(" · ");
+  if (detail) text(w, detail, 11, C.secondary, false);
   return true;
 }
 
@@ -1107,8 +1144,8 @@ function todaySchool(w, data, family) {
   header.centerAlignContent();
   if (symbol(header, "graduationcap.fill", C.indigo, 13)) header.addSpacer(4);
   text(header, "學校", 13, C.label, true);
-  if (today.cycle.length) { header.addSpacer(5); badge(header, today.cycle[0], C.indigo, 9); }
-  if (tomorrow.cycle.length) { header.addSpacer(5); text(header, `明 ${tomorrow.cycle[0]}`, 10, C.secondary, false); }
+  if (today.cycle.length) { header.addSpacer(5); badge(header, today.cycle[0], C.indigo, 10); }
+  if (tomorrow.cycle.length) { header.addSpacer(5); text(header, `明 ${tomorrow.cycle[0]}`, 11, C.secondary, false); }
   header.addSpacer();
   const failure = schoolFailureText(data.school.failed);
   if (failure) text(header, `${failure.replace("學校讀取失敗／部分失敗：", "")} 讀唔到`, 9, C.orange, false);
@@ -1123,9 +1160,9 @@ function todaySchool(w, data, family) {
       row.centerAlignContent();
       text(row, prefix, 12, prefix === "今" ? C.indigo : C.secondary, true);
       row.addSpacer(5);
-      text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 11, C.secondary, false);
+      text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 12, C.secondary, false);
       row.addSpacer(6);
-      text(row, item.title, 12, C.label, false);
+      text(row, item.title, 13, C.label, false);
       row.addSpacer();
     });
     if (rows.length > limit) text(w, `另有 ${rows.length - limit} 項`, 10, C.secondary, false);
@@ -1183,7 +1220,7 @@ function buildToday(w, family, snapshot) {
   w.addSpacer(5);
   todayNextEvent(w, data);
   if (family === "extraLarge" && data.duty.weekText) {
-    text(w, `本週 ${data.duty.weekText}`, 11, C.secondary, false);
+    text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
   }
   w.addSpacer(5);
   todayTomorrow(w, data);

@@ -99,7 +99,7 @@ final class WidgetExportTests: XCTestCase {
                 osStatus: "unknown"
             ),
             duty: WidgetDuty(
-                configured: false, failed: false, today: nil, tomorrow: nil, events: [], week: [],
+                configured: false, failed: false, today: nil, tomorrow: nil, events: [], week: [], shiftForecast: [],
                 weekText: nil, nextHoliday: nil, detailLines: []
             ),
             school: WidgetSchool(

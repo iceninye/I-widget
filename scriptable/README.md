@@ -83,7 +83,7 @@ theme: classic | ocean | sunset | forest | violet | mono
 freshness: { today, info, schedule, weather, warningsToday, warningsInfo, court }
 system: { capturedAt, battery, storage, memory, uptimeSeconds, uptimeText, bootAt,
           systemName, systemVersion, versionText, latestOS, osStatus }
-duty: { configured, failed, today, tomorrow, events, week, weekText, nextHoliday, detailLines }
+duty: { configured, failed, today, tomorrow, events, week, shiftForecast, weekText, nextHoliday, detailLines }
 school: { failed, today, tomorrow }
 weather: { available, fetchedAt, currentTemp, today, tomorrow, daily }
 warnings: { available, items }
@@ -95,7 +95,7 @@ courts: { listDate, updatedAt, items }
 
 - App 日期時間以 UTC ISO 8601 輸出；Scriptable 驗證要求帶時區，亦接受合規 `±HH:MM` offset，並檢查真正日曆日期。
 - `serviceDate`、`duty.*.date`、`duty.week[].date`、`weather.daily[].date`、`courts.items[].dateCode` 全部係 **YYYYMMDD**。法院原站同快取使用 DDMMYYYY，只有 `WidgetSnapshotBuilder.exportDateCode` 匯出時轉做 YYYYMMDD，唔改原站 URL 或原生 DTO。
-- `duty.today/tomorrow` 亦包含更份組別、特別 sheet、改更標記同語義色調 key；`duty.week` 最多 7 日，用於重現原生更份色條。色調只係顯示資料，唔包含更份 token。舊 app JSON 省略咗 `isOverride`／`tone`／`week` 仍可用基本主卡；一經有新欄位但類型錯誤，仍會整份拒絕。
+- `duty.today/tomorrow` 亦包含更份組別、特別 sheet、改更標記同語義色調 key；`duty.week` 最多 7 日，每格可附當日天氣，用於重現原生更份色條；`duty.shiftForecast` 最多 2 項，用於返工／放工逐小時預報。色調只係顯示資料，唔包含更份 token。舊 app JSON 省略咗 `isOverride`／`tone`／`week`／`shiftForecast` 仍可用基本主卡；一經有新欄位但類型錯誤，仍會整份拒絕。
 - 上限 **512 KiB（UTF-8 bytes）**；最多 **4 courts、80 relevant cases／court**。Swift 寫入前檢查大小，Scriptable 亦拒絕越界。
 - `freshness` 值係帶時區 ISO 8601 或 `null`；`system.storage.freeBytes`／`totalBytes`、`uptimeSeconds`／`bootAt`、`battery.level`／`lowPowerMode` 可為 `null`；法院 `minutes` 係 `0…1439` 整數或 `null`。缺失數值顯示「未有資料」。
 - Swift `JSONEncoder` 省略 `nil` optional key；Scriptable 將省略同 `null` 一樣處理，但主要 object／array／非 optional 欄位仍必須存在。任何主要欄位損壞都整份拒絕，避免半份資料寫入 cache。

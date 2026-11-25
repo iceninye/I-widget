@@ -121,6 +121,10 @@ function planningFixture() {
   data.school.tomorrow = { cycle: ["Day 5"], items: [{ title: "明日科學測驗", start: iso(9, 0, 24), end: iso(10, 0, 24), allDay: false }] };
   data.weather.tomorrow = { ...data.weather.today, codeText: "小雨", rainChance: 70 };
   data.weather.daily = Array.from({ length: 7 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, index * 10));
+  data.duty.week = data.duty.week.map((item) => ({
+    ...item,
+    weather: (data.weather.daily.find((entry) => entry.date === item.date) || {}).day,
+  }));
   return data;
 }
 function dutyStripDay(offset, label, tone) {
@@ -153,6 +157,10 @@ function fixture(now = DEFAULT_NOW) {
       tomorrow: null,
       events: [],
       week: ["死早", "死早", "死早", "休", "死早", "死夜", "死夜"].map((label, index) => dutyStripDay(index, label, label === "休" ? "rest" : label === "死夜" ? "night" : "dawn")),
+      shiftForecast: [
+        { label: "返工 15:05", code: 3, symbol: "cloud.fill", tempText: "28°", rainChance: 20 },
+        { label: "放工 23:15", code: 61, symbol: "cloud.rain.fill", tempText: "25°", rainChance: 40 },
+      ],
       weekText: "本週 5 更", nextHoliday: null, detailLines: [],
     },
     school: {
@@ -313,6 +321,7 @@ if (require.main === module) (async () => {
     delete data.duty.today.tone;
     delete data.duty.tomorrow;
     delete data.duty.week;
+    delete data.duty.shiftForecast;
     const raw = JSON.stringify(data);
     const state = await run({ view: "today", iCloud: raw });
     ok(has(state.widget, "00157 錦上路"));
@@ -681,6 +690,20 @@ if (require.main === module) (async () => {
     const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
     ok(!medium.includes("明日科學測驗"));
     ok(!medium.includes("三23"));
+  });
+  await test("today 七日色條有天氣，主卡有返工／放工逐小時預報", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const output = texts(widget).join("\n");
+    equal(texts(widget).filter((value) => value === "31°").length, 7);
+    for (const value of ["返工 15:05", "28°", "放工 23:15", "25°"]) ok(output.includes(value), value);
+  });
+  await test("today 主要文字維持可讀字級", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const find = (value) => texts(widget).includes(value) ? all(widget, (e) => e.kind === "text" && e.text === value)[0] : null;
+    equal(find("五23").font.size, 10);
+    equal(find("死早").font.size, 11);
+    equal(all(widget, (e) => e.kind === "text" && e.text.startsWith("接下來 15:30"))[0].font.size, 12);
+    equal(find("明日科學測驗").font.size, 13);
   });
   await test("today small 維持精簡，仍有 cached duty 失敗提示", async () => {
     const data = planningFixture();
