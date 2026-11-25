@@ -29,7 +29,7 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 
 | `view` | 內容 |
 | --- | --- |
-| `today` | 今日更份、學校日程、天氣／警告、屯馬綫 |
+| `today` | 原生式更份主卡、進度條、天氣、7 日更份色條、明日、學校／假期；有事先先警告 |
 | `info` | 儲存空間、開機時間、低耗電、系統版本、環境資訊、VPS、天氣、屯馬綫 |
 | `court` | 今日或下一個工作日案件表；只顯示相關案件 |
 | `clock` | 小／中／大時鐘、日期、電量；鎖屏 family 用日期／時間／電量 |
@@ -83,7 +83,7 @@ theme: classic | ocean | sunset | forest | violet | mono
 freshness: { today, info, schedule, weather, warningsToday, warningsInfo, court }
 system: { capturedAt, battery, storage, memory, uptimeSeconds, uptimeText, bootAt,
           systemName, systemVersion, versionText, latestOS, osStatus }
-duty: { configured, failed, today, tomorrow, events, weekText, nextHoliday, detailLines }
+duty: { configured, failed, today, tomorrow, events, week, weekText, nextHoliday, detailLines }
 school: { failed, today, tomorrow }
 weather: { available, fetchedAt, currentTemp, today, tomorrow, daily }
 warnings: { available, items }
@@ -94,7 +94,8 @@ courts: { listDate, updatedAt, items }
 ```
 
 - App 日期時間以 UTC ISO 8601 輸出；Scriptable 驗證要求帶時區，亦接受合規 `±HH:MM` offset，並檢查真正日曆日期。
-- `serviceDate`、`duty.*.date`、`weather.daily[].date`、`courts.items[].dateCode` 全部係 **YYYYMMDD**。法院原站／DTO 使用 DDMMYYYY，只有 `WidgetSnapshotBuilder.exportDateCode` 匯出時轉做 YYYYMMDD，唔改原站 URL 或 DTO。
+- `serviceDate`、`duty.*.date`、`duty.week[].date`、`weather.daily[].date`、`courts.items[].dateCode` 全部係 **YYYYMMDD**。法院原站同快取使用 DDMMYYYY，只有 `WidgetSnapshotBuilder.exportDateCode` 匯出時轉做 YYYYMMDD，唔改原站 URL 或原生 DTO。
+- `duty.today/tomorrow` 亦包含更份組別、特別 sheet、改更標記同語義色調 key；`duty.week` 最多 7 日，用於重現原生更份色條。色調只係顯示資料，唔包含更份 token。
 - 上限 **512 KiB（UTF-8 bytes）**；最多 **4 courts、80 relevant cases／court**。Swift 寫入前檢查大小，Scriptable 亦拒絕越界。
 - `freshness` 值係帶時區 ISO 8601 或 `null`；`system.storage.freeBytes`／`totalBytes`、`uptimeSeconds`／`bootAt`、`battery.level`／`lowPowerMode` 可為 `null`；法院 `minutes` 係 `0…1439` 整數或 `null`。缺失數值顯示「未有資料」。
 - Swift `JSONEncoder` 省略 `nil` optional key；Scriptable 將省略同 `null` 一樣處理，但主要 object／array／非 optional 欄位仍必須存在。任何主要欄位損壞都整份拒絕，避免半份資料寫入 cache。
@@ -128,5 +129,6 @@ Node 測試用 fake Scriptable environment，覆蓋 view × family、schema／�
 
 - Scriptable 本身讀唔到儲存空間、開機時間、低耗電模式；呢三項只來自 JSON，唔使用私有 API。
 - 腳本不負責抓資料、不連線、不接收 token；JSON 由已安裝嘅 iWidget app 產生。
+- Scriptable stack 嘅寬度、漸變、材質同文字測量能力同 SwiftUI 唔同；`today` 已按原生資訊層級重排，但唔可能保證逐像素一致，最終仍要以真機 widget 為準。
 - cache 只係離線應急，唔保證資料新；畫面保留舊 freshness 並標示「快取」。
 - iOS 控制 reload；`refreshAfterDate` 唔係截止時間，低耗電或預算耗盡時可明顯延遲。

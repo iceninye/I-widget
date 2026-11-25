@@ -77,6 +77,7 @@ enum WidgetSnapshotBuilder {
                         note: event.note
                     )
                 },
+                week: dutyWeek(entry: entry),
                 weekText: entry.weekSummary?.text,
                 nextHoliday: entry.nextHoliday.map {
                     WidgetHoliday(title: $0.title, rangeText: $0.rangeText, daysAway: $0.daysAway)
@@ -121,11 +122,42 @@ enum WidgetSnapshotBuilder {
         )
     }
 
+    private static func dutyWeek(entry: OverviewEntry) -> [WidgetDutyStripDay] {
+        let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+        return (0..<7).compactMap { offset in
+            guard let sourceDate = Days.add(entry.serviceToday, offset) else { return nil }
+            let day = entry.schedule.duty(on: sourceDate)
+            let parts = sourceDate.split(separator: "-")
+            return WidgetDutyStripDay(
+                date: exportDateCode(sourceDate),
+                weekday: Days.weekdayIndex(sourceDate).flatMap { weekdays.indices.contains($0) ? weekdays[$0] : nil } ?? "—",
+                dayNumber: parts.last.map(String.init) ?? "—",
+                label: day?.shortLabel ?? "—",
+                tone: day.map(dutyTone) ?? "unknown"
+            )
+        }
+    }
+
+    private static func dutyTone(_ day: DutyDay) -> String {
+        switch day.kind {
+        case .rest: return "rest"
+        case .leave: return "leave"
+        case .pending: return "pending"
+        case .spare: return day.shift?.rawValue ?? "spare"
+        case .other: return day.shift?.rawValue ?? "other"
+        case .duty: return day.shift?.rawValue ?? "duty"
+        }
+    }
+
     private static func dutyDay(_ day: DutyDay, calendar: Calendar) -> WidgetDutyDay {
         WidgetDutyDay(
             date: exportDateCode(day.date),
             code: day.code,
             title: day.title,
+            group: day.group,
+            datedSheet: day.datedSheet,
+            isOverride: day.isOverride,
+            tone: dutyTone(day),
             times: day.times,
             route: day.route,
             mealText: day.mealText,

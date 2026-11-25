@@ -35,6 +35,10 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
 
         XCTAssertEqual(exported.serviceDate, "20261023")
         XCTAssertEqual(exported.weather.daily.first?.date, "20261023")
+        XCTAssertEqual(exported.duty.week.count, 7)
+        XCTAssertEqual(exported.duty.week.first?.date, "20261023")
+        XCTAssertEqual(exported.duty.week.first?.weekday, "五")
+        XCTAssertEqual(exported.duty.week.first?.tone, "unknown")
     }
 
     func testExportDateCodePreservesYYYYMMDDAndConvertsDMY() {

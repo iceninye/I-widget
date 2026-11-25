@@ -105,8 +105,10 @@ function dutyEvent(at, overrides = {}) {
   };
 }
 function datedWeather(day, codeText, rainChance) {
+  const date = new Date(2026, 9, day);
+  const code = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
   return {
-    date: `202610${String(day).padStart(2, "0")}`,
+    date: code,
     day: { code: 3, codeText, symbol: "cloud.fill", minTemp: 23, maxTemp: 31, tempText: "23°–31°", rainChance, uvIndex: 5 },
   };
 }
@@ -121,6 +123,13 @@ function planningFixture() {
   data.weather.daily = Array.from({ length: 7 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, index * 10));
   return data;
 }
+function dutyStripDay(offset, label, tone) {
+  const date = new Date(2026, 9, 23 + offset);
+  const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+  const weekday = weekdays[(date.getDay() + 6) % 7];
+  return { date: `202610${String(23 + offset).padStart(2, "0")}`, weekday, dayNumber: String(23 + offset), label, tone };
+}
+
 function fixture(now = DEFAULT_NOW) {
   return {
     schemaVersion: 1,
@@ -140,8 +149,11 @@ function fixture(now = DEFAULT_NOW) {
     },
     duty: {
       configured: true, failed: false,
-      today: { date: "20261023", code: "1101157", title: "00157 錦上路", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: iso(15, 5), offAt: iso(23, 15) },
-      tomorrow: null, events: [], weekText: "本週 5 更", nextHoliday: null, detailLines: [],
+      today: { date: "20261023", code: "1101157", title: "00157 錦上路", group: "KSR", datedSheet: null, isOverride: true, tone: "dawn", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: iso(15, 5), offAt: iso(23, 15) },
+      tomorrow: null,
+      events: [],
+      week: ["死早", "死早", "死早", "休", "死早", "死夜", "死夜"].map((label, index) => dutyStripDay(index, label, label === "休" ? "rest" : label === "死夜" ? "night" : "dawn")),
+      weekText: "本週 5 更", nextHoliday: null, detailLines: [],
     },
     school: {
       failed: [], today: { cycle: ["Day 4"], items: [{ title: "中三家長會", start: iso(18, 0), end: iso(19, 0), allDay: false }] },
@@ -153,7 +165,7 @@ function fixture(now = DEFAULT_NOW) {
       tomorrow: null, daily: [],
     },
     warnings: { available: false, items: [] },
-    train: { available: true, stateText: "屯馬綫", message: "行車大致正常" },
+    train: { available: true, stateText: "正常", message: "行車大致正常" },
     environment: { sections: [{ id: "gold", title: "黃金", lines: [{ label: "999.9 金", value: "HK$62,800" }] }] },
     vps: { configured: true, available: true, failed: false, lines: [{ label: "狀態", value: "正常" }] },
     courts: {
@@ -245,12 +257,12 @@ if (require.main === module) (async () => {
   await test("parameter view 分流；未知值安全 fallback today", async () => {
     equal(has((await run({ view: "today", parameterValues: { view: "court" }, iCloud: JSON.stringify(fixture()) })).widget, "法院案件"), true);
     const fallback = await run({ parameterValues: { view: "unknown" }, iCloud: JSON.stringify(fixture()) });
-    equal(has(fallback.widget, "今日"), true);
+    equal(has(fallback.widget, "00157 錦上路"), true);
     equal(all(fallback.widget, (e) => e.kind === "date").length, 0);
   });
   await test("舊 config 無 parameterValues 時預設 today", async () => {
     const state = await run({ parameterValues: null, iCloud: JSON.stringify(fixture()) });
-    equal(has(state.widget, "今日"), true);
+    equal(has(state.widget, "00157 錦上路"), true);
     equal(all(state.widget, (e) => e.kind === "date").length, 0);
   });
 
@@ -372,7 +384,8 @@ if (require.main === module) (async () => {
   console.log("\n【V】today / info / court / accessory 內容");
   await test("today 顯示更份、學校、天氣、屯馬綫", async () => {
     const state = await run({ view: "today", iCloud: JSON.stringify(fixture()) });
-    for (const value of ["今日", "00157 錦上路", "15:05–23:15", "Day 4", "中三家長會", "多雲", "行車大致正常"]) ok(texts(state.widget).some((t) => t.includes(value)), value);
+    for (const value of ["00157 錦上路", "15:05–23:15", "Day 4", "中三家長會", "多雲", "KSR", "改"]) ok(texts(state.widget).some((t) => t.includes(value)), value);
+    ok(!texts(state.widget).includes("行車大致正常"));
   });
   await test("info 系統儲存／uptime／低耗電只由 JSON 顯示", async () => {
     const state = await run({ view: "info", iCloud: JSON.stringify(fixture()) });
@@ -438,17 +451,22 @@ if (require.main === module) (async () => {
   await test("warnings unavailable + 空 items 顯示未有資料，唔顯示沒有警告", async () => {
     for (const view of ["today", "info"]) {
       const state = await run({ view, iCloud: JSON.stringify(fixture()) });
-      ok(has(state.widget, "未有資料"), view);
+      ok(texts(state.widget).some((value) => value.includes("未有資料")), view);
       ok(!has(state.widget, "沒有警告"), view);
     }
   });
-  await test("warnings available + 空 items 才顯示沒有警告", async () => {
+  await test("warnings available + 空 items 時 info 先顯示沒有警告；today 收起", async () => {
     const data = fixture();
     data.warnings.available = true;
-    for (const view of ["today", "info"]) {
-      const state = await run({ view, iCloud: JSON.stringify(data) });
-      ok(has(state.widget, "沒有警告"), view);
-    }
+    ok(has((await run({ view: "info", iCloud: JSON.stringify(data) })).widget, "沒有警告"));
+    ok(!has((await run({ view: "today", iCloud: JSON.stringify(data) })).widget, "沒有警告"));
+  });
+  await test("today 屯馬綫未有資料唔會被當成正常而收起", async () => {
+    const data = fixture();
+    data.warnings.available = true;
+    data.train.available = false;
+    const output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("屯馬綫：未有資料"));
   });
   await test("warnings available 顯示警告內容", async () => {
     const data = fixture();
@@ -497,17 +515,17 @@ if (require.main === module) (async () => {
     data.school.failed = ["中三", "小六"];
     data.school.today = { cycle: [], items: [] };
     let output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("學校讀取失敗／部分失敗：中三、小六"));
-    ok(!output.includes("今日 · 沒有日程"));
+    ok(output.includes("中三、小六") && output.includes("讀唔到"));
+    ok(!output.includes("今明兩日冇學校活動"));
     data.school.failed = [];
     output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("今日 · 沒有日程"));
+    ok(output.includes("今明兩日冇學校活動"));
   });
   await test("school failed 有部分 items 時同時顯示失敗與日程", async () => {
     const data = fixture();
     data.school.failed = ["小六"];
     const output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("學校讀取失敗／部分失敗：小六"));
+    ok(output.includes("小六") && output.includes("讀唔到"));
     ok(output.includes("中三家長會"));
   });
   await test("VPS 未設定、讀取失敗、沿用快取三態清楚", async () => {
@@ -536,12 +554,12 @@ if (require.main === module) (async () => {
     const accents = new Set();
     const backgrounds = new Set();
     for (const theme of ["classic", "ocean", "sunset", "forest", "violet", "mono"]) {
-      const data = fixture();
+      const data = planningFixture();
       data.theme = theme;
       const widget = (await run({ view: "today", iCloud: JSON.stringify(data) })).widget;
-      const heading = all(widget, (e) => e.kind === "text" && e.text === "更份")[0];
-      ok(heading && heading.textColor.dynamic, theme);
-      accents.add(heading.textColor.light.hex);
+      const accentIcon = all(widget, (e) => e.kind === "image" && e.image && e.image.symbol === "clock")[0];
+      ok(accentIcon && accentIcon.tintColor.dynamic, theme);
+      accents.add(accentIcon.tintColor.light.hex);
       backgrounds.add(widget.backgroundColor.light.hex);
       if (theme === "mono") {
         const colors = all(widget, (e) => e.textColor || e.backgroundColor).map((e) => e.textColor || e.backgroundColor);
@@ -627,12 +645,16 @@ if (require.main === module) (async () => {
     for (const value of ["15:30", "落更", "錦上路交接", "錦上路站", "帶交接文件"]) ok(output.includes(value), value);
     ok(!output.includes("已發生事件"));
   });
-  await test("today 補回 week、明日更份、假期、明日學校、7 日 weather", async () => {
-    for (const family of ["medium", "large", "extraLarge"]) {
+  await test("today 大尺寸補回 7 日更份、明日、假期、學校；medium 保持精簡", async () => {
+    for (const family of ["large", "extraLarge"]) {
       const output = texts((await run({ view: "today", family, iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
-      for (const value of ["本週 5 更", "00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 天後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
-      for (let index = 0; index < 7; index++) ok(output.includes(`天氣${index + 1}`), `${family}: daily ${index + 1}`);
+      for (const value of ["00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 日後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
+      for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
+      equal(output.includes("本週 5 更"), family === "extraLarge", `${family}: week summary`);
     }
+    const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
+    ok(!medium.includes("明日科學測驗"));
+    ok(!medium.includes("三23"));
   });
   await test("today small 維持精簡，仍有 cached duty 失敗提示", async () => {
     const data = planningFixture();
@@ -643,17 +665,22 @@ if (require.main === module) (async () => {
     ok(!output.includes("本週 5 更"));
     ok(!output.includes("天氣7"));
   });
-  await test("today 受 rowBudget 限制，不無限堆疊 events/daily", async () => {
+  await test("today 原生式版面限制事件、7 日色條同學校行數", async () => {
     const data = planningFixture();
     data.duty.events = Array.from({ length: 200 }, (_, index) => dutyEvent(iso(15, index), { title: `事件${index}` }));
     data.weather.daily = Array.from({ length: 14 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, 10));
+    data.school.today.items = Array.from({ length: 10 }, (_, index) => ({ title: `活動${index}`, start: iso(9, index), end: iso(10, index), allDay: false }));
     for (const family of ["medium", "large", "extraLarge"]) {
       const widget = (await run({ view: "today", family, iCloud: JSON.stringify(data) })).widget;
       const output = texts(widget).join("\n");
       equal(output.includes("事件199"), false, family);
-      equal(output.includes("天氣8"), false, family);
-      const sections = texts(widget).filter((value) => ["更份", "即將發生", "方案規劃", "學校", "天氣", "屯馬綫", "天氣警告"].includes(value));
-      ok(sections.length <= ({ medium: 6, large: 8, extraLarge: 11 }[family]), family);
+      equal(all(widget, (e) => e.kind === "stack" && e.cornerRadius === 18).length, 1, `${family}: one duty card`);
+      if (family !== "medium") {
+        for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
+        equal(output.includes("活動2"), true, `${family}: school visible`);
+        equal(output.includes("活動5"), family === "extraLarge", `${family}: school budget`);
+        equal(output.includes("活動9"), false, `${family}: school cap`);
+      }
     }
   });
   await test("info 補回 warning、battery estimate/rate、memory、今日／明日 rain", async () => {
