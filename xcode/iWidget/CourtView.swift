@@ -49,6 +49,7 @@ struct CourtSelection: Identifiable, Equatable {
 
 struct CourtView: View {
     @ObservedObject var model: CourtModel
+    @ObservedObject var bridge: ScriptableBridgeController
     @AppStorage("court.codes") private var storedCodes = "DC,ALLMAG,CFA"
     @State private var query = ""
     /// nil = 全部類別
@@ -97,6 +98,7 @@ struct CourtView: View {
         }
         .task { await model.refresh(codes: codes) }
         .onChange(of: storedCodes) { _, _ in Task { await model.refresh(codes: codes) } }
+        .onChange(of: model.days) { _, days in bridge.setCourts(days, listDate: model.listDate) }
         .sheet(item: $model.selected) { selection in
             NavigationStack { CourtDetailView(selection: selection, listDate: model.listDate) }
                 .presentationDetents([.medium, .large])

@@ -4,13 +4,16 @@ struct SettingsView: View {
     @AppStorage(AppSettings.rosterToken) private var rosterToken = ""
     @AppStorage(AppSettings.vpsToken) private var vpsToken = ""
     @AppStorage(AppSettings.statusURL) private var statusURL = ""
+    @AppStorage(AppSettings.scriptableTheme) private var scriptableTheme = WidgetTheme.classic.rawValue
     @AppStorage(HandoverNotifier.enabledKey) private var handoverAlerts = false
     @State private var handoverStatus = ""
     /// 已經觸發過刷新嘅 token 組合：用嚟分辨「用家真係改過嘢」同「啱啱入頁」，
     /// 並喺 debounce 完成之後先更新（取消咗就留舊值，等最新嗰次輸入先發）。
     @State private var firedKey: String?
     @StateObject private var location = LocationAuth()
+    @State private var pickingFolder = false
     @ObservedObject var model: AppModel
+    @ObservedObject var bridge: ScriptableBridgeController
     /// 一定要做到嘅刷新（`ContentView` 傳入 `mustRefresh: true`）：跑緊嗰輪要排返隊補跑，
     /// 唔然用家打完最後幾個字會被嗰輪吞咗，成個 token 永遠更新唔到。
     let onChange: () -> Void
@@ -25,9 +28,9 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
             } header: {
-                Text("資料預覽用")
+                Text("私密資料")
             } footer: {
-                Text("只用嚟喺 app 預覽。Widget 嘅 token 要喺 widget 長按 →「編輯小工具」另外填：免費簽名冇 App Group，app 同 widget 唔可以共用設定。")
+                Text("用嚟 app 內預覽、通知同 Live Activity；Scriptable 只收 app 匯出嘅 JSON，唔會收到 token。原生 Widget 仍然要喺長按 →「編輯小工具」另外填 token。")
             }
             Section {
                 Toggle("交接提示", isOn: $handoverAlerts)
@@ -50,9 +53,38 @@ struct SettingsView: View {
                     Button("允許定位（使用 App 期間）") { location.request() }
                 }
             }
+            Section {
+                LabeledContent("狀態", value: bridge.status.message)
+                if let at = bridge.status.lastSuccessAt {
+                    Text("上次寫入：\(Formatting.clock(at))").font(.footnote).foregroundStyle(.secondary)
+                }
+                Button(bridge.hasAuthorization ? "更改 Scriptable 資料夾" : "選擇 Scriptable 資料夾") {
+                    pickingFolder = true
+                }
+                if bridge.status.state != .notConfigured, bridge.status.state != .needsReauthorization {
+                    Button("立即寫入 JSON") { bridge.writeNow() }
+                        .disabled(bridge.status.state == .writing)
+                    Button("移除資料夾授權", role: .destructive) { bridge.revokeAuthorization() }
+                }
+            } header: {
+                Text("Scriptable 同步")
+            } footer: {
+                Text("喺 Files → iCloud Drive 揀 Scriptable 呢個資料夾本身，唔好揀入面嘅子資料夾。app 只寫入 i-widget.json，token 唔會出 app。寫入成功唔代表 iCloud 已同步或 Widget 已刷新。")
+            }
+            Section {
+                Picker("Scriptable 主題", selection: $scriptableTheme) {
+                    ForEach(WidgetTheme.allCases, id: \.rawValue) { theme in
+                        Text(theme.label).tag(theme.rawValue)
+                    }
+                }
+            } footer: {
+                Text("只影響 Scriptable 元件；原生 Widget 調色風格仍然獨立。")
+            }
             Section("加入 widget") {
                 Text("""
-                長按主畫面 → 左上角 + → 搜尋「i-widget」：
+                Scriptable：載入 scriptable/i-widget.js，加入今日咭、各項資訊、法院、時鐘或鎖屏元件。喺元件參數揀 view；主題喺上面「Scriptable 主題」揀。
+
+                原生 Widget（並行驗證保留）：長按主畫面 → 左上角 + → 搜尋「i-widget」：
                 • 今日咭（中／大）：填 tml-roster token
                 • 各項資訊（大）：填 VPS token
                 鎖屏：自訂 → 加入元件。調色風格喺 widget 撳調色掣轉。
@@ -62,7 +94,17 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("設定")
+        .sheet(isPresented: $pickingFolder) {
+            FolderPicker(onPick: { folder in
+                bridge.authorize(folder: folder)
+                if bridge.hasAuthorization { onChange() }
+                pickingFolder = false
+            }, onCancel: {
+                pickingFolder = false
+            })
+        }
         .task { await refreshHandoverStatus() }
+        .onChange(of: scriptableTheme) { _, _ in onChange() }
         .onChange(of: handoverAlerts) { _, enabled in
             Task {
                 if enabled {
