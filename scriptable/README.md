@@ -21,6 +21,8 @@
 
 Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩者要分開確認。iOS 首次要求存取 iCloud Drive 時請按允許。Folder 路徑以 `FileManager.iCloud().documentsDirectory()` 為準，唔寫死個人路徑。
 
+如果仍見到舊式時鐘，先確認 Scriptable widget 嘅 `Script` 指向更新後嘅 `i-widget`，並將 `view` parameter 設做 `today`、`info` 或 `court`。冇 parameter 時沿用 `clock`，而 `clock` 為保留兼容性會用回原本時鐘版面；另外，改動 repo 入面嘅 JS 唔會自動更新手機 Scriptable script，必須手動貼上全文。
+
 正常路徑唔使預先手放 JSON。手動放一份合法 JSON 可以作進階診斷，但**唔係正常 app bridge**，亦唔可以冒充 Swift 真機匯出驗收。
 
 ## `view` 分流
@@ -53,6 +55,10 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 4. cache 都不可用時，`today`／`info`／`court` 顯示「未有資料」同設定提示；`clock`／`accessory` 仍可顯示裝置電量等內容。
 
 FileManager API 或整個 FileManager 缺失都會安全 fallback。正常呼叫形狀為 `downloadFileFromiCloud(path)`、`fileExists(path)`、`readString(path)`、`writeString(contents, path)`；部分版本回傳 Promise，script 用 `await` 兼容。
+
+讀取失敗時，`today`／`info`／`court` widget 會顯示具體階段（下載、`fileExists`、讀取、JSON 驗證或 cache），而唔再靜靜吞錯；喺 Scriptable app 直接執行腳本亦會彈出安全診斷 Alert。診斷只包含階段、系統錯誤訊息同 schema 欄位，不列 JSON 內容、token 或 Authorization header。
+
+`i-widget-last-good.json does not exist` 只表示 local cache 未建立，唔單獨證明 iCloud JSON 缺失。最常見原因係 Scriptable 腳本仍係舊版、widget 未設定 `view`，或者 iCloud JSON 未通過 schema 驗證。
 
 - `generatedAt` 只表示 JSON 何時產生，**唔當資料 freshness**。
 - `today` 用 `freshness.today`；`info` 用 `freshness.info`；`court` 先用 `freshness.court`，`null` 時退回 `courts.updatedAt`。冇時間就顯示「未有資料」。

@@ -412,36 +412,88 @@ function validatePayload(raw, now) {
 
 // ---- iCloud 輸入 + local last-good cache ------------------------------
 
+let LOAD_DIAGNOSTIC = "";
+
+function diagnosticDetail(error) {
+  const message = error && typeof error.message === "string" ? error.message : String(error || "未知錯誤");
+  return message.replace(/\s+/g, " ").slice(0, 180);
+}
+
+async function attempt(fn) {
+  try {
+    return { value: await fn(), error: null };
+  } catch (error) {
+    return { value: null, error };
+  }
+}
+
 async function loadSnapshot() {
+  LOAD_DIAGNOSTIC = "";
+  const problems = [];
   const cloud = safe(() => FileManager.iCloud(), null);
   const directory = safe(() => cloud && cloud.documentsDirectory(), null);
   let raw = null;
-  if (cloud && directory) {
+  if (!cloud) {
+    problems.push("Scriptable iCloud FileManager 不可用");
+  } else if (!directory) {
+    problems.push("iCloud documentsDirectory 不可用");
+  } else {
     const path = `${directory.replace(/\/$/, "")}/i-widget.json`;
     // 官方 FileManager API 多為同步；await 同時兼容回傳 Promise 嘅版本。
-    await safeAsync(() => cloud.downloadFileFromiCloud(path), null);
-    const exists = await safeAsync(() => cloud.fileExists(path), null);
-    if (exists !== false) {
-      const downloaded = await safeAsync(() => cloud.readString(path), null);
-      if (typeof downloaded === "string") raw = downloaded;
-    }
-    const validated = raw === null ? null : validatePayload(raw, NOW);
-    if (validated && !validated.error) {
-      const local = safe(() => FileManager.local(), null);
-      const localDirectory = safe(() => local && local.documentsDirectory(), null);
-      if (local && localDirectory) {
-        const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
-        await safeAsync(() => local.writeString(raw, localPath), null);
+    const download = await attempt(() => cloud.downloadFileFromiCloud(path));
+    if (download.error) problems.push(`iCloud 下載失敗：${diagnosticDetail(download.error)}`);
+    const exists = await attempt(() => cloud.fileExists(path));
+    if (exists.error) {
+      problems.push(`iCloud fileExists 失敗：${diagnosticDetail(exists.error)}`);
+    } else if (exists.value === false) {
+      problems.push("iCloud documentsDirectory 入面未有 i-widget.json");
+    } else {
+      const downloaded = await attempt(() => cloud.readString(path));
+      if (downloaded.error) {
+        problems.push(`iCloud 讀取失敗：${diagnosticDetail(downloaded.error)}`);
+      } else if (typeof downloaded.value === "string") {
+        raw = downloaded.value;
+      } else {
+        problems.push("iCloud readString 冇回傳字串");
       }
-      return { ...validated, raw, source: "iCloud" };
+    }
+    if (raw !== null) {
+      const validated = validatePayload(raw, NOW);
+      if (validated && !validated.error) {
+        const local = safe(() => FileManager.local(), null);
+        const localDirectory = safe(() => local && local.documentsDirectory(), null);
+        if (local && localDirectory) {
+          const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
+          await safeAsync(() => local.writeString(raw, localPath), null);
+        }
+        return { ...validated, raw, source: "iCloud" };
+      }
+      problems.push(`JSON 驗證失敗：${validated ? validated.error : "冇回傳驗證結果"}`);
     }
   }
 
   const local = safe(() => FileManager.local(), null);
   const localDirectory = safe(() => local && local.documentsDirectory(), null);
-  const cached = local && localDirectory ? await safeAsync(() => local.readString(`${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`), null) : null;
-  const validated = typeof cached === "string" ? validatePayload(cached, NOW) : null;
-  return validated && !validated.error ? { ...validated, raw: cached, source: "cache" } : null;
+  if (local && localDirectory) {
+    const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
+    const exists = await attempt(() => local.fileExists(localPath));
+    if (exists.error || exists.value === false) {
+      problems.push("local last-good cache 亦不存在");
+    } else {
+      const cached = await attempt(() => local.readString(localPath));
+      if (cached.error) {
+        problems.push(`local cache 讀取失敗：${diagnosticDetail(cached.error)}`);
+      } else if (typeof cached.value === "string") {
+        const validated = validatePayload(cached.value, NOW);
+        if (validated && !validated.error) return { ...validated, raw: cached.value, source: "cache" };
+        problems.push(`local cache JSON 驗證失敗：${validated ? validated.error : "冇回傳驗證結果"}`);
+      }
+    }
+  } else {
+    problems.push("local FileManager 不可用");
+  }
+  LOAD_DIAGNOSTIC = problems.join("；") || "未能讀取 JSON";
+  return null;
 }
 
 // ---- 格式／新鮮度 -----------------------------------------------------
@@ -629,7 +681,8 @@ function viewHeading(parent, view, snapshot, family) {
   return row;
 }
 
-function setupNotice(parent, message = "請喺 iWidget app 匯出 JSON，並授權 iCloud／Scriptable folder") {
+function setupNotice(parent, message) {
+  const detail = message || LOAD_DIAGNOSTIC || "請喺 iWidget app 匯出 JSON，並授權 iCloud／Scriptable folder";
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
@@ -637,7 +690,7 @@ function setupNotice(parent, message = "請喺 iWidget app 匯出 JSON，並授�
   row.cornerRadius = 10;
   row.backgroundColor = C.card;
   if (symbol(row, "folder.badge.questionmark", C.orange, 14)) row.addSpacer(6);
-  multilineText(row, `${MISSING} · ${message}`, 11, C.secondary, false, 2);
+  multilineText(row, `${MISSING} · ${detail}`, 11, C.secondary, false, 2);
 }
 
 function lineRow(parent, label, value, color = C.label, valueSize = 13) {
@@ -1204,6 +1257,14 @@ const widget = build(family, view, snapshot);
 if (config.runsInWidget) {
   Script.setWidget(widget);
 } else {
+  if (!snapshot) {
+    const alert = safe(() => new Alert(), null);
+    if (alert) {
+      alert.title = "i-widget 讀取 JSON 失敗";
+      alert.message = LOAD_DIAGNOSTIC || "未能讀取 JSON";
+      await safeAsync(() => alert.presentAlert(), null);
+    }
+  }
   const present = {
     small: "presentSmall", medium: "presentMedium", large: "presentLarge", extraLarge: "presentExtraLarge",
     accessoryInline: "presentAccessoryInline", accessoryCircular: "presentAccessoryCircular", accessoryRectangular: "presentAccessoryRectangular",

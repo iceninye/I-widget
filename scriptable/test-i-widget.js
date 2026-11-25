@@ -169,9 +169,9 @@ function fixture(now = DEFAULT_NOW) {
 async function run({
   family = "large", view = "clock", now = DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
-  parameterValues = { view }, fileManager = true, args,
+  parameterValues = { view }, fileManager = true, args, alerts,
 } = {}) {
-  const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null };
+  const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
   const dev = {
     batteryLevel: () => 0.75, isCharging: () => false, isFullyCharged: () => false,
     systemName: () => "iOS", systemVersion: () => "27.0.1", screenBrightness: () => 0.4,
@@ -186,6 +186,11 @@ async function run({
     IWIDGET_NOW: now,
   };
   if (args !== undefined) globals.args = args;
+  if (alerts !== undefined) {
+    globals.Alert = class {
+      async presentAlert() { state.alerts.push({ title: this.title, message: this.message }); }
+    };
+  }
   if (fileManager) {
     state.iCloud = new FakeVolume("/iCloud/Scriptable/", iCloudOptions);
     state.local = new FakeVolume("/local/Scriptable/", localOptions);
@@ -321,9 +326,21 @@ if (require.main === module) (async () => {
     ok((await run({ view: "info", iCloud: JSON.stringify(fixture()), localOptions: { writeError: true } })).widget);
     ok((await run({ view: "info", iCloud: JSON.stringify(fixture()), iCloudOptions: { missing: ["fileExists", "downloadFileFromiCloud"] } })).widget);
   });
-  await test("cache 損壞兼 iCloud 缺失 → 設定提示", async () => {
+  await test("cache 損壞兼 iCloud 缺失 → 顯示具體診斷", async () => {
     const state = await run({ view: "today", cache: "broken" });
-    ok(texts(state.widget).some((t) => t.includes("未有資料") && t.includes("授權")));
+    const output = texts(state.widget).join("\n");
+    ok(output.includes("未有資料") && output.includes("i-widget.json") && output.includes("local cache"));
+  });
+  await test("schema 驗證失敗顯示欄位原因，唔只顯示未有資料", async () => {
+    const raw = JSON.stringify({ ...fixture(), schemaVersion: 2 });
+    const state = await run({ view: "info", iCloud: raw });
+    ok(texts(state.widget).some((t) => t.includes("JSON 驗證失敗") && t.includes("schemaVersion")));
+  });
+  await test("Scriptable app 預覽缺少 JSON 時顯示安全診斷 Alert", async () => {
+    const state = await run({ view: "today", runsInWidget: false, alerts: true });
+    equal(state.alerts.length, 1);
+    ok(state.alerts[0].message.includes("i-widget.json"));
+    ok(!state.alerts[0].message.includes(JSON.stringify(fixture())));
   });
 
   console.log("\n【T】freshness 語意");
