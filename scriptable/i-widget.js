@@ -6,7 +6,7 @@
 const CONFIG = {
   showBrightness: true,
   showDayProgress: true,
-  reloadMinutes: 30,
+  reloadMinutes: 60,
   previewFamily: "large",
   previewView: "today",
   transparentBackground: false,

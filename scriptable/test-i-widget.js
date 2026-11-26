@@ -849,7 +849,7 @@ if (require.main === module) (async () => {
   equal(all(state.widget, (e) => e.kind === "date")[0].style, "timer");
 
   const delay = async (now) => (await run({ family: "small", now })).widget.refreshAfterDate - now;
-  equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 30 * 60000);
+  equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 60 * 60000);
   equal(await delay(new Date(2026, 9, 23, 23, 50, 0)), 10 * 60000 + 20000);
   equal(await delay(new Date(2026, 9, 23, 0, 40, 0)), 20 * 60000 + 20000);
   ok(await delay(new Date(2026, 9, 23, 0, 0, 20)) > 0);

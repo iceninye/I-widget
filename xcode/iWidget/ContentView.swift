@@ -4,8 +4,8 @@ import WidgetKit
 /// Widget 嘅宿主 app：「資料」睇 widget 同款資料，「設定」填預覽用 token 同定位授權；
 /// 每次開 app 或者低耗電模式變咗，都叫 widget 重新讀取。
 /// 刷新全部經 `refreshQueued()` 串行化：冷啟、deep link、返前景、電量改變、改設定唔會同時打幾輪網。
-/// 「一定要做到」嘅請求（deep link、返前景、跨過事件邊界、設定改完 token）會排隊補跑一次，
-/// 唔會俾 `loading` guard 吞咗；純順手刷新（冷啟、低耗電模式改變）就併入跑緊嗰輪。
+/// 「一定要做到」嘅請求（deep link、跨過事件邊界、設定改完 token）會排隊補跑一次，
+/// 唔會俾 `loading` guard 吞咗；背景返前景另有 30 分鐘節流，純順手刷新（冷啟、低耗電模式改變）就併入跑緊嗰輪。
 /// 呢啲取捨全部寫喺 `Shared/RefreshQueue.swift`（純邏輯、有單元測試），View 只係將決定落到 `@State`。
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -72,19 +72,31 @@ struct ContentView: View {
             case .inactive:
                 break   // 落通知遮罩、app switcher 唔算離開，唔使多打一次網
             case .active:
-                // 冷啟嗰次已經由 `.task` 計，所以要等真係落過背景先算「返嚟」
-                if wentToBackground {
-                    wentToBackground = false
-                    requestRefresh(mustRefresh: true)
-                } else {                    // 由通知遮罩／app switcher 返嚟：可能已經跨過事件，但唔使重新下載。
-                    tick(now: Date())
-                }
+                Task { @MainActor in self.handleForegroundReturn(now: Date()) }
             @unknown default:
                 break   // 未來新加嘅 phase：照 inactive 咁處理，唔好亂 refresh 或者誤判落過背景
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
             requestRefresh()
+        }
+    }
+
+    /// 冷啟由 `.task` 負責；真係落過背景先考慮返前景刷新。
+    /// 30 分鐘內唔上網、唔重讀 Widget，但仍然用 cache 重排通知同同步 Live Activity。
+    /// 如果期間跨過更份邊界，`tick` 會要求即時補跑；已有刷新跑緊就等佢完成，唔再排多一輪。
+    @MainActor
+    private func handleForegroundReturn(now: Date) {
+        guard wentToBackground else {
+            tick(now: now)   // 通知遮罩／app switcher 返嚟：只檢查事件邊界
+            return
+        }
+        wentToBackground = false
+        guard !refreshing else { return }
+        if RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: RefreshQueue.lastRefreshAttemptAt(), now: now) {
+            requestRefresh(mustRefresh: true)
+        } else if !tick(now: now) {
+            Task { @MainActor in await self.model.rescheduleHandover() }
         }
     }
 
@@ -97,7 +109,7 @@ struct ContentView: View {
 
     /// 串行化刷新：已經有一輪跑緊就只記低「又要跑一次」，等佢完咗補跑；冇人跑就即刻開一輪。
     /// 決定本身喺 `RefreshQueue.accept`／`followUp`（純邏輯、有測試），呢度只寫 `@State`。
-    /// - `mustRefresh: true`（deep link、返前景、跨過事件邊界、設定 debounce 完）：跑緊嗰輪唔可以吞咗呢次，
+    /// - `mustRefresh: true`（deep link、節流後嘅返前景、跨過事件邊界、設定 debounce 完）：跑緊嗰輪唔可以吞咗呢次，
     ///   要排隊補跑，即每次呢類觸發最終都做得到一次。
     /// - `mustRefresh: false`（冷啟、低耗電模式改變）：有輪跑緊就當佢已經包底，唔使重複打網。
     @MainActor
@@ -120,8 +132,9 @@ struct ContentView: View {
             // 輪開始時嘅名單快照：跑完重排之前先 latch，先至知有冇邊界喺呢期間跨過咗
             let armed = boundaries
             if await model.refresh() {
-                reloadWidgets()
                 let now = Date()
+                RefreshQueue.recordRefreshAttempt(at: now)
+                reloadWidgets()
                 // 啱啱攞到新更表：即刻照新資料排好事件邊界，唔使再等多一個 tick。
                 // 注意重排只收**未來**事件：剛好喺呢輪跑緊嗰時跨過咗嗰個會被剔除，
                 // 所以上面先 latch `overshot`，下面照佢補跑一輪，唔讓呢次跨過永久丟失。
@@ -170,8 +183,9 @@ struct ContentView: View {
     /// 名單每個 tick 都照最新 `model.entry` 重新排，所以換日、改更表都跟得到；
     /// 只有名單真係變咗先寫 `@State`，唔會造成無窮 View 更新。
     /// 清名單之前有冇嘢已經跨過、返嚟要不要補跑，呢啲決定喺 `RefreshQueue.tick`（有測試），呢度只落 `@State`。
+    @discardableResult
     @MainActor
-    private func tick(now: Date) {
+    private func tick(now: Date) -> Bool {
         switch RefreshQueue.tick(
             dataTab: tab == .data, active: scenePhase == .active,
             boundaries: boundaries, missed: missedCross, now: now
@@ -179,15 +193,18 @@ struct ContentView: View {
         case .pause(let missed):
             missedCross = missed
             if !boundaries.isEmpty { boundaries = [] }
+            return false
         case .catchUp:
             // 之前喺其他分頁／唔喺前景跨過咗：補跑一次。名單由補跑嗰輪照最新資料重排，
             // 所以呢度清咗 latch 就唔會循環補跑。
             missedCross = false
             requestRefresh(mustRefresh: true)
+            return true
         case .rearm(let crossed):
             let next = Self.eventBoundaries(from: model.entry, now: now)
             if next != boundaries { boundaries = next }
             if crossed { requestRefresh(mustRefresh: true) }
+            return crossed
         }
     }
 

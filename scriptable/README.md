@@ -46,7 +46,7 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 2. **iCloud 同步**：由 iCloud／File Provider 決定；app 冇提供同步完成通知，另一部裝置可能仍未見到新檔。
 3. **Scriptable Widget 實際刷新**：要 extension 真係執行同重新渲染。app 只直接 reload 原生 Overview／Info timeline，唔保證 Scriptable 何時更新。
 
-有 folder 授權時，Swift `WidgetBackgroundRefresh` 會以 30 分鐘作為 `BGAppRefreshTaskRequest.earliestBeginDate`；Scriptable `refreshAfterDate` 亦以 30 分鐘為一般最早間隔，午夜／01:00 邊界會提前。兩者都**唔保證固定間隔**：系統 reload 預算、低耗電、背景排程、iCloud 下載同 extension 啟動都會影響實際時間。
+有 folder 授權時，Swift `WidgetBackgroundRefresh` 會以 60 分鐘作為 `BGAppRefreshTaskRequest.earliestBeginDate`；Scriptable `refreshAfterDate` 亦以 60 分鐘為一般最早間隔，午夜／01:00 邊界會提前。app 背景返前景另有 30 分鐘網絡刷新節流，但通知同 Live Activity 仍會用現有資料更新；冷啟、deep link、手動更新同更份邊界保持即時。兩者都**唔保證固定間隔**：系統 reload 預算、低耗電、背景排程、iCloud 下載同 extension 啟動都會影響實際時間。
 
 ## 有效資料、last-good cache 與新鮮度
 
@@ -108,7 +108,7 @@ courts: { listDate, updatedAt, items }
 `i-widget.js` 開頭 `CONFIG`：
 
 - `showBrightness`、`showDayProgress`：只影響 `clock` 大尺寸。
-- `reloadMinutes`：一般最早 reload 間隔，預設 30 分鐘；午夜／01:00 邊界會提前。
+- `reloadMinutes`：一般最早 reload 間隔，預設 60 分鐘；午夜／01:00 正確性邊界仍會提前。
 - `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽；`previewFamily` 可設 `extraLargePortrait`。
 - `transparentBackground`：設 `true` 可預設透明背景；仍受 iOS／iPadOS 27.2+ 同非鎖屏限制。widget parameter `background=transparent` 亦可個別開啟。
 - `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge` 會顯示「更新」鈕。按鈕只刷新 Scriptable widget，唔保證 app 重新匯出或 iCloud 已同步；呢個互動範圍優先於 containing stack 嘅 URL。

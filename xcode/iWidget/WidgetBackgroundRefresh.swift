@@ -14,7 +14,7 @@ enum WidgetBackgroundRefresh {
     static func scheduleNext() {
         guard (try? ScriptableFolderStore().loadBookmark()) != nil else { return }
         let request = BGAppRefreshTaskRequest(identifier: identifier)
-        request.earliestBeginDate = Date().addingTimeInterval(30 * 60)
+        request.earliestBeginDate = Date().addingTimeInterval(RefreshQueue.routineRefreshInterval)
         try? BGTaskScheduler.shared.submit(request)
     }
 
@@ -50,6 +50,7 @@ enum WidgetBackgroundRefresh {
             work.cancel()
         }
         let success = await work.value
+        RefreshQueue.recordRefreshAttempt(at: Date())
         scheduleNext()
         task.setTaskCompleted(success: success)
     }
