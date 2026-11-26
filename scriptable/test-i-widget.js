@@ -23,23 +23,27 @@ class Font {
   static systemFont(size) { return new Font("system", size); }
   static boldSystemFont(size) { return new Font("bold", size); }
   static semiboldSystemFont(size) { return new Font("semibold", size); }
+  static heavyMonospacedSystemFont(size) { return new Font("heavyMono", size); }
 }
 class Size { constructor(width, height) { this.width = width; this.height = height; } }
 
 class Element {
   constructor(kind) { this.kind = kind; this.children = []; }
-  add(kind, init) { const el = new Element(kind); Object.assign(el, init); this.children.push(el); return el; }
+  add(kind, init) { const el = new (this.runtimeElementClass || Element)(kind); Object.assign(el, init); this.children.push(el); return el; }
   addText(string) { return this.add("text", { text: string }); }
   addDate(date) { return this.add("date", { date }); }
   addImage(image) { return this.add("image", { image }); }
   addSpacer(length) { return this.add("spacer", { length }); }
   addStack() { return this.add("stack", {}); }
+  addProgress(value, options) { return this.add("progress", { value, options }); }
+  addRefreshButton(title) { return this.add("refreshButton", { title }); }
   setPadding(...p) { this.padding = p; }
   layoutHorizontally() { this.layout = "h"; }
   layoutVertically() { this.layout = "v"; }
   centerAlignContent() { this.align = "center"; }
   centerAlignText() { this.textAlign = "center"; }
   leftAlignText() { this.textAlign = "left"; }
+  rightAlignText() { this.textAlign = "right"; }
   applyTimerStyle() { this.style = "timer"; }
   applyTimeStyle() { this.style = "time"; }
   applyFittingContentMode() { this.fitting = true; }
@@ -50,6 +54,7 @@ class ListWidget extends Element {
   async presentMedium() { this.presented = "medium"; }
   async presentLarge() { this.presented = "large"; }
   async presentExtraLarge() { this.presented = "extraLarge"; }
+  async presentExtraLargePortrait() { this.presented = "extraLargePortrait"; }
   async presentAccessoryInline() { this.presented = "accessoryInline"; }
   async presentAccessoryCircular() { this.presented = "accessoryCircular"; }
   async presentAccessoryRectangular() { this.presented = "accessoryRectangular"; }
@@ -190,6 +195,7 @@ async function run({
   family = "large", view = "clock", now = DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
   parameterValues = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
+  nativeProgress = true, refreshControls = true, portraitPreview = true,
 } = {}) {
   const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
   const dev = {
@@ -233,7 +239,22 @@ async function run({
       },
     };
   }
-  globals.ListWidget = class extends ListWidget { constructor() { super(); state.widgetObj = this; } };
+  globals.ListWidget = class extends ListWidget {
+    constructor() {
+      super();
+      state.widgetObj = this;
+      if (!nativeProgress) this.addProgress = undefined;
+      if (!refreshControls) this.addRefreshButton = undefined;
+      this.runtimeElementClass = class extends Element {
+        constructor(kind) {
+          super(kind);
+          if (!nativeProgress) this.addProgress = undefined;
+          if (!refreshControls) this.addRefreshButton = undefined;
+        }
+      };
+      if (!portraitPreview) this.presentExtraLargePortrait = undefined;
+    }
+  };
   const names = Object.keys(globals);
   const fn = new AsyncFunction(...names, SOURCE);
   await fn(...names.map((name) => globals[name]));
@@ -258,7 +279,7 @@ module.exports = { run, all, texts, fixture, FakeVolume };
 if (require.main === module) (async () => {
   console.log("\n【S】view × family");
   for (const view of ["today", "info", "court", "clock", "accessory"]) {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       await test(`${view}/${family} 有畫面、setWidget + complete`, async () => {
         const state = await run({ view, family, iCloud: JSON.stringify(fixture()) });
         ok(state.widget && state.completed);
@@ -462,13 +483,13 @@ if (require.main === module) (async () => {
     ok(!has(state.widget, "DCCJ 1/2026"));
   });
   await test("accessory view 任何 family 都有電量", async () => {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       const state = await run({ view: "accessory", family, iCloud: JSON.stringify(fixture()) });
       ok(texts(state.widget).some((t) => t.includes("75%")), family);
     }
   });
   await test("accessory 缺 JSON 仍有電量與設定提示", async () => {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       const state = await run({ view: "accessory", family });
       const output = texts(state.widget);
       ok(output.some((t) => t.includes("75%")), family);
@@ -681,11 +702,11 @@ if (require.main === module) (async () => {
     ok(!output.includes("已發生事件"));
   });
   await test("today 大尺寸補回 7 日更份、明日、假期、學校；medium 保持精簡", async () => {
-    for (const family of ["large", "extraLarge"]) {
+    for (const family of ["large", "extraLarge", "extraLargePortrait"]) {
       const output = texts((await run({ view: "today", family, iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
       for (const value of ["00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 日後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
       for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
-      equal(output.includes("本週 5 更"), family === "extraLarge", `${family}: week summary`);
+      equal(output.includes("本週 5 更"), family !== "large", `${family}: week summary`);
     }
     const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
     ok(!medium.includes("明日科學測驗"));
@@ -719,7 +740,7 @@ if (require.main === module) (async () => {
     data.duty.events = Array.from({ length: 200 }, (_, index) => dutyEvent(iso(15, index), { title: `事件${index}` }));
     data.weather.daily = Array.from({ length: 14 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, 10));
     data.school.today.items = Array.from({ length: 10 }, (_, index) => ({ title: `活動${index}`, start: iso(9, index), end: iso(10, index), allDay: false }));
-    for (const family of ["medium", "large", "extraLarge"]) {
+    for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const widget = (await run({ view: "today", family, iCloud: JSON.stringify(data) })).widget;
       const output = texts(widget).join("\n");
       equal(output.includes("事件199"), false, family);
@@ -727,7 +748,7 @@ if (require.main === module) (async () => {
       if (family !== "medium") {
         for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
         equal(output.includes("活動2"), true, `${family}: school visible`);
-        equal(output.includes("活動5"), family === "extraLarge", `${family}: school budget`);
+        equal(output.includes("活動5"), family !== "medium" && family !== "large", `${family}: school budget`);
         equal(output.includes("活動9"), false, `${family}: school cap`);
       }
     }
@@ -738,10 +759,78 @@ if (require.main === module) (async () => {
     data.system.battery.estimatedText = "約 5 小時";
     data.system.battery.rateText = "12.5% / 小時";
     data.system.memory.lines = [{ label: "記憶體", value: "3.1 / 8 GB" }, { label: "可用", value: "38%" }];
-    for (const family of ["medium", "large", "extraLarge"]) {
+    for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const output = texts((await run({ view: "info", family, iCloud: JSON.stringify(data) })).widget).join("\n");
       for (const value of ["雷暴警告", "約 5 小時", "12.5% / 小時", "3.1 / 8 GB", "今日降雨", "30%", "明日降雨", "70%", "HK$62,800", "正常", "行車大致正常"]) ok(output.includes(value), `${family}: ${value}`);
     }
+  });
+
+  console.log("\n【N】Scriptable 1.8 API 與相容 fallback");
+  await test("1.8 原生線性進度條使用 0–100、顏色、軌道同粗細", async () => {
+    const state = await run({ family: "large", device: { batteryLevel: () => 1.2 } });
+    const progress = all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear");
+    equal(progress.length, 3);
+    equal(progress[0].value, 100);
+    equal(progress[0].options.thickness, 6);
+    ok(progress[0].options.progressColor && progress[0].options.trackColor);
+  });
+  await test("1.8 鎖屏圓形電量用原生 circular progress；舊版退回符號", async () => {
+    const state = await run({ family: "accessoryCircular" });
+    const ring = all(state.widget, (e) => e.kind === "progress");
+    equal(ring.length, 1);
+    equal(ring[0].value, 75);
+    equal(ring[0].options.style, "circular");
+    equal(ring[0].options.thickness, 5);
+    equal(ring[0].children.filter((e) => e.kind === "text" && e.text === "75%").length, 1);
+    const legacy = await run({ family: "accessoryCircular", nativeProgress: false });
+    equal(all(legacy.widget, (e) => e.kind === "progress").length, 0);
+    ok(all(legacy.widget, (e) => e.kind === "image").some((e) => e.image.symbol === "battery.75percent"));
+  });
+  await test("透明背景只喺 iOS/iPadOS 27.2+ 同非鎖屏啟用", async () => {
+    for (const [systemName, systemVersion, family, expected] of [
+      ["iOS", "27.2", "large", true], ["iOS", "27.2.1", "small", true],
+      ["iPadOS", "27.2", "extraLargePortrait", true], ["iOS", "27.1.9", "large", false],
+      ["iOS", "26.9", "large", false], ["iOS", "27.2", "accessoryCircular", false],
+    ]) {
+      const state = await run({ family, device: { systemName: () => systemName, systemVersion: () => systemVersion }, parameterValues: { view: "today", background: "transparent" }, iCloud: JSON.stringify(fixture()) });
+      equal(state.widget.backgroundStyle, expected ? "transparent" : "default", `${systemName} ${systemVersion}/${family}`);
+      ok(state.widget.backgroundColor);
+    }
+    const defaultState = await run({ family: "large" });
+    equal(defaultState.widget.backgroundStyle, "default");
+    ok(defaultState.widget.backgroundColor);
+  });
+  await test("更新鈕只用喺支援互動嘅 Home Screen family，保留 URL 與舊版 fallback", async () => {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryRectangular"]) {
+      const state = await run({ view: "info", family, iCloud: JSON.stringify(fixture()) });
+      const buttons = all(state.widget, (e) => e.kind === "refreshButton");
+      const supported = ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family);
+      equal(buttons.length, supported ? 1 : 0, family);
+      if (supported) equal(buttons[0].title, "更新");
+      equal(state.widget.url, "iwidget://info");
+    }
+    const oldOS = await run({ view: "info", device: { systemVersion: () => "16.9" }, iCloud: JSON.stringify(fixture()) });
+    equal(all(oldOS.widget, (e) => e.kind === "refreshButton").length, 0);
+    const legacy = await run({ view: "info", refreshControls: false, iCloud: JSON.stringify(fixture()) });
+    equal(all(legacy.widget, (e) => e.kind === "refreshButton").length, 0);
+    equal(legacy.widget.url, "iwidget://info");
+  });
+  await test("extraLargePortrait 有完整 today 內容並用新預覽 API，缺少時退回 extraLarge", async () => {
+    const data = planningFixture();
+    const preview = await run({ view: "today", family: "extraLargePortrait", runsInWidget: false, iCloud: JSON.stringify(data) });
+    equal(preview.widgetObj.presented, "extraLargePortrait");
+    const output = texts(preview.widgetObj).join("\n");
+    for (const value of ["00158 屯門", "本週 5 更", "明日科學測驗", "重陽節"]) ok(output.includes(value), value);
+    const legacy = await run({ family: "extraLargePortrait", runsInWidget: false, portraitPreview: false, iCloud: JSON.stringify(data) });
+    equal(legacy.widgetObj.presented, "extraLarge");
+  });
+  await test("主要更份時間用 heavy monospaced font，倒數右對齊", async () => {
+    const state = await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) });
+    const times = all(state.widget, (e) => e.kind === "text" && e.text === "15:05–23:15")[0];
+    equal(times.font.name, "heavyMono");
+    const countdown = all(state.widget, (e) => e.kind === "text" && e.text.startsWith("返工 "))[0];
+    equal(countdown.textAlign, "right");
+    equal(countdown.minimumScaleFactor, 0.8);
   });
 
   console.log("\n【C】時鐘與 reload 邊界");
@@ -771,11 +860,21 @@ if (require.main === module) (async () => {
   equal(cards.length, 4);
   ok(cards.every((c) => c.backgroundColor && c.padding && c.padding[1] === 12));
   ok(cards.every((c) => c.children.some((k) => k.kind === "spacer")));
-  equal(all(state.widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 3);
+  equal(all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear").length, 3);
+  equal(all(state.widget, (e) => e.kind === "progress")[0].value, 75);
+  ok(all(state.widget, (e) => e.kind === "progress").every((p) => p.options.thickness === 6 && p.options.trackColor));
   ok(has(state.widget, "75%"));
   ok(has(state.widget, "iOS 27.0.1"));
-  const fills = all(state.widget, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 70);
-  ok(fills.some((f) => f.size.width === Math.round(70 * 0.75)));
+  const mediumProgress = (await run({ family: "medium" })).widget;
+  const mediumBar = all(mediumProgress, (e) => e.kind === "progress")[0];
+  equal(mediumBar.size.width, 70);
+  equal(mediumBar.size.height, 6);
+  const legacy = (await run({ family: "large", nativeProgress: false })).widget;
+  equal(all(legacy, (e) => e.kind === "progress").length, 0);
+  equal(all((await run({ family: "medium", nativeProgress: false })).widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 1);
+  equal(all(legacy, (e) => e.kind === "stack" && e.size && e.size.width === 120).length, 3);
+  const legacyFills = all(legacy, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 120);
+  ok(legacyFills.some((f) => f.size.width === Math.round(120 * 0.75)));
 
   console.log("\n【D】缺資料／Device 錯誤／符號缺失");
   state = await run({ family: "large", device: { batteryLevel: () => -1 } });

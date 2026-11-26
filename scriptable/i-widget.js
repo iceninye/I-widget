@@ -9,6 +9,8 @@ const CONFIG = {
   reloadMinutes: 30,
   previewFamily: "large",
   previewView: "today",
+  transparentBackground: false,
+  showRefreshButton: true,
   maxPayloadBytes: 512 * 1024,
   cacheName: "i-widget-last-good.json",
 };
@@ -664,12 +666,23 @@ function symbol(parent, name, color, size) {
 }
 
 function bar(parent, fraction, color, width, height) {
+  const clamped = Math.max(0, Math.min(1, fraction || 0));
+  // Scriptable 1.8 原生進度條可用返回 stack 設定尺寸；舊版先退回幾何色條。
+  if (typeof parent.addProgress === "function") {
+    const progress = parent.addProgress(clamped * 100, {
+      style: "linear",
+      progressColor: color,
+      trackColor: C.track,
+      thickness: height,
+    });
+    progress.size = new Size(width, height);
+    return progress;
+  }
   const track = parent.addStack();
   track.layoutHorizontally();
   track.size = new Size(width, height);
   track.cornerRadius = height / 2;
   track.backgroundColor = C.track;
-  const clamped = Math.max(0, Math.min(1, fraction || 0));
   if (clamped > 0) {
     const fill = track.addStack();
     fill.size = new Size(Math.max(height, Math.round(width * clamped)), height);
@@ -678,6 +691,36 @@ function bar(parent, fraction, color, width, height) {
   }
   track.addSpacer();
   return track;
+}
+
+function isExtraLargeFamily(family) {
+  return family === "extraLarge" || family === "extraLargePortrait";
+}
+
+function systemVersionAtLeast(major, minor = 0) {
+  const version = safe(() => Device.systemVersion(), "");
+  const match = typeof version === "string" && version.match(/^(\d+)(?:\.(\d+))?/);
+  if (!match) return false;
+  const actualMajor = Number(match[1]);
+  const actualMinor = Number(match[2] || 0);
+  return actualMajor > major || (actualMajor === major && actualMinor >= minor);
+}
+
+function widgetParameters() {
+  return safe(() => config.parameterValues, null) || safe(() => args && args.parameterValues, null) || {};
+}
+
+function supportsRefreshButton(family) {
+  return CONFIG.showRefreshButton
+    && ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family)
+    && systemVersionAtLeast(17);
+}
+
+function addRefreshControl(parent, family) {
+  if (supportsRefreshButton(family) && typeof parent.addRefreshButton === "function") {
+    parent.addSpacer(6);
+    parent.addRefreshButton("更新");
+  }
 }
 
 function card(parent, { icon, tint, title, value, valueColor, fraction, barColor }) {
@@ -691,7 +734,7 @@ function card(parent, { icon, tint, title, value, valueColor, fraction, barColor
   text(row, title, 14, C.secondary, false);
   row.addSpacer();
   if (fraction !== null && fraction !== undefined) {
-    bar(row, fraction, barColor || tint, 70, 6);
+    bar(row, fraction, barColor || tint, 120, 6);
     row.addSpacer(8);
   }
   text(row, value, 14, valueColor || C.label, true);
@@ -738,6 +781,7 @@ function viewHeading(parent, view, snapshot, family) {
   text(row, names[view], family === "small" ? 15 : 18, C.label, true);
   row.addSpacer();
   text(row, freshnessText(view, snapshot), family === "small" ? 10 : 11, C.secondary, false);
+  addRefreshControl(row, family);
   return row;
 }
 
@@ -772,7 +816,7 @@ function sectionLabel(parent, title) {
 }
 
 function rowBudget(family) {
-  return family === "small" ? 4 : family === "medium" ? 6 : family === "extraLarge" ? 11 : 8;
+  return family === "small" ? 4 : family === "medium" ? 6 : isExtraLargeFamily(family) ? 11 : 8;
 }
 
 // ---- clock view：原有小／中／大／鎖屏版面 -----------------------------
@@ -844,8 +888,18 @@ function buildAccessory(w, family, device) {
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    symbol(stack, batterySymbol(device.level, device.charging), C.label, 14);
-    const t = stack.addText(pct(device.level));
+    let ring = stack;
+    if (device.level !== null && typeof stack.addProgress === "function") {
+      ring = stack.addProgress(device.level * 100, {
+        style: "circular",
+        progressColor: batteryColor(device.level, device.charging),
+        trackColor: C.track,
+        thickness: 5,
+      });
+    } else {
+      symbol(stack, batterySymbol(device.level, device.charging), C.label, 14);
+    }
+    const t = ring.addText(pct(device.level));
     t.font = Font.boldSystemFont(13);
     t.centerAlignText();
   } else {
@@ -978,13 +1032,16 @@ function todayDutyCard(w, data, family, snapshot) {
       const timeRow = box.addStack();
       timeRow.layoutHorizontally();
       timeRow.centerAlignContent();
-      text(timeRow, duty.times, family === "medium" ? 23 : 26, C.label, true);
+      const timeSize = family === "medium" ? 23 : 26;
+      const times = text(timeRow, duty.times, timeSize, C.label, true);
+      times.font = safe(() => Font.heavyMonospacedSystemFont(timeSize), times.font);
       timeRow.addSpacer();
       const countdown = multilineText(timeRow, dutyCountdown(duty), 11, C.secondary, true, 2);
+      safe(() => countdown.rightAlignText());
     } else {
       text(box, duty.code || "上落班時間未有資料", family === "medium" ? 18 : 22, tint, true);
     }
-    shiftBar(box, duty, family === "medium" ? 250 : family === "extraLarge" ? 350 : 310);
+    shiftBar(box, duty, family === "medium" ? 250 : isExtraLargeFamily(family) ? 350 : 310);
     if (duty.route || duty.hoursText) {
       const detail = box.addStack();
       detail.layoutHorizontally();
@@ -993,7 +1050,7 @@ function todayDutyCard(w, data, family, snapshot) {
       detail.addSpacer();
       text(detail, duty.hoursText || "", 11, C.secondary, false);
     }
-    if (family === "extraLarge" && duty.hint) text(box, duty.hint, 10, C.orange, false);
+    if (isExtraLargeFamily(family) && duty.hint) text(box, duty.hint, 10, C.orange, false);
   }
 
   const weather = data.weather.available ? data.weather.today : null;
@@ -1099,7 +1156,7 @@ function todayWeekStrip(w, data) {
   return true;
 }
 
-function todayNextEvent(w, data) {
+function todayNextEvent(w, data, family) {
   const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
   if (!event) return false;
@@ -1108,7 +1165,7 @@ function todayNextEvent(w, data) {
   row.centerAlignContent();
   if (symbol(row, "clock", C.accent, 12)) row.addSpacer(4);
   text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
-  row.addSpacer();
+  addRefreshControl(row, family);
   const detail = [event.place, event.detail].filter(Boolean).join(" · ");
   if (detail) text(w, detail, 11, C.secondary, false);
   return true;
@@ -1153,7 +1210,7 @@ function todaySchool(w, data, family) {
   if (!rows.length) {
     text(w, failure ? "學校日曆暫時讀唔到。" : "今明兩日冇學校活動。", 12, C.secondary, false);
   } else {
-    const limit = family === "extraLarge" ? 6 : 3;
+    const limit = isExtraLargeFamily(family) ? 6 : 3;
     rows.slice(0, limit).forEach(({ prefix, item }) => {
       const row = w.addStack();
       row.layoutHorizontally();
@@ -1218,8 +1275,8 @@ function buildToday(w, family, snapshot) {
   w.addSpacer(6);
   todayWeekStrip(w, data);
   w.addSpacer(5);
-  todayNextEvent(w, data);
-  if (family === "extraLarge" && data.duty.weekText) {
+  todayNextEvent(w, data, family);
+  if (isExtraLargeFamily(family) && data.duty.weekText) {
     text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
   }
   w.addSpacer(5);
@@ -1282,7 +1339,7 @@ function buildInfo(w, family, snapshot) {
     lineRow(w, "續航估算", snapshot.system.battery.estimatedText || MISSING);
     lineRow(w, "耗電速率", snapshot.system.battery.rateText || MISSING);
     if (!data.system.memory.lines.length) text(w, MISSING, 12, C.secondary, false);
-    for (const line of data.system.memory.lines.slice(0, family === "extraLarge" ? 6 : 3)) lineRow(w, line.label, line.value);
+    for (const line of data.system.memory.lines.slice(0, isExtraLargeFamily(family) ? 6 : 3)) lineRow(w, line.label, line.value);
   });
   add(() => {
     sectionLabel(w, "天氣警告");
@@ -1291,8 +1348,8 @@ function buildInfo(w, family, snapshot) {
   add(() => {
     sectionLabel(w, "環境");
     let shown = 0;
-    const maxSections = family === "extraLarge" ? 20 : 5;
-    const maxLines = family === "medium" ? 4 : family === "extraLarge" ? 18 : 8;
+    const maxSections = isExtraLargeFamily(family) ? 20 : 5;
+    const maxLines = family === "medium" ? 4 : isExtraLargeFamily(family) ? 18 : 8;
     for (const section of data.environment.sections.slice(0, maxSections)) {
       if (shown >= maxLines) break;
       text(w, section.title, 11, C.accent, true);
@@ -1309,7 +1366,7 @@ function buildInfo(w, family, snapshot) {
     if (status) text(w, status.text, 12, status.color, true);
     if (!status || status.cached) {
       if (!data.vps.lines.length) text(w, MISSING, 12, C.secondary, false);
-      for (const line of data.vps.lines.slice(0, family === "extraLarge" ? 8 : 2)) lineRow(w, line.label, line.value);
+      for (const line of data.vps.lines.slice(0, isExtraLargeFamily(family) ? 8 : 2)) lineRow(w, line.label, line.value);
     }
   });
   add(() => {
@@ -1368,7 +1425,7 @@ function buildCourt(w, family, snapshot) {
     return;
   }
   const minute = NOW.getHours() * 60 + NOW.getMinutes();
-  const maxCases = family === "small" ? 2 : family === "medium" ? 3 : family === "extraLarge" ? 8 : 5;
+  const maxCases = family === "small" ? 2 : family === "medium" ? 3 : isExtraLargeFamily(family) ? 8 : 5;
   let shown = 0;
   for (const { day, future } of selected) {
     if (shown >= maxCases) break;
@@ -1496,6 +1553,14 @@ function widgetURL(view, snapshot) {
 function build(family, view, snapshot) {
   const device = readDevice();
   const w = new ListWidget();
+  const wantsTransparent = widgetParameters().background === "transparent" || CONFIG.transparentBackground;
+  // 透明 Home Screen 背景需要 iOS/iPadOS 27.2；鎖屏與舊系統維持不透明底色。
+  const transparent = wantsTransparent
+    && typeof w.addProgress === "function"
+    && !family.startsWith("accessory")
+    && ["iOS", "iPadOS"].includes(safe(() => Device.systemName(), ""))
+    && systemVersionAtLeast(27, 2);
+  if (typeof w.addProgress === "function") w.backgroundStyle = transparent ? "transparent" : "default";
   w.backgroundColor = C.bg;
   w.url = widgetURL(view, snapshot);
   w.spacing = 0;
@@ -1521,7 +1586,7 @@ function build(family, view, snapshot) {
 }
 
 function selectedView() {
-  const parameters = safe(() => config.parameterValues, null) || safe(() => args && args.parameterValues, null);
+  const parameters = widgetParameters();
   const requested = safe(() => parameters.view, CONFIG.previewView);
   return VIEWS.includes(requested) ? requested : CONFIG.previewView;
 }
@@ -1543,10 +1608,11 @@ if (config.runsInWidget) {
       await safeAsync(() => alert.presentAlert(), null);
     }
   }
-  const present = {
-    small: "presentSmall", medium: "presentMedium", large: "presentLarge", extraLarge: "presentExtraLarge",
+  let present = {
+    small: "presentSmall", medium: "presentMedium", large: "presentLarge", extraLarge: "presentExtraLarge", extraLargePortrait: "presentExtraLargePortrait",
     accessoryInline: "presentAccessoryInline", accessoryCircular: "presentAccessoryCircular", accessoryRectangular: "presentAccessoryRectangular",
   }[family] || "presentLarge";
+  if (family === "extraLargePortrait" && typeof widget.presentExtraLargePortrait !== "function") present = "presentExtraLarge";
   await widget[present]();
 }
 Script.complete();

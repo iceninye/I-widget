@@ -18,6 +18,7 @@
 4. 喺同一頁揀「Scriptable 主題」：預設、海藍、日落、森林、紫羅蘭或單色，再按「立即寫入 JSON」。主題只影響 Scriptable；原生 Widget 調色風格獨立。
 5. 喺 Scriptable 新增 script（例如 `i-widget`），將 [`i-widget.js`](i-widget.js) 全文貼入。更新 script 目前要手動更新，冇自動 loader。
 6. Home Screen 長按 → **+** → **Scriptable** → 編輯 Widget：`Script` 揀 `i-widget`，按需要加 `view` parameter。鎖屏亦可加入 Scriptable 行內／圓形／長方形元件。
+7. 可選：Scriptable 1.8 加 widget parameter `background=transparent`，只喺 iOS／iPadOS 27.2 或更新版本嘅 Home Screen 透出桌布；較舊系統、鎖屏或冇 parameter 時維持不透明背景。
 
 Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩者要分開確認。iOS 首次要求存取 iCloud Drive 時請按允許。Folder 路徑以 `FileManager.iCloud().documentsDirectory()` 為準，唔寫死個人路徑。
 
@@ -35,7 +36,7 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 | `clock` | 小／中／大時鐘、日期、電量；鎖屏 family 用日期／時間／電量 |
 | `accessory` | 電量為主的鎖屏式版面；普通 family 顯示電量卡 |
 
-五個 view 都支援 `small`、`medium`、`large`、`extraLarge` 同三個 accessory family；較小尺寸會減少內容。冇 parameter 時用 `CONFIG.previewView`（出廠 `today`）；未知值亦 fallback 到同一個設定。
+五個 view 都支援 `small`、`medium`、`large`、`extraLarge` 同三個 accessory family；較小尺寸會減少內容。Scriptable app 直接預覽另支援 `previewFamily: "extraLargePortrait"`，呼叫 `presentExtraLargePortrait()`；舊版冇呢個方法時退回 `presentExtraLarge()`。冇 parameter 時用 `CONFIG.previewView`（出廠 `today`）；未知值亦 fallback 到同一個設定。
 
 點選深度連結：`today` → `iwidget://duty`，`info` → `iwidget://info`，`court` → `iwidget://court?code=…`；個別案件帶 `case`／`t` query。`clock`／`accessory` 開啟 `iwidget://duty`。
 
@@ -108,8 +109,17 @@ courts: { listDate, updatedAt, items }
 
 - `showBrightness`、`showDayProgress`：只影響 `clock` 大尺寸。
 - `reloadMinutes`：一般最早 reload 間隔，預設 30 分鐘；午夜／01:00 邊界會提前。
-- `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽。
+- `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽；`previewFamily` 可設 `extraLargePortrait`。
+- `transparentBackground`：設 `true` 可預設透明背景；仍受 iOS／iPadOS 27.2+ 同非鎖屏限制。widget parameter `background=transparent` 亦可個別開啟。
+- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge` 會顯示「更新」鈕。按鈕只刷新 Scriptable widget，唔保證 app 重新匯出或 iCloud 已同步；呢個互動範圍優先於 containing stack 嘅 URL。
 - `maxPayloadBytes`、`cacheName`：512 KiB 上限同 `i-widget-last-good.json`。
+
+## Scriptable 1.8 增強
+
+- `clock` 嘅電量、亮度、今日進度同鎖屏圓電量改用原生 `addProgress()`；更份時間條仍保留能精確表示返工至放工區段嘅幾何色條。
+- 原生 circular progress 返回 stack 直接承载中間電量文字，唔另加一行，避免鎖屏空間不足。
+- 透明背景、更新鈕同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 或 `presentExtraLargePortrait` 時安全略過／fallback。
+- 主要更份時間用 `Font.heavyMonospacedSystemFont`，倒數用 `WidgetText.rightAlignText()`；API 不存在時仍有原本字型同對齊 fallback。
 
 ## 測試與真機驗收
 
@@ -121,7 +131,7 @@ python3 test_widget.py
 python3 test_launcher.py
 ```
 
-Node 測試用 fake Scriptable environment，覆蓋 view × family、schema／大小／日期驗證、iCloud 損壞／離線、last-good cache、freshness、法院 20 分鐘邊界、缺資料提示、時鐘邊界同 Device 擲錯。Swift 單元測試同 `xcodegen generate`、`xcodebuild test` 指令見 [`../xcode/README.md`](../xcode/README.md)。
+Node 測試用 fake Scriptable environment，覆蓋 view × family、schema／大小／日期驗證、iCloud 損壞／離線、last-good cache、freshness、法院 20 分鐘邊界、缺資料提示、時鐘邊界同 Device 擲錯；亦覆蓋 1.8 原生進度條、透明背景 OS gate、更新鈕、特大直向預覽、重字型／右對齊同舊 API fallback。Swift 單元測試同 `xcodegen generate`、`xcodebuild test` 指令見 [`../xcode/README.md`](../xcode/README.md)。
 
 自動測試**唔等於真機驗收**。完整「UUID A → app 重啟寫 B」、「飛行模式 cache」、「三項獨立結論」、「原生通知／Live Activity 不受 bridge 影響」清單，見 [`../xcode/README.md`](../xcode/README.md)「真機驗收清單（尚未執行）」。Scriptable stack 對齊、字級、accessory 內容、iCloud bookmark／extension 權限同實際 reload 仍未在真機確認。
 
