@@ -26,6 +26,8 @@ class Font {
   static heavyMonospacedSystemFont(size) { return new Font("heavyMono", size); }
 }
 class Size { constructor(width, height) { this.width = width; this.height = height; } }
+class Point { constructor(x, y) { this.x = x; this.y = y; } }
+class LinearGradient { constructor() { this.colors = []; this.locations = []; } }
 
 class Element {
   constructor(kind) { this.kind = kind; this.children = []; }
@@ -120,7 +122,7 @@ function datedWeather(day, codeText, rainChance) {
 function planningFixture() {
   const data = fixture();
   data.duty.events = [dutyEvent(iso(13, 0), { title: "已發生事件" }), dutyEvent(iso(15, 30))];
-  data.duty.weekText = "本週 5 更";
+  data.duty.weekText = "5 更";
   data.duty.tomorrow = { ...data.duty.today, date: "20261024", code: "1101158", title: "00158 屯門", times: "06:00–14:00" };
   data.duty.nextHoliday = { title: "重陽節", rangeText: "10月26日", daysAway: 3 };
   data.school.tomorrow = { cycle: ["Day 5"], items: [{ title: "明日科學測驗", start: iso(9, 0, 24), end: iso(10, 0, 24), allDay: false }] };
@@ -166,7 +168,7 @@ function fixture(now = DEFAULT_NOW) {
         { label: "返工 15:05", code: 3, symbol: "cloud.fill", tempText: "28°", rainChance: 20 },
         { label: "放工 23:15", code: 61, symbol: "cloud.rain.fill", tempText: "25°", rainChance: 40 },
       ],
-      weekText: "本週 5 更", nextHoliday: null, detailLines: [],
+      weekText: "5 更", nextHoliday: null, detailLines: [],
     },
     school: {
       failed: [], today: { cycle: ["Day 4"], items: [{ title: "中三家長會", start: iso(18, 0), end: iso(19, 0), allDay: false }] },
@@ -208,7 +210,7 @@ async function run({
     static dynamic() { return new RuntimeColor("#dynamic", 1); }
   } : Color;
   const globals = {
-    Color: RuntimeColor, Font, Size, ListWidget,
+    Color: RuntimeColor, Font, Size, Point, LinearGradient, ListWidget,
     SFSymbol: { named: (name) => (noSymbols ? null : { image: { symbol: name } }) },
     Device: dev,
     config: { widgetFamily: family === "app" ? null : family, runsInWidget, parameterValues },
@@ -413,14 +415,14 @@ if (require.main === module) (async () => {
     data.freshness.today = iso(1, 2);
     data.freshness.info = iso(3, 4);
     data.freshness.court = iso(5, 6);
-    const state = await run({ view: "today", iCloud: JSON.stringify(data) });
+    const state = await run({ view: "today", family: "small", iCloud: JSON.stringify(data) });
     ok(has(state.widget, "更新於 01:02"));
     ok(!texts(state.widget).includes("更新於 14:05"));
   });
   await test("freshness null 顯示未有資料", async () => {
     const data = fixture();
     data.freshness.today = null;
-    const state = await run({ view: "today", iCloud: JSON.stringify(data) });
+    const state = await run({ view: "today", family: "small", iCloud: JSON.stringify(data) });
     ok(has(state.widget, "未有資料"));
   });
   await test("court freshness 優先；null 先 courts.updatedAt", async () => {
@@ -706,7 +708,7 @@ if (require.main === module) (async () => {
       const output = texts((await run({ view: "today", family, iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
       for (const value of ["00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 日後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
       for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
-      equal(output.includes("本週 5 更"), family !== "large", `${family}: week summary`);
+      equal(output.includes("本週 5 更"), true, `${family}: week summary`);
     }
     const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
     ok(!medium.includes("明日科學測驗"));
@@ -806,7 +808,7 @@ if (require.main === module) (async () => {
       const buttons = all(state.widget, (e) => e.kind === "refreshButton");
       const supported = ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family);
       equal(buttons.length, supported ? 1 : 0, family);
-      if (supported) equal(buttons[0].title, "更新");
+      if (supported) equal(buttons[0].title, "重讀");
       equal(state.widget.url, "iwidget://info");
     }
     const oldOS = await run({ view: "info", device: { systemVersion: () => "16.9" }, iCloud: JSON.stringify(fixture()) });
@@ -831,6 +833,59 @@ if (require.main === module) (async () => {
     const countdown = all(state.widget, (e) => e.kind === "text" && e.text.startsWith("返工 "))[0];
     equal(countdown.textAlign, "right");
     equal(countdown.minimumScaleFactor, 0.8);
+  });
+
+  await test("今日卡有左側色調漸層、進度條唔溢出，七日格等寬且首格唔省略", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const card = all(widget, (e) => e.kind === "stack" && e.cornerRadius === 18)[0];
+    ok(card.backgroundGradient);
+    equal(card.backgroundGradient.colors.length, 3);
+    equal(card.backgroundGradient.locations, [0, 0.015, 0.07]);
+    equal([card.backgroundGradient.startPoint.x, card.backgroundGradient.endPoint.x], [0, 1]);
+    ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 292 && e.size.height === 7).length >= 1);
+    const cells = all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 42 && e.size.height === 0);
+    equal(cells.length, 7);
+    for (const cell of cells) {
+      equal(cell.children.filter((e) => e.kind === "stack" && e.size && e.size.width === 38 && e.size.height === 18).length, 1);
+    }
+    equal(texts(widget).filter((value) => value === "死早").length, 4);
+    ok(!texts(widget).includes("..."));
+    ok(!texts(widget).includes("…"));
+  });
+  await test("放工後倒數改為下一更返工時間", async () => {
+    const data = planningFixture();
+    data.duty.today.offAt = iso(14, 0);
+    data.duty.tomorrow.onAt = iso(6, 15, 24);
+    const output = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("下一更 14 小時 15 分"), output);
+    ok(!output.includes("已放工"));
+
+    data.duty.tomorrow = null;
+    data.duty.events.push(dutyEvent(iso(6, 15, 24), { action: "返工" }));
+    const fromEvents = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(fromEvents.includes("下一更 14 小時 15 分"), fromEvents);
+  });
+  await test("天氣新鮮度用天氣來源時間；超過六小時標示舊資料", async () => {
+    const data = planningFixture();
+    data.freshness.today = iso(13, 55);
+    data.freshness.weather = iso(1, 2);
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget;
+    const status = all(widget, (e) => e.kind === "text" && e.text === "天氣 01:02·舊")[0];
+    ok(status);
+    equal(status.textColor.light.hex, "#ff9500");
+    ok(!texts(widget).includes("更新於 13:55"));
+
+    data.freshness.weather = iso(8, 6);
+    const boundary = texts((await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(boundary.includes("天氣 08:06"), boundary);
+    ok(!boundary.includes("天氣 08:06·舊"), boundary);
+
+    data.freshness.weather = iso(22, 14, 22);
+    const yesterday = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 8, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(yesterday.includes("天氣 昨日22:14·舊"), yesterday);
+
+    const cached = texts((await run({ view: "today", family: "large", iCloud: "broken", cache: JSON.stringify(fixture()) })).widget).join("\n");
+    ok(cached.includes("天氣 11:40·快取"), cached);
   });
 
   console.log("\n【C】時鐘與 reload 邊界");

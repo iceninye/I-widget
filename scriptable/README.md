@@ -63,7 +63,7 @@ FileManager API 或整個 FileManager 缺失都會安全 fallback。正常呼叫
 
 - `generatedAt` 只表示 JSON 何時產生，**唔當資料 freshness**。
 - `today` 用 `freshness.today`；`info` 用 `freshness.info`；`court` 先用 `freshness.court`，`null` 時退回 `courts.updatedAt`。冇時間就顯示「未有資料」。
-- 用 cache 時保留 JSON 內原有 freshness，再加「快取」標記，唔假裝啱啱更新。`system.capturedAt`／`bootAt` 亦只反映快取收集時嘅狀態。
+- 用 cache 時保留 JSON 內原有 freshness，再加「快取」標記，唔假裝啱啱更新。`system.capturedAt`／`bootAt` 亦只反映快取收集時嘅狀態。`today` 大尺寸天氣行改用 `freshness.weather`（缺少時用 `weather.fetchedAt`），超過 6 小時會以橙色標示「舊」。
 - `warnings.available=false` 顯示「未有資料」，不可當成冇警告；`available=true` 而 `items=[]` 先係有效空資料，顯示「沒有警告」。合法空 array 本身唔係損壞。
 
 ## 法院語意
@@ -111,15 +111,16 @@ courts: { listDate, updatedAt, items }
 - `reloadMinutes`：一般最早 reload 間隔，預設 60 分鐘；午夜／01:00 正確性邊界仍會提前。
 - `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽；`previewFamily` 可設 `extraLargePortrait`。
 - `transparentBackground`：設 `true` 可預設透明背景；仍受 iOS／iPadOS 27.2+ 同非鎖屏限制。widget parameter `background=transparent` 亦可個別開啟。
-- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge` 會顯示「更新」鈕。按鈕只刷新 Scriptable widget，唔保證 app 重新匯出或 iCloud 已同步；呢個互動範圍優先於 containing stack 嘅 URL。
+- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge` 會顯示「重讀」鈕。按鈕只重新執行 Scriptable 同讀取現有 JSON／cache，**唔會令 app 重新上網或匯出**；呢個互動範圍優先於 containing stack 嘅 URL。
 - `maxPayloadBytes`、`cacheName`：512 KiB 上限同 `i-widget-last-good.json`。
 
 ## Scriptable 1.8 增強
 
 - `clock` 嘅電量、亮度、今日進度同鎖屏圓電量改用原生 `addProgress()`；更份時間條仍保留能精確表示返工至放工區段嘅幾何色條。
 - 原生 circular progress 返回 stack 直接承载中間電量文字，唔另加一行，避免鎖屏空間不足。
-- 透明背景、更新鈕同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 或 `presentExtraLargePortrait` 時安全略過／fallback。
+- 透明背景、重讀鈕同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 或 `presentExtraLargePortrait` 時安全略過／fallback。
 - 主要更份時間用 `Font.heavyMonospacedSystemFont`，倒數用 `WidgetText.rightAlignText()`；API 不存在時仍有原本字型同對齊 fallback。
+- 今日主卡以左至右漸層重現原生色條；七日格等寬，今日格唔會再被固定 28pt 寬度截成「…」。大尺寸補回本週更份摘要，放工後有明日更份或未來「返工」事件就顯示「下一更」倒數。
 
 ## 測試與真機驗收
 

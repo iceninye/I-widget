@@ -93,6 +93,17 @@ function dutyCardColor(tone) {
   return dyn(rgba(pair[0], 0.14), rgba(pair[1], 0.24));
 }
 
+function dutyCardGradient(tone) {
+  return safe(() => {
+    const gradient = new LinearGradient();
+    gradient.colors = [dutyColor(tone), dutyColor(tone), dutyCardColor(tone)];
+    gradient.locations = [0, 0.015, 0.07];
+    gradient.startPoint = new Point(0, 0);
+    gradient.endPoint = new Point(1, 0);
+    return gradient;
+  }, null);
+}
+
 const NOW = typeof IWIDGET_NOW !== "undefined" ? IWIDGET_NOW : new Date();
 const MISSING = "未有資料";
 
@@ -609,6 +620,25 @@ function freshnessText(view, snapshot) {
   return `更新於 ${sameDay ? hhmm(date) : `${date.getMonth() + 1}月${date.getDate()}日 ${hhmm(date)}`}${snapshot.source === "cache" ? " · 快取" : ""}`;
 }
 
+function weatherFreshness(snapshot) {
+  if (!snapshot) return { text: MISSING, stale: true };
+  const stamp = snapshot.parsedFreshness.weather ?? Date.parse(snapshot.data.weather.fetchedAt);
+  if (!Number.isFinite(stamp)) return { text: MISSING, stale: true };
+  const date = new Date(stamp);
+  const sameDay = date.toDateString() === NOW.toDateString();
+  const dayMs = 86400000;
+  const startOfToday = new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate()).getTime();
+  const age = Math.max(0, NOW.getTime() - stamp);
+  const stale = age > 6 * 60 * 60 * 1000;
+  const when = sameDay ? hhmm(date)
+    : stamp >= startOfToday - dayMs ? `昨日${hhmm(date)}`
+      : `${date.getMonth() + 1}/${date.getDate()} ${hhmm(date)}`;
+  return {
+    text: `天氣 ${when}${stale ? "·舊" : ""}${snapshot.source === "cache" ? "·快取" : ""}`,
+    stale,
+  };
+}
+
 // ---- 時鐘（保留原有行為）--------------------------------------------
 
 function midnightOf(now) { return new Date(now.getFullYear(), now.getMonth(), now.getDate()); }
@@ -719,7 +749,7 @@ function supportsRefreshButton(family) {
 function addRefreshControl(parent, family) {
   if (supportsRefreshButton(family) && typeof parent.addRefreshButton === "function") {
     parent.addSpacer(6);
-    parent.addRefreshButton("更新");
+    parent.addRefreshButton("重讀");
   }
 }
 
@@ -946,6 +976,11 @@ function dateFromCode(code) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function timestampValue(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+  return typeof value === "string" ? Date.parse(value) : NaN;
+}
+
 function dutyDateLabel(day) {
   const date = dateFromCode(day && day.date);
   if (!date) return "今日";
@@ -953,15 +988,21 @@ function dutyDateLabel(day) {
   return `${weekday} ${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function dutyCountdown(day) {
+function dutyCountdown(day, tomorrow, events) {
   if (!day) return "";
-  const on = day.onAt === null || day.onAt === undefined ? null : Date.parse(day.onAt);
-  const off = day.offAt === null || day.offAt === undefined ? null : Date.parse(day.offAt);
+  const on = timestampValue(day.onAt);
+  const off = timestampValue(day.offAt);
   let target = null;
   let label = "";
-  if (on !== null && Number.isFinite(on) && NOW < on) { target = on; label = "返工"; }
-  else if (off !== null && Number.isFinite(off) && NOW < off) { target = off; label = "放工"; }
-  else if (off !== null && Number.isFinite(off)) return "已放工";
+  if (Number.isFinite(on) && NOW < on) { target = on; label = "返工"; }
+  else if (Number.isFinite(off) && NOW < off) { target = off; label = "放工"; }
+  else if (Number.isFinite(off)) {
+    const starts = [tomorrow && tomorrow.onAt]
+      .concat((events || []).filter((item) => item.action && item.action.includes("返工")).map((item) => item.at));
+    const nextOn = starts.map(timestampValue).filter((value) => Number.isFinite(value) && NOW < value).sort((a, b) => a - b)[0];
+    if (nextOn !== undefined) { target = nextOn; label = "下一更"; }
+    else return "已放工";
+  }
   if (target === null) return "上落班時間未有資料";
   const totalMinutes = Math.max(0, Math.ceil((target - NOW) / 60000));
   const hours = Math.floor(totalMinutes / 60);
@@ -983,9 +1024,9 @@ function badge(parent, label, color = C.accent, size = 10) {
 
 function shiftBar(parent, day, width) {
   const start = dateFromCode(day.date);
-  const on = day.onAt === null || day.onAt === undefined ? null : Date.parse(day.onAt);
-  const off = day.offAt === null || day.offAt === undefined ? null : Date.parse(day.offAt);
-  if (!start || on === null || off === null || !Number.isFinite(on) || !Number.isFinite(off)) return;
+  const on = timestampValue(day.onAt);
+  const off = timestampValue(day.offAt);
+  if (!start || !Number.isFinite(on) || !Number.isFinite(off)) return;
   const dayMs = 86400000;
   const clamp = (value) => Math.max(0, Math.min(1, value));
   const from = clamp((on - start) / dayMs);
@@ -1014,6 +1055,8 @@ function todayDutyCard(w, data, family, snapshot) {
   box.setPadding(10, 12, 10, 12);
   box.cornerRadius = 18;
   box.backgroundColor = dutyCardColor(tone);
+  const gradient = dutyCardGradient(tone);
+  if (gradient) box.backgroundGradient = gradient;
 
   const heading = box.addStack();
   heading.layoutHorizontally();
@@ -1036,12 +1079,12 @@ function todayDutyCard(w, data, family, snapshot) {
       const times = text(timeRow, duty.times, timeSize, C.label, true);
       times.font = safe(() => Font.heavyMonospacedSystemFont(timeSize), times.font);
       timeRow.addSpacer();
-      const countdown = multilineText(timeRow, dutyCountdown(duty), 11, C.secondary, true, 2);
+      const countdown = multilineText(timeRow, dutyCountdown(duty, data.duty.tomorrow, data.duty.events), 11, C.secondary, true, 2);
       safe(() => countdown.rightAlignText());
     } else {
       text(box, duty.code || "上落班時間未有資料", family === "medium" ? 18 : 22, tint, true);
     }
-    shiftBar(box, duty, family === "medium" ? 250 : isExtraLargeFamily(family) ? 350 : 310);
+    shiftBar(box, duty, family === "medium" ? 250 : isExtraLargeFamily(family) ? 320 : 292);
     if (duty.route || duty.hoursText) {
       const detail = box.addStack();
       detail.layoutHorizontally();
@@ -1092,7 +1135,11 @@ function todayDutyCard(w, data, family, snapshot) {
     shiftRow.addSpacer();
   }
   weatherRow.addSpacer();
-  if (snapshot) text(weatherRow, freshnessText("today", snapshot), 10, C.secondary, false);
+  if (snapshot) {
+    const weatherStatus = weatherFreshness(snapshot);
+    const stamp = text(weatherRow, weatherStatus.text, 9, weatherStatus.stale ? C.orange : C.secondary, false);
+    safe(() => stamp.rightAlignText());
+  }
   return box;
 }
 
@@ -1120,26 +1167,28 @@ function todayAlerts(w, data) {
   return true;
 }
 
-function todayWeekStrip(w, data) {
+function todayWeekStrip(w, data, family) {
   const week = data.duty.week || [];
   if (!week.length) return false;
   const row = w.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
+  const cellWidth = isExtraLargeFamily(family) ? 48 : 42;
   week.slice(0, 7).forEach((item, index) => {
     if (index) row.addSpacer(3);
     const cell = row.addStack();
     cell.layoutVertically();
     cell.centerAlignContent();
+    cell.size = new Size(cellWidth, 0);
     text(cell, `${item.weekday}${item.dayNumber}`, 10, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
     const label = cell.addStack();
     label.layoutHorizontally();
     label.centerAlignContent();
-    label.setPadding(3, 6, 3, 6);
+    label.setPadding(3, 4, 3, 4);
     label.cornerRadius = 5;
+    label.size = new Size(cellWidth - 4, 18);
     label.backgroundColor = dutyColor(item.tone);
     if (index === 0) {
-      label.size = new Size(28, 18);
       label.borderColor = C.label;
       label.borderWidth = 1;
     }
@@ -1273,10 +1322,10 @@ function buildToday(w, family, snapshot) {
   if (family === "medium") return;
 
   w.addSpacer(6);
-  todayWeekStrip(w, data);
+  todayWeekStrip(w, data, family);
   w.addSpacer(5);
   todayNextEvent(w, data, family);
-  if (isExtraLargeFamily(family) && data.duty.weekText) {
+  if (data.duty.weekText) {
     text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
   }
   w.addSpacer(5);
