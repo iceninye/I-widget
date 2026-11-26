@@ -25,6 +25,45 @@ final class RefreshQueueTests: XCTestCase {
         }
     }
 
+    // MARK: - 刷新頻率：例行 60 分鐘、返前景 30 分鐘節流
+
+    func testRoutineRefreshIntervalIsSixtyMinutes() {
+        XCTAssertEqual(RefreshQueue.routineRefreshInterval, 60 * 60)
+        XCTAssertEqual(RefreshQueue.foregroundThrottleInterval, 30 * 60)
+    }
+
+    /// 未刷新過（冷啟）唔會被節流；30 分鐘內返前景唔打網，夠 30 分鐘先再打。
+    func testForegroundReturnThrottleUsesLastCompletedRefresh() {
+        XCTAssertTrue(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: nil, now: now))
+        XCTAssertFalse(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: now, now: at(30 * 60 - 1)))
+        XCTAssertTrue(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: now, now: at(30 * 60)))
+        XCTAssertTrue(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: now, now: at(30 * 60 + 1)))
+        // 系統時間倒退時保守節流，唔會憑空立即再打一輪。
+        XCTAssertFalse(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: at(60), now: now))
+    }
+
+    func testStoredRefreshAttemptIsSharedByForegroundAndBackgroundTask() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RefreshQueueTests.foreground-throttle"))
+        defer { defaults.removePersistentDomain(forName: "RefreshQueueTests.foreground-throttle") }
+        XCTAssertNil(RefreshQueue.lastRefreshAttemptAt(in: defaults))
+
+        RefreshQueue.recordRefreshAttempt(at: now, in: defaults)
+        let stored = try XCTUnwrap(RefreshQueue.lastRefreshAttemptAt(in: defaults))
+        XCTAssertEqual(stored, now)
+        XCTAssertFalse(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: stored, now: at(30 * 60 - 1)))
+        XCTAssertTrue(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: stored, now: at(30 * 60)))
+    }
+
+    /// 節流只擋例行返前景刷新；期間跨過更份邊界仍要即時補跑。
+    func testForegroundThrottleDoesNotSuppressBoundaryCatchUp() {
+        let routineAllowed = RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: now, now: at(10 * 60))
+        XCTAssertFalse(routineAllowed)
+        XCTAssertEqual(
+            RefreshQueue.tick(dataTab: true, active: true, boundaries: [], missed: true, now: at(10 * 60)),
+            .catchUp
+        )
+    }
+
     // MARK: - 發現 1：跑緊時新請求唔會丟
 
     /// 冇人跑緊就即刻跑；跑緊嗰時「一定要做到」要排隊，只有「順手」請求先可以併入而家嗰輪。

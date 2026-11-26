@@ -91,6 +91,8 @@ struct WidgetDuty: Codable, Sendable, Equatable {
     let today: WidgetDutyDay?
     let tomorrow: WidgetDutyDay?
     let events: [WidgetDutyEvent]
+    let week: [WidgetDutyStripDay]
+    let shiftForecast: [WidgetShiftForecast]
     let weekText: String?
     let nextHoliday: WidgetHoliday?
     let detailLines: [WidgetLine]
@@ -100,6 +102,10 @@ struct WidgetDutyDay: Codable, Sendable, Equatable {
     let date: String
     let code: String
     let title: String
+    let group: String?
+    let datedSheet: String?
+    let isOverride: Bool
+    let tone: String
     let times: String?
     let route: String?
     let mealText: String?
@@ -107,6 +113,23 @@ struct WidgetDutyDay: Codable, Sendable, Equatable {
     let hint: String?
     let onAt: Date?
     let offAt: Date?
+}
+
+struct WidgetDutyStripDay: Codable, Sendable, Equatable {
+    let date: String
+    let weekday: String
+    let dayNumber: String
+    let label: String
+    let tone: String
+    let weather: WidgetWeatherDay?
+}
+
+struct WidgetShiftForecast: Codable, Sendable, Equatable {
+    let label: String
+    let code: Int?
+    let symbol: String?
+    let tempText: String
+    let rainChance: Int?
 }
 
 struct WidgetDutyEvent: Codable, Sendable, Equatable {
@@ -228,7 +251,7 @@ struct WidgetCourtDay: Codable, Sendable, Equatable {
 
 struct WidgetCategoryCount: Codable, Sendable, Equatable {
     let category: String
-    let title: String
+    let categoryTitle: String
     let count: Int
 }
 

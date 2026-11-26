@@ -24,7 +24,7 @@ struct InfoConfigIntent: WidgetConfigurationIntent {
     var vpsToken: String?
 }
 
-/// 今日咭同資訊兩個 widget 共用嘅 provider：每 30 分鐘重讀一次（一日 48 次，喺 WidgetKit 預算內）；
+/// 今日咭同資訊兩個 widget 共用嘅 provider：一般每 60 分鐘重讀一次（可預測邊界仍提前）；
 /// 中間每 10 分鐘一個 entry，加返更份事件（返工／接車／落地／放工）、香港午夜／04:00 轉日同反轉格到期嘅一刻，
 /// 等開機時間、進度條同倒數喺呢啲邊界都有對應 entry。
 /// 倒數用系統計時字，唔使 entry。今日咭讀更份、學校日程、天氣預報同警告；資訊讀天氣、黃金、VPS 等。
@@ -122,7 +122,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
                 batteryRate: reading.rate, flips: flips, theme: theme
             )
         }
-        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
+        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(RefreshQueue.routineRefreshInterval)))
     }
 
     /// 記低今次電量，再用歷史估算剩餘時間。

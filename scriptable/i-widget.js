@@ -6,9 +6,11 @@
 const CONFIG = {
   showBrightness: true,
   showDayProgress: true,
-  reloadMinutes: 30,
+  reloadMinutes: 60,
   previewFamily: "large",
-  previewView: "clock",
+  previewView: "today",
+  transparentBackground: false,
+  showRefreshButton: true,
   maxPayloadBytes: 512 * 1024,
   cacheName: "i-widget-last-good.json",
 };
@@ -21,6 +23,7 @@ const SCHEMA_VERSION = 1;
 
 const dyn = (light, dark) => Color.dynamic(light, dark);
 const rgba = (hex, alpha) => new Color(hex, alpha);
+const WHITE = dyn(rgba("#ffffff", 1), rgba("#ffffff", 1));
 const BASE_COLORS = {
   bg: dyn(rgba("#ffffff", 1), rgba("#1c1c1e", 1)),
   label: dyn(rgba("#000000", 1), rgba("#ffffff", 1)),
@@ -36,6 +39,21 @@ const BASE_COLORS = {
   gray: dyn(rgba("#8e8e93", 1), rgba("#8e8e93", 1)),
 };
 const C = { ...BASE_COLORS };
+const themeState = { name: "classic" };
+const DUTY_TONES = {
+  dawn: ["#f06b59", "#f06b59"],
+  early: ["#e6a83d", "#e6a83d"],
+  mid: ["#4a9ee0", "#4a9ee0"],
+  late: ["#9c7df0", "#9c7df0"],
+  night: ["#6b5cd9", "#6b5cd9"],
+  rest: ["#e6404d", "#e6404d"],
+  leave: ["#4a9ee0", "#4a9ee0"],
+  pending: ["#e3a83b", "#e3a83b"],
+  spare: ["#8e8e93", "#a1a1a1"],
+  other: ["#8e8e93", "#a1a1a1"],
+  duty: ["#b5471f", "#d9683c"],
+  unknown: ["#8e8e93", "#a1a1a1"],
+};
 const THEME_COLORS = {
   classic: {},
   ocean: { accent: dyn(rgba("#007aff", 1), rgba("#64d2ff", 1)), bg: dyn(rgba("#f2f8ff", 1), rgba("#102331", 1)) },
@@ -59,7 +77,20 @@ const THEME_COLORS = {
 
 // 主題由 app 匯出；唔受 Scriptable 或 iOS extension 原生主題影響。
 function applyTheme(theme) {
+  themeState.name = theme;
   Object.assign(C, BASE_COLORS, THEME_COLORS[theme] || {});
+}
+
+function dutyColor(tone) {
+  if (themeState.name === "mono") return C.gray;
+  const pair = DUTY_TONES[tone] || DUTY_TONES.unknown;
+  return dyn(rgba(pair[0], 1), rgba(pair[1], 1));
+}
+
+function dutyCardColor(tone) {
+  if (themeState.name === "mono") return C.card;
+  const pair = DUTY_TONES[tone] || DUTY_TONES.unknown;
+  return dyn(rgba(pair[0], 0.14), rgba(pair[1], 0.24));
 }
 
 const NOW = typeof IWIDGET_NOW !== "undefined" ? IWIDGET_NOW : new Date();
@@ -253,6 +284,10 @@ function validatePayload(raw, now) {
       date: dateCode(required(day.date, `${path}.date`), `${path}.date`),
       code: string(required(day.code, `${path}.code`), `${path}.code`, 40),
       title: string(required(day.title, `${path}.title`), `${path}.title`, 200),
+      group: nullableString(day.group, `${path}.group`, 80),
+      datedSheet: nullableString(day.datedSheet, `${path}.datedSheet`, 80),
+      isOverride: day.isOverride === undefined ? false : boolean(day.isOverride, `${path}.isOverride`),
+      tone: day.tone === undefined ? "unknown" : string(day.tone, `${path}.tone`, 40, true),
       times: nullableString(day.times, `${path}.times`, 200),
       route: nullableString(day.route, `${path}.route`, 500),
       mealText: nullableString(day.mealText, `${path}.mealText`, 200),
@@ -277,6 +312,28 @@ function validatePayload(raw, now) {
         detail: string(required(event.detail, `${path}.detail`), `${path}.detail`, 1000),
         place: string(required(event.place, `${path}.place`), `${path}.place`, 300),
         note: string(required(event.note, `${path}.note`), `${path}.note`, 1000),
+      };
+    }),
+    week: duty.week === undefined ? [] : array(duty.week, "$.duty.week", 7).map((item, index) => {
+      const entry = object(item, `$.duty.week[${index}]`);
+      const path = `$.duty.week[${index}]`;
+      return {
+        date: dateCode(required(entry.date, `${path}.date`), `${path}.date`),
+        weekday: string(required(entry.weekday, `${path}.weekday`), `${path}.weekday`, 10, true),
+        dayNumber: string(required(entry.dayNumber, `${path}.dayNumber`), `${path}.dayNumber`, 10, true),
+        label: string(required(entry.label, `${path}.label`), `${path}.label`, 40, true),
+        tone: string(required(entry.tone, `${path}.tone`), `${path}.tone`, 40, true),
+      };
+    }),
+    shiftForecast: duty.shiftForecast === undefined ? [] : array(duty.shiftForecast, "$.duty.shiftForecast", 4).map((item, index) => {
+      const entry = object(item, `$.duty.shiftForecast[${index}]`);
+      const path = `$.duty.shiftForecast[${index}]`;
+      return {
+        label: string(required(entry.label, `${path}.label`), `${path}.label`, 80, true),
+        code: nullableNumber(entry.code, `${path}.code`, 0, 9999, true),
+        symbol: nullableString(entry.symbol, `${path}.symbol`, 100),
+        tempText: string(required(entry.tempText, `${path}.tempText`), `${path}.tempText`, 40),
+        rainChance: nullableNumber(entry.rainChance, `${path}.rainChance`, 0, 100, true),
       };
     }),
     weekText: nullableString(duty.weekText, "$.duty.weekText", 300),
@@ -333,6 +390,11 @@ function validatePayload(raw, now) {
     const path = `$.weather.daily[${index}]`;
     dateCode(required(day.date, `${path}.date`), `${path}.date`);
     weatherDay(required(day.day, `${path}.day`), `${path}.day`);
+  });
+  (Array.isArray(duty.week) ? duty.week : []).forEach((item, index) => {
+    if (item && item.weather !== null && item.weather !== undefined) {
+      weatherDay(item.weather, `$.duty.week[${index}].weather`);
+    }
   });
 
   const warnings = object(required(root.warnings, "$.warnings"), "$.warnings");
@@ -412,36 +474,88 @@ function validatePayload(raw, now) {
 
 // ---- iCloud 輸入 + local last-good cache ------------------------------
 
+let LOAD_DIAGNOSTIC = "";
+
+function diagnosticDetail(error) {
+  const message = error && typeof error.message === "string" ? error.message : String(error || "未知錯誤");
+  return message.replace(/\s+/g, " ").slice(0, 180);
+}
+
+async function attempt(fn) {
+  try {
+    return { value: await fn(), error: null };
+  } catch (error) {
+    return { value: null, error };
+  }
+}
+
 async function loadSnapshot() {
+  LOAD_DIAGNOSTIC = "";
+  const problems = [];
   const cloud = safe(() => FileManager.iCloud(), null);
   const directory = safe(() => cloud && cloud.documentsDirectory(), null);
   let raw = null;
-  if (cloud && directory) {
+  if (!cloud) {
+    problems.push("Scriptable iCloud FileManager 不可用");
+  } else if (!directory) {
+    problems.push("iCloud documentsDirectory 不可用");
+  } else {
     const path = `${directory.replace(/\/$/, "")}/i-widget.json`;
     // 官方 FileManager API 多為同步；await 同時兼容回傳 Promise 嘅版本。
-    await safeAsync(() => cloud.downloadFileFromiCloud(path), null);
-    const exists = await safeAsync(() => cloud.fileExists(path), null);
-    if (exists !== false) {
-      const downloaded = await safeAsync(() => cloud.readString(path), null);
-      if (typeof downloaded === "string") raw = downloaded;
-    }
-    const validated = raw === null ? null : validatePayload(raw, NOW);
-    if (validated && !validated.error) {
-      const local = safe(() => FileManager.local(), null);
-      const localDirectory = safe(() => local && local.documentsDirectory(), null);
-      if (local && localDirectory) {
-        const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
-        await safeAsync(() => local.writeString(raw, localPath), null);
+    const download = await attempt(() => cloud.downloadFileFromiCloud(path));
+    if (download.error) problems.push(`iCloud 下載失敗：${diagnosticDetail(download.error)}`);
+    const exists = await attempt(() => cloud.fileExists(path));
+    if (exists.error) {
+      problems.push(`iCloud fileExists 失敗：${diagnosticDetail(exists.error)}`);
+    } else if (exists.value === false) {
+      problems.push("iCloud documentsDirectory 入面未有 i-widget.json");
+    } else {
+      const downloaded = await attempt(() => cloud.readString(path));
+      if (downloaded.error) {
+        problems.push(`iCloud 讀取失敗：${diagnosticDetail(downloaded.error)}`);
+      } else if (typeof downloaded.value === "string") {
+        raw = downloaded.value;
+      } else {
+        problems.push("iCloud readString 冇回傳字串");
       }
-      return { ...validated, raw, source: "iCloud" };
+    }
+    if (raw !== null) {
+      const validated = validatePayload(raw, NOW);
+      if (validated && !validated.error) {
+        const local = safe(() => FileManager.local(), null);
+        const localDirectory = safe(() => local && local.documentsDirectory(), null);
+        if (local && localDirectory) {
+          const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
+          await safeAsync(() => local.writeString(raw, localPath), null);
+        }
+        return { ...validated, raw, source: "iCloud" };
+      }
+      problems.push(`JSON 驗證失敗：${validated ? validated.error : "冇回傳驗證結果"}`);
     }
   }
 
   const local = safe(() => FileManager.local(), null);
   const localDirectory = safe(() => local && local.documentsDirectory(), null);
-  const cached = local && localDirectory ? await safeAsync(() => local.readString(`${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`), null) : null;
-  const validated = typeof cached === "string" ? validatePayload(cached, NOW) : null;
-  return validated && !validated.error ? { ...validated, raw: cached, source: "cache" } : null;
+  if (local && localDirectory) {
+    const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
+    const exists = await attempt(() => local.fileExists(localPath));
+    if (exists.error || exists.value === false) {
+      problems.push("local last-good cache 亦不存在");
+    } else {
+      const cached = await attempt(() => local.readString(localPath));
+      if (cached.error) {
+        problems.push(`local cache 讀取失敗：${diagnosticDetail(cached.error)}`);
+      } else if (typeof cached.value === "string") {
+        const validated = validatePayload(cached.value, NOW);
+        if (validated && !validated.error) return { ...validated, raw: cached.value, source: "cache" };
+        problems.push(`local cache JSON 驗證失敗：${validated ? validated.error : "冇回傳驗證結果"}`);
+      }
+    }
+  } else {
+    problems.push("local FileManager 不可用");
+  }
+  LOAD_DIAGNOSTIC = problems.join("；") || "未能讀取 JSON";
+  return null;
 }
 
 // ---- 格式／新鮮度 -----------------------------------------------------
@@ -531,7 +645,7 @@ function text(parent, string, size, color, bold) {
   t.font = bold ? Font.boldSystemFont(size) : Font.systemFont(size);
   t.textColor = color;
   t.lineLimit = 1;
-  t.minimumScaleFactor = 0.7;
+  t.minimumScaleFactor = 0.8;
   return t;
 }
 
@@ -552,12 +666,23 @@ function symbol(parent, name, color, size) {
 }
 
 function bar(parent, fraction, color, width, height) {
+  const clamped = Math.max(0, Math.min(1, fraction || 0));
+  // Scriptable 1.8 原生進度條可用返回 stack 設定尺寸；舊版先退回幾何色條。
+  if (typeof parent.addProgress === "function") {
+    const progress = parent.addProgress(clamped * 100, {
+      style: "linear",
+      progressColor: color,
+      trackColor: C.track,
+      thickness: height,
+    });
+    progress.size = new Size(width, height);
+    return progress;
+  }
   const track = parent.addStack();
   track.layoutHorizontally();
   track.size = new Size(width, height);
   track.cornerRadius = height / 2;
   track.backgroundColor = C.track;
-  const clamped = Math.max(0, Math.min(1, fraction || 0));
   if (clamped > 0) {
     const fill = track.addStack();
     fill.size = new Size(Math.max(height, Math.round(width * clamped)), height);
@@ -566,6 +691,36 @@ function bar(parent, fraction, color, width, height) {
   }
   track.addSpacer();
   return track;
+}
+
+function isExtraLargeFamily(family) {
+  return family === "extraLarge" || family === "extraLargePortrait";
+}
+
+function systemVersionAtLeast(major, minor = 0) {
+  const version = safe(() => Device.systemVersion(), "");
+  const match = typeof version === "string" && version.match(/^(\d+)(?:\.(\d+))?/);
+  if (!match) return false;
+  const actualMajor = Number(match[1]);
+  const actualMinor = Number(match[2] || 0);
+  return actualMajor > major || (actualMajor === major && actualMinor >= minor);
+}
+
+function widgetParameters() {
+  return safe(() => config.parameterValues, null) || safe(() => args && args.parameterValues, null) || {};
+}
+
+function supportsRefreshButton(family) {
+  return CONFIG.showRefreshButton
+    && ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family)
+    && systemVersionAtLeast(17);
+}
+
+function addRefreshControl(parent, family) {
+  if (supportsRefreshButton(family) && typeof parent.addRefreshButton === "function") {
+    parent.addSpacer(6);
+    parent.addRefreshButton("更新");
+  }
 }
 
 function card(parent, { icon, tint, title, value, valueColor, fraction, barColor }) {
@@ -579,7 +734,7 @@ function card(parent, { icon, tint, title, value, valueColor, fraction, barColor
   text(row, title, 14, C.secondary, false);
   row.addSpacer();
   if (fraction !== null && fraction !== undefined) {
-    bar(row, fraction, barColor || tint, 70, 6);
+    bar(row, fraction, barColor || tint, 120, 6);
     row.addSpacer(8);
   }
   text(row, value, 14, valueColor || C.label, true);
@@ -626,10 +781,12 @@ function viewHeading(parent, view, snapshot, family) {
   text(row, names[view], family === "small" ? 15 : 18, C.label, true);
   row.addSpacer();
   text(row, freshnessText(view, snapshot), family === "small" ? 10 : 11, C.secondary, false);
+  addRefreshControl(row, family);
   return row;
 }
 
-function setupNotice(parent, message = "請喺 iWidget app 匯出 JSON，並授權 iCloud／Scriptable folder") {
+function setupNotice(parent, message) {
+  const detail = message || LOAD_DIAGNOSTIC || "請喺 iWidget app 匯出 JSON，並授權 iCloud／Scriptable folder";
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
@@ -637,7 +794,7 @@ function setupNotice(parent, message = "請喺 iWidget app 匯出 JSON，並授�
   row.cornerRadius = 10;
   row.backgroundColor = C.card;
   if (symbol(row, "folder.badge.questionmark", C.orange, 14)) row.addSpacer(6);
-  multilineText(row, `${MISSING} · ${message}`, 11, C.secondary, false, 2);
+  multilineText(row, `${MISSING} · ${detail}`, 11, C.secondary, false, 2);
 }
 
 function lineRow(parent, label, value, color = C.label, valueSize = 13) {
@@ -659,7 +816,7 @@ function sectionLabel(parent, title) {
 }
 
 function rowBudget(family) {
-  return family === "small" ? 4 : family === "medium" ? 6 : family === "extraLarge" ? 11 : 8;
+  return family === "small" ? 4 : family === "medium" ? 6 : isExtraLargeFamily(family) ? 11 : 8;
 }
 
 // ---- clock view：原有小／中／大／鎖屏版面 -----------------------------
@@ -731,8 +888,18 @@ function buildAccessory(w, family, device) {
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    symbol(stack, batterySymbol(device.level, device.charging), C.label, 14);
-    const t = stack.addText(pct(device.level));
+    let ring = stack;
+    if (device.level !== null && typeof stack.addProgress === "function") {
+      ring = stack.addProgress(device.level * 100, {
+        style: "circular",
+        progressColor: batteryColor(device.level, device.charging),
+        trackColor: C.track,
+        thickness: 5,
+      });
+    } else {
+      symbol(stack, batterySymbol(device.level, device.charging), C.label, 14);
+    }
+    const t = ring.addText(pct(device.level));
     t.font = Font.boldSystemFont(13);
     t.centerAlignText();
   } else {
@@ -768,44 +935,317 @@ function schoolFailureText(failed) {
   return failed && failed.length ? `學校讀取失敗／部分失敗：${failed.join("、")}` : null;
 }
 
-function schoolSummary(parent, school, label, failed = [], size = 12) {
-  const failure = schoolFailureText(failed);
-  const cycle = school.cycle.join(" · ");
-  const item = school.items[0];
-  if (failure) text(parent, `${label} · ${failure}`, size, C.red, true);
-  if (cycle) text(parent, `${label} · ${cycle}`, size, C.indigo, true);
-  if (item) {
-    const time = item.allDay ? "全日" : `${hhmm(new Date(item.start))}–${hhmm(new Date(item.end))}`;
-    lineRow(parent, `${label} ${time}`, item.title, C.label, size);
-  } else if (!failure) {
-    text(parent, `${label} · ${cycle ? "沒有其他日程" : "沒有日程"}`, size, C.secondary, false);
-  }
-}
-
 function shortDate(code) {
   if (!/^\d{8}$/.test(code || "")) return code || MISSING;
   return `${Number(code.slice(4, 6))}月${Number(code.slice(6, 8))}日`;
 }
 
-function dutyDayText(day) {
-  if (!day) return "沒有更份";
-  return `${day.title || "更份"}${day.times ? ` · ${day.times}` : ""}`;
+function dateFromCode(code) {
+  if (!/^\d{8}$/.test(code || "")) return null;
+  const date = new Date(Number(code.slice(0, 4)), Number(code.slice(4, 6)) - 1, Number(code.slice(6, 8)));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dutyDateLabel(day) {
+  const date = dateFromCode(day && day.date);
+  if (!date) return "今日";
+  const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
+  return `${weekday} ${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function dutyCountdown(day) {
+  if (!day) return "";
+  const on = day.onAt === null || day.onAt === undefined ? null : Date.parse(day.onAt);
+  const off = day.offAt === null || day.offAt === undefined ? null : Date.parse(day.offAt);
+  let target = null;
+  let label = "";
+  if (on !== null && Number.isFinite(on) && NOW < on) { target = on; label = "返工"; }
+  else if (off !== null && Number.isFinite(off) && NOW < off) { target = off; label = "放工"; }
+  else if (off !== null && Number.isFinite(off)) return "已放工";
+  if (target === null) return "上落班時間未有資料";
+  const totalMinutes = Math.max(0, Math.ceil((target - NOW) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${label} ${hours ? `${hours} 小時 ` : ""}${minutes} 分`;
+}
+
+function badge(parent, label, color = C.accent, size = 10) {
+  const row = parent.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  row.setPadding(2, 5, 2, 5);
+  row.cornerRadius = 5;
+  row.backgroundColor = C.card;
+  const value = text(row, label, size, color, true);
+  value.centerAlignText();
+  return row;
+}
+
+function shiftBar(parent, day, width) {
+  const start = dateFromCode(day.date);
+  const on = day.onAt === null || day.onAt === undefined ? null : Date.parse(day.onAt);
+  const off = day.offAt === null || day.offAt === undefined ? null : Date.parse(day.offAt);
+  if (!start || on === null || off === null || !Number.isFinite(on) || !Number.isFinite(off)) return;
+  const dayMs = 86400000;
+  const clamp = (value) => Math.max(0, Math.min(1, value));
+  const from = clamp((on - start) / dayMs);
+  const to = clamp((off - start) / dayMs);
+  const fill = Math.max(4, Math.round(width * Math.max(0, to - from)));
+  const track = parent.addStack();
+  track.layoutHorizontally();
+  track.centerAlignContent();
+  track.size = new Size(width, 7);
+  track.cornerRadius = 4;
+  track.backgroundColor = C.track;
+  track.addSpacer(Math.round(width * from));
+  const active = track.addStack();
+  active.size = new Size(fill, 7);
+  active.cornerRadius = 4;
+  active.backgroundColor = dutyColor(day.tone);
+  track.addSpacer(Math.max(0, width - Math.round(width * from) - fill));
+}
+
+function todayDutyCard(w, data, family, snapshot) {
+  const duty = data.duty.today;
+  const tone = duty ? duty.tone : "unknown";
+  const tint = dutyColor(tone);
+  const box = w.addStack();
+  box.layoutVertically();
+  box.setPadding(10, 12, 10, 12);
+  box.cornerRadius = 18;
+  box.backgroundColor = dutyCardColor(tone);
+
+  const heading = box.addStack();
+  heading.layoutHorizontally();
+  heading.centerAlignContent();
+  text(heading, duty ? duty.title || "今日更份" : "今日更份", family === "medium" ? 16 : 18, C.label, true);
+  if (duty && duty.group) { heading.addSpacer(5); badge(heading, duty.group, tint); }
+  if (duty && duty.datedSheet) { heading.addSpacer(4); badge(heading, duty.datedSheet, C.orange); }
+  if (duty && duty.isOverride) { heading.addSpacer(4); badge(heading, "改", C.orange); }
+  heading.addSpacer();
+  text(heading, dutyDateLabel(duty), 11, C.secondary, false);
+
+  const status = dutyStatus(data.duty);
+  if (status) text(box, status, 11, status.includes("失敗") ? C.red : C.secondary, true);
+  if (duty) {
+    if (duty.times) {
+      const timeRow = box.addStack();
+      timeRow.layoutHorizontally();
+      timeRow.centerAlignContent();
+      const timeSize = family === "medium" ? 23 : 26;
+      const times = text(timeRow, duty.times, timeSize, C.label, true);
+      times.font = safe(() => Font.heavyMonospacedSystemFont(timeSize), times.font);
+      timeRow.addSpacer();
+      const countdown = multilineText(timeRow, dutyCountdown(duty), 11, C.secondary, true, 2);
+      safe(() => countdown.rightAlignText());
+    } else {
+      text(box, duty.code || "上落班時間未有資料", family === "medium" ? 18 : 22, tint, true);
+    }
+    shiftBar(box, duty, family === "medium" ? 250 : isExtraLargeFamily(family) ? 350 : 310);
+    if (duty.route || duty.hoursText) {
+      const detail = box.addStack();
+      detail.layoutHorizontally();
+      detail.centerAlignContent();
+      text(detail, duty.route || "", 12, C.label, false);
+      detail.addSpacer();
+      text(detail, duty.hoursText || "", 11, C.secondary, false);
+    }
+    if (isExtraLargeFamily(family) && duty.hint) text(box, duty.hint, 10, C.orange, false);
+  }
+
+  const weather = data.weather.available ? data.weather.today : null;
+  const weatherRow = box.addStack();
+  weatherRow.layoutHorizontally();
+  weatherRow.centerAlignContent();
+  if (weather) {
+    if (symbol(weatherRow, weather.symbol, C.blue, 14)) weatherRow.addSpacer(4);
+    text(weatherRow, data.weather.currentTemp === null ? "—" : `${Math.round(data.weather.currentTemp)}°`, 14, C.label, true);
+    weatherRow.addSpacer(5);
+    text(weatherRow, weather.codeText, 12, C.secondary, false);
+    weatherRow.addSpacer(5);
+    text(weatherRow, weather.tempText, 12, C.secondary, false);
+    if (weather.rainChance !== null && weather.rainChance !== undefined) {
+      weatherRow.addSpacer(5);
+      if (symbol(weatherRow, "umbrella.fill", C.blue, 11)) weatherRow.addSpacer(2);
+      text(weatherRow, `${weather.rainChance}%`, 11, C.blue, false);
+    }
+  } else {
+    text(weatherRow, "天氣未有資料", 12, C.secondary, false);
+  }
+  const forecasts = data.duty.shiftForecast || [];
+  if (family !== "medium" && forecasts.length) {
+    const shiftRow = box.addStack();
+    shiftRow.layoutHorizontally();
+    shiftRow.centerAlignContent();
+    forecasts.slice(0, 2).forEach((item, index) => {
+      if (index) shiftRow.addSpacer(10);
+      text(shiftRow, item.label, 11, C.secondary, false);
+      shiftRow.addSpacer(4);
+      if (item.symbol && symbol(shiftRow, item.symbol, C.blue, 11)) shiftRow.addSpacer(3);
+      text(shiftRow, item.tempText, 12, C.label, true);
+      if (item.rainChance !== null && item.rainChance !== undefined) {
+        shiftRow.addSpacer(4);
+        if (symbol(shiftRow, "umbrella.fill", C.blue, 10)) shiftRow.addSpacer(2);
+        text(shiftRow, `${item.rainChance}%`, 11, C.blue, false);
+      }
+    });
+    shiftRow.addSpacer();
+  }
+  weatherRow.addSpacer();
+  if (snapshot) text(weatherRow, freshnessText("today", snapshot), 10, C.secondary, false);
+  return box;
+}
+
+function todayAlerts(w, data) {
+  const warnings = data.warnings;
+  const trainIssue = data.train.available && data.train.stateText !== "正常";
+  const trainMissing = !data.train.available;
+  if (warnings.available && !warnings.items.length && !trainIssue && !trainMissing) return false;
+  const row = w.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  if (!warnings.available) {
+    text(row, "天氣警告：未有資料", 11, C.secondary, false);
+  } else if (warnings.items.length) {
+    if (symbol(row, "exclamationmark.triangle.fill", warnings.items[0].severe ? C.red : C.orange, 12)) row.addSpacer(4);
+    text(row, warnings.items[0].text, 11, warnings.items[0].severe ? C.red : C.orange, true);
+    if (warnings.items.length > 1) { row.addSpacer(4); text(row, `+${warnings.items.length - 1} 項`, 10, C.orange, false); }
+  }
+  if (trainIssue || trainMissing) {
+    row.addSpacer(6);
+    if (symbol(row, "tram.fill", trainMissing ? C.secondary : C.orange, 12)) row.addSpacer(4);
+    text(row, trainMissing ? "屯馬綫：未有資料" : [data.train.stateText, data.train.message].filter(Boolean).join(" · "), 11, trainMissing ? C.secondary : C.orange, true);
+  }
+  row.addSpacer();
+  return true;
+}
+
+function todayWeekStrip(w, data) {
+  const week = data.duty.week || [];
+  if (!week.length) return false;
+  const row = w.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  week.slice(0, 7).forEach((item, index) => {
+    if (index) row.addSpacer(3);
+    const cell = row.addStack();
+    cell.layoutVertically();
+    cell.centerAlignContent();
+    text(cell, `${item.weekday}${item.dayNumber}`, 10, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
+    const label = cell.addStack();
+    label.layoutHorizontally();
+    label.centerAlignContent();
+    label.setPadding(3, 6, 3, 6);
+    label.cornerRadius = 5;
+    label.backgroundColor = dutyColor(item.tone);
+    if (index === 0) {
+      label.size = new Size(28, 18);
+      label.borderColor = C.label;
+      label.borderWidth = 1;
+    }
+    text(label, item.label, 11, WHITE, true).centerAlignText();
+    const weather = item.weather || ((data.weather.daily || []).find((entry) => entry.date === item.date) || {}).day;
+    if (weather) {
+      const temp = cell.addStack();
+      temp.layoutHorizontally();
+      temp.centerAlignContent();
+      if (symbol(temp, weather.symbol, C.secondary, 10)) temp.addSpacer(2);
+      text(temp, `${Math.round(weather.maxTemp)}°`, 10, C.secondary, false);
+    }
+  });
+  return true;
+}
+
+function todayNextEvent(w, data, family) {
+  const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
+  if (!event) return false;
+  const row = w.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  if (symbol(row, "clock", C.accent, 12)) row.addSpacer(4);
+  text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
+  addRefreshControl(row, family);
+  const detail = [event.place, event.detail].filter(Boolean).join(" · ");
+  if (detail) text(w, detail, 11, C.secondary, false);
+  return true;
+}
+
+function todayTomorrow(w, data) {
+  const day = data.duty.tomorrow;
+  if (!day) return false;
+  const row = w.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  text(row, "明日", 12, C.secondary, false);
+  row.addSpacer(5);
+  const dot = row.addStack();
+  dot.size = new Size(6, 6);
+  dot.cornerRadius = 3;
+  dot.backgroundColor = dutyColor(day.tone);
+  row.addSpacer(5);
+  text(row, day.title || "明日更份", 13, C.label, true);
+  if (day.times) { row.addSpacer(6); text(row, day.times, 12, C.secondary, false); }
+  if (day.route) { row.addSpacer(6); text(row, day.route, 11, C.secondary, false); }
+  row.addSpacer();
+  return true;
+}
+
+function todaySchool(w, data, family) {
+  const today = data.school.today;
+  const tomorrow = data.school.tomorrow;
+  const rows = today.items.map((item) => ({ prefix: "今", item }))
+    .concat(tomorrow.items.map((item) => ({ prefix: "明", item })));
+  const header = w.addStack();
+  header.layoutHorizontally();
+  header.centerAlignContent();
+  if (symbol(header, "graduationcap.fill", C.indigo, 13)) header.addSpacer(4);
+  text(header, "學校", 13, C.label, true);
+  if (today.cycle.length) { header.addSpacer(5); badge(header, today.cycle[0], C.indigo, 10); }
+  if (tomorrow.cycle.length) { header.addSpacer(5); text(header, `明 ${tomorrow.cycle[0]}`, 11, C.secondary, false); }
+  header.addSpacer();
+  const failure = schoolFailureText(data.school.failed);
+  if (failure) text(header, `${failure.replace("學校讀取失敗／部分失敗：", "")} 讀唔到`, 9, C.orange, false);
+
+  if (!rows.length) {
+    text(w, failure ? "學校日曆暫時讀唔到。" : "今明兩日冇學校活動。", 12, C.secondary, false);
+  } else {
+    const limit = isExtraLargeFamily(family) ? 6 : 3;
+    rows.slice(0, limit).forEach(({ prefix, item }) => {
+      const row = w.addStack();
+      row.layoutHorizontally();
+      row.centerAlignContent();
+      text(row, prefix, 12, prefix === "今" ? C.indigo : C.secondary, true);
+      row.addSpacer(5);
+      text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 12, C.secondary, false);
+      row.addSpacer(6);
+      text(row, item.title, 13, C.label, false);
+      row.addSpacer();
+    });
+    if (rows.length > limit) text(w, `另有 ${rows.length - limit} 項`, 10, C.secondary, false);
+  }
+  const holiday = data.duty.nextHoliday;
+  if (holiday) {
+    const row = w.addStack();
+    row.layoutHorizontally();
+    row.centerAlignContent();
+    if (symbol(row, "sun.max.fill", C.orange, 12)) row.addSpacer(4);
+    text(row, holiday.rangeText, 11, C.secondary, false);
+    row.addSpacer(5);
+    text(row, holiday.title, 12, C.label, false);
+    row.addSpacer();
+    text(row, `${holiday.daysAway} 日後`, 10, C.secondary, false);
+  }
+  return true;
 }
 
 function buildToday(w, family, snapshot) {
   const data = snapshot && snapshot.data;
   if (!data) { setupNotice(w); return; }
-  viewHeading(w, "today", snapshot, family);
-  w.addSpacer(6);
-  const budget = rowBudget(family);
-  let rows = 0;
-  const add = (fn) => {
-    if (rows >= budget) return;
-    if (fn() !== false) rows++;
-  };
-  const status = dutyStatus(data.duty);
-
   if (family === "small") {
+    const status = dutyStatus(data.duty);
+    viewHeading(w, "today", snapshot, family);
+    w.addSpacer(6);
     // small 只保留四行內；有事件時用第一宗即將發生嘅事件取代靜態更份。
     const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
     if (status) {
@@ -827,74 +1267,22 @@ function buildToday(w, family, snapshot) {
     return;
   }
 
-  add(() => {
-    sectionLabel(w, "更份");
-    if (status) text(w, status, 12, status.includes("失敗") ? C.red : C.secondary, true);
-    const duty = data.duty.today;
-    if (duty) {
-      text(w, duty.title || "今日更份", family === "medium" ? 18 : 20, C.label, true);
-      lineRow(w, "時間", duty.times);
-      if (duty.route) lineRow(w, "路線", duty.route);
-      if (family === "extraLarge") {
-        if (duty.mealText) lineRow(w, "用膳", duty.mealText);
-        if (duty.hoursText) lineRow(w, "時數", duty.hoursText);
-        if (duty.hint) lineRow(w, "提示", duty.hint);
-        for (const line of data.duty.detailLines.slice(0, 3)) lineRow(w, line.label, line.value);
-      }
-    }
-  });
-  add(() => {
-    const events = data.duty.events
-      .filter((item) => Date.parse(item.at) >= NOW)
-      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-      .slice(0, family === "extraLarge" ? 4 : 2);
-    if (!events.length) return false;
-    sectionLabel(w, "即將發生");
-    for (const event of events) {
-      text(w, `${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
-      const detail = [event.place, event.detail].filter(Boolean).join(" · ");
-      if (detail) multilineText(w, detail, 10, C.secondary, false, 2);
-    }
-  });
-  add(() => {
-    if (!data.duty.weekText && !data.duty.tomorrow && !data.duty.nextHoliday) return false;
-    sectionLabel(w, "方案規劃");
-    if (data.duty.weekText) lineRow(w, "本週", data.duty.weekText);
-    if (data.duty.tomorrow) lineRow(w, "明日更份", dutyDayText(data.duty.tomorrow));
-    if (data.duty.nextHoliday) {
-      const holiday = data.duty.nextHoliday;
-      lineRow(w, "下個假期", `${holiday.title} · ${holiday.rangeText} · ${holiday.daysAway} 天後`);
-    }
-  });
-  add(() => {
-    sectionLabel(w, "學校");
-    schoolSummary(w, data.school.today, "今日", data.school.failed);
-    schoolSummary(w, data.school.tomorrow, "明日");
-  });
-  add(() => {
-    sectionLabel(w, "天氣");
-    if (data.weather.available && data.weather.today) {
-      const weather = data.weather.today;
-      const temp = weather.tempText || `${weather.minTemp}–${weather.maxTemp}°`;
-      lineRow(w, weather.codeText, `${data.weather.currentTemp === null ? "" : `${Math.round(data.weather.currentTemp)}° · `}${temp}`, C.blue, 13);
-    } else text(w, MISSING, 12, C.secondary, false);
-    if (data.weather.available && data.weather.daily.length) {
-      const daily = data.weather.daily.slice(0, 7).map((item) => {
-        const rain = item.day.rainChance === null ? "" : ` · 雨 ${item.day.rainChance}%`;
-        return `${shortDate(item.date)} ${item.day.codeText} ${item.day.tempText}${rain}`;
-      }).join(" · ");
-      multilineText(w, daily, 10, C.secondary, false, family === "extraLarge" ? 3 : 2);
-    }
-  });
-  add(() => {
-    sectionLabel(w, "屯馬綫");
-    text(w, data.train.available ? [data.train.stateText, data.train.message].filter(Boolean).join(" · ") || "正常" : MISSING, 12, data.train.available ? C.green : C.secondary, false);
-  });
-  add(() => {
-    sectionLabel(w, "天氣警告");
-    const warnings = warningStatus(data.warnings);
-    multilineText(w, warnings, 11, data.warnings.items.some((item) => item.severe) ? C.red : C.secondary, false, 2);
-  });
+  todayDutyCard(w, data, family, snapshot);
+  w.addSpacer(6);
+  todayAlerts(w, data);
+  if (family === "medium") return;
+
+  w.addSpacer(6);
+  todayWeekStrip(w, data);
+  w.addSpacer(5);
+  todayNextEvent(w, data, family);
+  if (isExtraLargeFamily(family) && data.duty.weekText) {
+    text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
+  }
+  w.addSpacer(5);
+  todayTomorrow(w, data);
+  w.addSpacer(6);
+  todaySchool(w, data, family);
 }
 
 // ---- info view --------------------------------------------------------
@@ -951,7 +1339,7 @@ function buildInfo(w, family, snapshot) {
     lineRow(w, "續航估算", snapshot.system.battery.estimatedText || MISSING);
     lineRow(w, "耗電速率", snapshot.system.battery.rateText || MISSING);
     if (!data.system.memory.lines.length) text(w, MISSING, 12, C.secondary, false);
-    for (const line of data.system.memory.lines.slice(0, family === "extraLarge" ? 6 : 3)) lineRow(w, line.label, line.value);
+    for (const line of data.system.memory.lines.slice(0, isExtraLargeFamily(family) ? 6 : 3)) lineRow(w, line.label, line.value);
   });
   add(() => {
     sectionLabel(w, "天氣警告");
@@ -960,8 +1348,8 @@ function buildInfo(w, family, snapshot) {
   add(() => {
     sectionLabel(w, "環境");
     let shown = 0;
-    const maxSections = family === "extraLarge" ? 20 : 5;
-    const maxLines = family === "medium" ? 4 : family === "extraLarge" ? 18 : 8;
+    const maxSections = isExtraLargeFamily(family) ? 20 : 5;
+    const maxLines = family === "medium" ? 4 : isExtraLargeFamily(family) ? 18 : 8;
     for (const section of data.environment.sections.slice(0, maxSections)) {
       if (shown >= maxLines) break;
       text(w, section.title, 11, C.accent, true);
@@ -978,7 +1366,7 @@ function buildInfo(w, family, snapshot) {
     if (status) text(w, status.text, 12, status.color, true);
     if (!status || status.cached) {
       if (!data.vps.lines.length) text(w, MISSING, 12, C.secondary, false);
-      for (const line of data.vps.lines.slice(0, family === "extraLarge" ? 8 : 2)) lineRow(w, line.label, line.value);
+      for (const line of data.vps.lines.slice(0, isExtraLargeFamily(family) ? 8 : 2)) lineRow(w, line.label, line.value);
     }
   });
   add(() => {
@@ -1037,7 +1425,7 @@ function buildCourt(w, family, snapshot) {
     return;
   }
   const minute = NOW.getHours() * 60 + NOW.getMinutes();
-  const maxCases = family === "small" ? 2 : family === "medium" ? 3 : family === "extraLarge" ? 8 : 5;
+  const maxCases = family === "small" ? 2 : family === "medium" ? 3 : isExtraLargeFamily(family) ? 8 : 5;
   let shown = 0;
   for (const { day, future } of selected) {
     if (shown >= maxCases) break;
@@ -1165,6 +1553,14 @@ function widgetURL(view, snapshot) {
 function build(family, view, snapshot) {
   const device = readDevice();
   const w = new ListWidget();
+  const wantsTransparent = widgetParameters().background === "transparent" || CONFIG.transparentBackground;
+  // 透明 Home Screen 背景需要 iOS/iPadOS 27.2；鎖屏與舊系統維持不透明底色。
+  const transparent = wantsTransparent
+    && typeof w.addProgress === "function"
+    && !family.startsWith("accessory")
+    && ["iOS", "iPadOS"].includes(safe(() => Device.systemName(), ""))
+    && systemVersionAtLeast(27, 2);
+  if (typeof w.addProgress === "function") w.backgroundStyle = transparent ? "transparent" : "default";
   w.backgroundColor = C.bg;
   w.url = widgetURL(view, snapshot);
   w.spacing = 0;
@@ -1190,7 +1586,7 @@ function build(family, view, snapshot) {
 }
 
 function selectedView() {
-  const parameters = safe(() => config.parameterValues, null) || safe(() => args && args.parameterValues, null);
+  const parameters = widgetParameters();
   const requested = safe(() => parameters.view, CONFIG.previewView);
   return VIEWS.includes(requested) ? requested : CONFIG.previewView;
 }
@@ -1204,10 +1600,19 @@ const widget = build(family, view, snapshot);
 if (config.runsInWidget) {
   Script.setWidget(widget);
 } else {
-  const present = {
-    small: "presentSmall", medium: "presentMedium", large: "presentLarge", extraLarge: "presentExtraLarge",
+  if (!snapshot) {
+    const alert = safe(() => new Alert(), null);
+    if (alert) {
+      alert.title = "i-widget 讀取 JSON 失敗";
+      alert.message = LOAD_DIAGNOSTIC || "未能讀取 JSON";
+      await safeAsync(() => alert.presentAlert(), null);
+    }
+  }
+  let present = {
+    small: "presentSmall", medium: "presentMedium", large: "presentLarge", extraLarge: "presentExtraLarge", extraLargePortrait: "presentExtraLargePortrait",
     accessoryInline: "presentAccessoryInline", accessoryCircular: "presentAccessoryCircular", accessoryRectangular: "presentAccessoryRectangular",
   }[family] || "presentLarge";
+  if (family === "extraLargePortrait" && typeof widget.presentExtraLargePortrait !== "function") present = "presentExtraLarge";
   await widget[present]();
 }
 Script.complete();

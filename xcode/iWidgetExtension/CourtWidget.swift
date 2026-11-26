@@ -52,7 +52,7 @@ struct CourtEntry: TimelineEntry {
     )
 }
 
-/// 法院案件表：每 30 分鐘重讀（各法院各自有 10 分鐘快取），中間每 10 分鐘一個 entry，「下一庭」會自己前進。
+/// 法院案件表：一般每 60 分鐘重讀（各法院各自有 10 分鐘快取），中間每 10 分鐘一個 entry，「下一庭」會自己前進。
 struct CourtProvider: AppIntentTimelineProvider {
     static let maxCourts = 4
 
@@ -97,7 +97,7 @@ struct CourtProvider: AppIntentTimelineProvider {
         let entries = dates.sorted().map {
             CourtEntry(date: $0, days: days, listDate: day, updatedAt: success, theme: theme)
         }
-        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60)))
+        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(RefreshQueue.routineRefreshInterval)))
     }
 }
 

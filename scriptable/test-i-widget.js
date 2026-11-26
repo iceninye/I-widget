@@ -23,23 +23,27 @@ class Font {
   static systemFont(size) { return new Font("system", size); }
   static boldSystemFont(size) { return new Font("bold", size); }
   static semiboldSystemFont(size) { return new Font("semibold", size); }
+  static heavyMonospacedSystemFont(size) { return new Font("heavyMono", size); }
 }
 class Size { constructor(width, height) { this.width = width; this.height = height; } }
 
 class Element {
   constructor(kind) { this.kind = kind; this.children = []; }
-  add(kind, init) { const el = new Element(kind); Object.assign(el, init); this.children.push(el); return el; }
+  add(kind, init) { const el = new (this.runtimeElementClass || Element)(kind); Object.assign(el, init); this.children.push(el); return el; }
   addText(string) { return this.add("text", { text: string }); }
   addDate(date) { return this.add("date", { date }); }
   addImage(image) { return this.add("image", { image }); }
   addSpacer(length) { return this.add("spacer", { length }); }
   addStack() { return this.add("stack", {}); }
+  addProgress(value, options) { return this.add("progress", { value, options }); }
+  addRefreshButton(title) { return this.add("refreshButton", { title }); }
   setPadding(...p) { this.padding = p; }
   layoutHorizontally() { this.layout = "h"; }
   layoutVertically() { this.layout = "v"; }
   centerAlignContent() { this.align = "center"; }
   centerAlignText() { this.textAlign = "center"; }
   leftAlignText() { this.textAlign = "left"; }
+  rightAlignText() { this.textAlign = "right"; }
   applyTimerStyle() { this.style = "timer"; }
   applyTimeStyle() { this.style = "time"; }
   applyFittingContentMode() { this.fitting = true; }
@@ -50,6 +54,7 @@ class ListWidget extends Element {
   async presentMedium() { this.presented = "medium"; }
   async presentLarge() { this.presented = "large"; }
   async presentExtraLarge() { this.presented = "extraLarge"; }
+  async presentExtraLargePortrait() { this.presented = "extraLargePortrait"; }
   async presentAccessoryInline() { this.presented = "accessoryInline"; }
   async presentAccessoryCircular() { this.presented = "accessoryCircular"; }
   async presentAccessoryRectangular() { this.presented = "accessoryRectangular"; }
@@ -105,8 +110,10 @@ function dutyEvent(at, overrides = {}) {
   };
 }
 function datedWeather(day, codeText, rainChance) {
+  const date = new Date(2026, 9, day);
+  const code = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
   return {
-    date: `202610${String(day).padStart(2, "0")}`,
+    date: code,
     day: { code: 3, codeText, symbol: "cloud.fill", minTemp: 23, maxTemp: 31, tempText: "23°–31°", rainChance, uvIndex: 5 },
   };
 }
@@ -119,8 +126,19 @@ function planningFixture() {
   data.school.tomorrow = { cycle: ["Day 5"], items: [{ title: "明日科學測驗", start: iso(9, 0, 24), end: iso(10, 0, 24), allDay: false }] };
   data.weather.tomorrow = { ...data.weather.today, codeText: "小雨", rainChance: 70 };
   data.weather.daily = Array.from({ length: 7 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, index * 10));
+  data.duty.week = data.duty.week.map((item) => ({
+    ...item,
+    weather: (data.weather.daily.find((entry) => entry.date === item.date) || {}).day,
+  }));
   return data;
 }
+function dutyStripDay(offset, label, tone) {
+  const date = new Date(2026, 9, 23 + offset);
+  const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+  const weekday = weekdays[(date.getDay() + 6) % 7];
+  return { date: `202610${String(23 + offset).padStart(2, "0")}`, weekday, dayNumber: String(23 + offset), label, tone };
+}
+
 function fixture(now = DEFAULT_NOW) {
   return {
     schemaVersion: 1,
@@ -140,8 +158,15 @@ function fixture(now = DEFAULT_NOW) {
     },
     duty: {
       configured: true, failed: false,
-      today: { date: "20261023", code: "1101157", title: "00157 錦上路", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: iso(15, 5), offAt: iso(23, 15) },
-      tomorrow: null, events: [], weekText: "本週 5 更", nextHoliday: null, detailLines: [],
+      today: { date: "20261023", code: "1101157", title: "00157 錦上路", group: "KSR", datedSheet: null, isOverride: true, tone: "dawn", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: iso(15, 5), offAt: iso(23, 15) },
+      tomorrow: null,
+      events: [],
+      week: ["死早", "死早", "死早", "休", "死早", "死夜", "死夜"].map((label, index) => dutyStripDay(index, label, label === "休" ? "rest" : label === "死夜" ? "night" : "dawn")),
+      shiftForecast: [
+        { label: "返工 15:05", code: 3, symbol: "cloud.fill", tempText: "28°", rainChance: 20 },
+        { label: "放工 23:15", code: 61, symbol: "cloud.rain.fill", tempText: "25°", rainChance: 40 },
+      ],
+      weekText: "本週 5 更", nextHoliday: null, detailLines: [],
     },
     school: {
       failed: [], today: { cycle: ["Day 4"], items: [{ title: "中三家長會", start: iso(18, 0), end: iso(19, 0), allDay: false }] },
@@ -153,7 +178,7 @@ function fixture(now = DEFAULT_NOW) {
       tomorrow: null, daily: [],
     },
     warnings: { available: false, items: [] },
-    train: { available: true, stateText: "屯馬綫", message: "行車大致正常" },
+    train: { available: true, stateText: "正常", message: "行車大致正常" },
     environment: { sections: [{ id: "gold", title: "黃金", lines: [{ label: "999.9 金", value: "HK$62,800" }] }] },
     vps: { configured: true, available: true, failed: false, lines: [{ label: "狀態", value: "正常" }] },
     courts: {
@@ -169,16 +194,21 @@ function fixture(now = DEFAULT_NOW) {
 async function run({
   family = "large", view = "clock", now = DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
-  parameterValues = { view }, fileManager = true, args,
+  parameterValues = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
+  nativeProgress = true, refreshControls = true, portraitPreview = true,
 } = {}) {
-  const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null };
+  const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
   const dev = {
     batteryLevel: () => 0.75, isCharging: () => false, isFullyCharged: () => false,
     systemName: () => "iOS", systemVersion: () => "27.0.1", screenBrightness: () => 0.4,
     ...device,
   };
+  const RuntimeColor = opaqueDynamicColors ? class {
+    constructor(hex, alpha = 1) { this.hex = hex; this.alpha = alpha; }
+    static dynamic() { return new RuntimeColor("#dynamic", 1); }
+  } : Color;
   const globals = {
-    Color, Font, Size, ListWidget,
+    Color: RuntimeColor, Font, Size, ListWidget,
     SFSymbol: { named: (name) => (noSymbols ? null : { image: { symbol: name } }) },
     Device: dev,
     config: { widgetFamily: family === "app" ? null : family, runsInWidget, parameterValues },
@@ -186,6 +216,11 @@ async function run({
     IWIDGET_NOW: now,
   };
   if (args !== undefined) globals.args = args;
+  if (alerts !== undefined) {
+    globals.Alert = class {
+      async presentAlert() { state.alerts.push({ title: this.title, message: this.message }); }
+    };
+  }
   if (fileManager) {
     state.iCloud = new FakeVolume("/iCloud/Scriptable/", iCloudOptions);
     state.local = new FakeVolume("/local/Scriptable/", localOptions);
@@ -204,7 +239,22 @@ async function run({
       },
     };
   }
-  globals.ListWidget = class extends ListWidget { constructor() { super(); state.widgetObj = this; } };
+  globals.ListWidget = class extends ListWidget {
+    constructor() {
+      super();
+      state.widgetObj = this;
+      if (!nativeProgress) this.addProgress = undefined;
+      if (!refreshControls) this.addRefreshButton = undefined;
+      this.runtimeElementClass = class extends Element {
+        constructor(kind) {
+          super(kind);
+          if (!nativeProgress) this.addProgress = undefined;
+          if (!refreshControls) this.addRefreshButton = undefined;
+        }
+      };
+      if (!portraitPreview) this.presentExtraLargePortrait = undefined;
+    }
+  };
   const names = Object.keys(globals);
   const fn = new AsyncFunction(...names, SOURCE);
   await fn(...names.map((name) => globals[name]));
@@ -229,7 +279,7 @@ module.exports = { run, all, texts, fixture, FakeVolume };
 if (require.main === module) (async () => {
   console.log("\n【S】view × family");
   for (const view of ["today", "info", "court", "clock", "accessory"]) {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       await test(`${view}/${family} 有畫面、setWidget + complete`, async () => {
         const state = await run({ view, family, iCloud: JSON.stringify(fixture()) });
         ok(state.widget && state.completed);
@@ -237,14 +287,16 @@ if (require.main === module) (async () => {
       });
     }
   }
-  await test("parameter view 分流；未知值安全 fallback clock", async () => {
+  await test("parameter view 分流；未知值安全 fallback today", async () => {
     equal(has((await run({ view: "today", parameterValues: { view: "court" }, iCloud: JSON.stringify(fixture()) })).widget, "法院案件"), true);
-    const fallback = await run({ parameterValues: { view: "unknown" } });
-    equal(all(fallback.widget, (e) => e.kind === "date").length, 1);
+    const fallback = await run({ parameterValues: { view: "unknown" }, iCloud: JSON.stringify(fixture()) });
+    equal(has(fallback.widget, "00157 錦上路"), true);
+    equal(all(fallback.widget, (e) => e.kind === "date").length, 0);
   });
-  await test("舊 config 無 parameterValues 時保留 clock", async () => {
-    const state = await run({ parameterValues: null });
-    equal(all(state.widget, (e) => e.kind === "date").length, 1);
+  await test("舊 config 無 parameterValues 時預設 today", async () => {
+    const state = await run({ parameterValues: null, iCloud: JSON.stringify(fixture()) });
+    equal(has(state.widget, "00157 錦上路"), true);
+    equal(all(state.widget, (e) => e.kind === "date").length, 0);
   });
 
   console.log("\n【F】iCloud、cache、schema 驗證");
@@ -282,6 +334,22 @@ if (require.main === module) (async () => {
     ok(has(state.widget, "未有資料"));
     ok(has(state.widget, "iOS 27.0.1"));
   });
+  await test("舊 app JSON 缺少更份徽章、tone 同 week 仍可用基本主卡", async () => {
+    const data = fixture();
+    delete data.duty.today.group;
+    delete data.duty.today.datedSheet;
+    delete data.duty.today.isOverride;
+    delete data.duty.today.tone;
+    delete data.duty.tomorrow;
+    delete data.duty.week;
+    delete data.duty.shiftForecast;
+    const raw = JSON.stringify(data);
+    const state = await run({ view: "today", iCloud: raw });
+    ok(has(state.widget, "00157 錦上路"));
+    ok(has(state.widget, "15:05–23:15"));
+    equal(state.local.files.get(cachePath(state)), raw);
+    ok(!texts(state.widget).some((value) => value === "五23"));
+  });
   for (const [name, iCloud] of [
     ["corrupt", "{not json"],
     ["unsupported schema", JSON.stringify({ ...fixture(), schemaVersion: 2 })],
@@ -289,6 +357,7 @@ if (require.main === module) (async () => {
     ["損壞日期", JSON.stringify({ ...fixture(), generatedAt: "2026-02-30T14:05:30Z" })],
     ["日期沒有時區", JSON.stringify({ ...fixture(), generatedAt: "2026-10-23T14:05:30" })],
     ["電量越界", JSON.stringify({ ...fixture(), system: { ...fixture().system, battery: { ...fixture().system.battery, level: 1.1 } } })],
+    ["改更標記類型錯誤", JSON.stringify({ ...fixture(), duty: { ...fixture().duty, today: { ...fixture().duty.today, isOverride: "yes" } } })],
     ["儲存越界", JSON.stringify({ ...fixture(), system: { ...fixture().system, storage: { ...fixture().system.storage, freeBytes: -1 } } })],
     ["案件 minutes 越界", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], cases: [caseEntry(1440, "bad")] }] } })],
     ["過大 payload", " ".repeat(513 * 1024)],
@@ -321,9 +390,21 @@ if (require.main === module) (async () => {
     ok((await run({ view: "info", iCloud: JSON.stringify(fixture()), localOptions: { writeError: true } })).widget);
     ok((await run({ view: "info", iCloud: JSON.stringify(fixture()), iCloudOptions: { missing: ["fileExists", "downloadFileFromiCloud"] } })).widget);
   });
-  await test("cache 損壞兼 iCloud 缺失 → 設定提示", async () => {
+  await test("cache 損壞兼 iCloud 缺失 → 顯示具體診斷", async () => {
     const state = await run({ view: "today", cache: "broken" });
-    ok(texts(state.widget).some((t) => t.includes("未有資料") && t.includes("授權")));
+    const output = texts(state.widget).join("\n");
+    ok(output.includes("未有資料") && output.includes("i-widget.json") && output.includes("local cache"));
+  });
+  await test("schema 驗證失敗顯示欄位原因，唔只顯示未有資料", async () => {
+    const raw = JSON.stringify({ ...fixture(), schemaVersion: 2 });
+    const state = await run({ view: "info", iCloud: raw });
+    ok(texts(state.widget).some((t) => t.includes("JSON 驗證失敗") && t.includes("schemaVersion")));
+  });
+  await test("Scriptable app 預覽缺少 JSON 時顯示安全診斷 Alert", async () => {
+    const state = await run({ view: "today", runsInWidget: false, alerts: true });
+    equal(state.alerts.length, 1);
+    ok(state.alerts[0].message.includes("i-widget.json"));
+    ok(!state.alerts[0].message.includes(JSON.stringify(fixture())));
   });
 
   console.log("\n【T】freshness 語意");
@@ -353,7 +434,8 @@ if (require.main === module) (async () => {
   console.log("\n【V】today / info / court / accessory 內容");
   await test("today 顯示更份、學校、天氣、屯馬綫", async () => {
     const state = await run({ view: "today", iCloud: JSON.stringify(fixture()) });
-    for (const value of ["今日", "00157 錦上路", "15:05–23:15", "Day 4", "中三家長會", "多雲", "行車大致正常"]) ok(texts(state.widget).some((t) => t.includes(value)), value);
+    for (const value of ["00157 錦上路", "15:05–23:15", "Day 4", "中三家長會", "多雲", "KSR", "改"]) ok(texts(state.widget).some((t) => t.includes(value)), value);
+    ok(!texts(state.widget).includes("行車大致正常"));
   });
   await test("info 系統儲存／uptime／低耗電只由 JSON 顯示", async () => {
     const state = await run({ view: "info", iCloud: JSON.stringify(fixture()) });
@@ -401,13 +483,13 @@ if (require.main === module) (async () => {
     ok(!has(state.widget, "DCCJ 1/2026"));
   });
   await test("accessory view 任何 family 都有電量", async () => {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       const state = await run({ view: "accessory", family, iCloud: JSON.stringify(fixture()) });
       ok(texts(state.widget).some((t) => t.includes("75%")), family);
     }
   });
   await test("accessory 缺 JSON 仍有電量與設定提示", async () => {
-    for (const family of ["small", "medium", "large", "extraLarge", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryInline", "accessoryCircular", "accessoryRectangular"]) {
       const state = await run({ view: "accessory", family });
       const output = texts(state.widget);
       ok(output.some((t) => t.includes("75%")), family);
@@ -419,17 +501,22 @@ if (require.main === module) (async () => {
   await test("warnings unavailable + 空 items 顯示未有資料，唔顯示沒有警告", async () => {
     for (const view of ["today", "info"]) {
       const state = await run({ view, iCloud: JSON.stringify(fixture()) });
-      ok(has(state.widget, "未有資料"), view);
+      ok(texts(state.widget).some((value) => value.includes("未有資料")), view);
       ok(!has(state.widget, "沒有警告"), view);
     }
   });
-  await test("warnings available + 空 items 才顯示沒有警告", async () => {
+  await test("warnings available + 空 items 時 info 先顯示沒有警告；today 收起", async () => {
     const data = fixture();
     data.warnings.available = true;
-    for (const view of ["today", "info"]) {
-      const state = await run({ view, iCloud: JSON.stringify(data) });
-      ok(has(state.widget, "沒有警告"), view);
-    }
+    ok(has((await run({ view: "info", iCloud: JSON.stringify(data) })).widget, "沒有警告"));
+    ok(!has((await run({ view: "today", iCloud: JSON.stringify(data) })).widget, "沒有警告"));
+  });
+  await test("today 屯馬綫未有資料唔會被當成正常而收起", async () => {
+    const data = fixture();
+    data.warnings.available = true;
+    data.train.available = false;
+    const output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("屯馬綫：未有資料"));
   });
   await test("warnings available 顯示警告內容", async () => {
     const data = fixture();
@@ -478,17 +565,17 @@ if (require.main === module) (async () => {
     data.school.failed = ["中三", "小六"];
     data.school.today = { cycle: [], items: [] };
     let output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("學校讀取失敗／部分失敗：中三、小六"));
-    ok(!output.includes("今日 · 沒有日程"));
+    ok(output.includes("中三、小六") && output.includes("讀唔到"));
+    ok(!output.includes("今明兩日冇學校活動"));
     data.school.failed = [];
     output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("今日 · 沒有日程"));
+    ok(output.includes("今明兩日冇學校活動"));
   });
   await test("school failed 有部分 items 時同時顯示失敗與日程", async () => {
     const data = fixture();
     data.school.failed = ["小六"];
     const output = texts((await run({ view: "today", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(output.includes("學校讀取失敗／部分失敗：小六"));
+    ok(output.includes("小六") && output.includes("讀唔到"));
     ok(output.includes("中三家長會"));
   });
   await test("VPS 未設定、讀取失敗、沿用快取三態清楚", async () => {
@@ -513,16 +600,22 @@ if (require.main === module) (async () => {
   });
 
   console.log("\n【M】app 主題與 deep links");
+  await test("真實 Scriptable 式不透明 Color.dynamic 回傳值唔會被讀取內部屬性", async () => {
+    const state = await run({ view: "today", iCloud: JSON.stringify(planningFixture()), opaqueDynamicColors: true });
+    ok(state.widget && state.completed);
+    ok(has(state.widget, "00157 錦上路"));
+    ok(has(state.widget, "KSR"));
+  });
   await test("六個主題實際改變畫面 accent／背景，mono 所有畫面色為灰階", async () => {
     const accents = new Set();
     const backgrounds = new Set();
     for (const theme of ["classic", "ocean", "sunset", "forest", "violet", "mono"]) {
-      const data = fixture();
+      const data = planningFixture();
       data.theme = theme;
       const widget = (await run({ view: "today", iCloud: JSON.stringify(data) })).widget;
-      const heading = all(widget, (e) => e.kind === "text" && e.text === "更份")[0];
-      ok(heading && heading.textColor.dynamic, theme);
-      accents.add(heading.textColor.light.hex);
+      const accentIcon = all(widget, (e) => e.kind === "image" && e.image && e.image.symbol === "clock")[0];
+      ok(accentIcon && accentIcon.tintColor.dynamic, theme);
+      accents.add(accentIcon.tintColor.light.hex);
       backgrounds.add(widget.backgroundColor.light.hex);
       if (theme === "mono") {
         const colors = all(widget, (e) => e.textColor || e.backgroundColor).map((e) => e.textColor || e.backgroundColor);
@@ -608,12 +701,30 @@ if (require.main === module) (async () => {
     for (const value of ["15:30", "落更", "錦上路交接", "錦上路站", "帶交接文件"]) ok(output.includes(value), value);
     ok(!output.includes("已發生事件"));
   });
-  await test("today 補回 week、明日更份、假期、明日學校、7 日 weather", async () => {
-    for (const family of ["medium", "large", "extraLarge"]) {
+  await test("today 大尺寸補回 7 日更份、明日、假期、學校；medium 保持精簡", async () => {
+    for (const family of ["large", "extraLarge", "extraLargePortrait"]) {
       const output = texts((await run({ view: "today", family, iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
-      for (const value of ["本週 5 更", "00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 天後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
-      for (let index = 0; index < 7; index++) ok(output.includes(`天氣${index + 1}`), `${family}: daily ${index + 1}`);
+      for (const value of ["00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 日後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
+      for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
+      equal(output.includes("本週 5 更"), family !== "large", `${family}: week summary`);
     }
+    const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
+    ok(!medium.includes("明日科學測驗"));
+    ok(!medium.includes("三23"));
+  });
+  await test("today 七日色條有天氣，主卡有返工／放工逐小時預報", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const output = texts(widget).join("\n");
+    equal(texts(widget).filter((value) => value === "31°").length, 7);
+    for (const value of ["返工 15:05", "28°", "放工 23:15", "25°"]) ok(output.includes(value), value);
+  });
+  await test("today 主要文字維持可讀字級", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const find = (value) => texts(widget).includes(value) ? all(widget, (e) => e.kind === "text" && e.text === value)[0] : null;
+    equal(find("五23").font.size, 10);
+    equal(find("死早").font.size, 11);
+    equal(all(widget, (e) => e.kind === "text" && e.text.startsWith("接下來 15:30"))[0].font.size, 12);
+    equal(find("明日科學測驗").font.size, 13);
   });
   await test("today small 維持精簡，仍有 cached duty 失敗提示", async () => {
     const data = planningFixture();
@@ -624,17 +735,22 @@ if (require.main === module) (async () => {
     ok(!output.includes("本週 5 更"));
     ok(!output.includes("天氣7"));
   });
-  await test("today 受 rowBudget 限制，不無限堆疊 events/daily", async () => {
+  await test("today 原生式版面限制事件、7 日色條同學校行數", async () => {
     const data = planningFixture();
     data.duty.events = Array.from({ length: 200 }, (_, index) => dutyEvent(iso(15, index), { title: `事件${index}` }));
     data.weather.daily = Array.from({ length: 14 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, 10));
-    for (const family of ["medium", "large", "extraLarge"]) {
+    data.school.today.items = Array.from({ length: 10 }, (_, index) => ({ title: `活動${index}`, start: iso(9, index), end: iso(10, index), allDay: false }));
+    for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const widget = (await run({ view: "today", family, iCloud: JSON.stringify(data) })).widget;
       const output = texts(widget).join("\n");
       equal(output.includes("事件199"), false, family);
-      equal(output.includes("天氣8"), false, family);
-      const sections = texts(widget).filter((value) => ["更份", "即將發生", "方案規劃", "學校", "天氣", "屯馬綫", "天氣警告"].includes(value));
-      ok(sections.length <= ({ medium: 6, large: 8, extraLarge: 11 }[family]), family);
+      equal(all(widget, (e) => e.kind === "stack" && e.cornerRadius === 18).length, 1, `${family}: one duty card`);
+      if (family !== "medium") {
+        for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
+        equal(output.includes("活動2"), true, `${family}: school visible`);
+        equal(output.includes("活動5"), family !== "medium" && family !== "large", `${family}: school budget`);
+        equal(output.includes("活動9"), false, `${family}: school cap`);
+      }
     }
   });
   await test("info 補回 warning、battery estimate/rate、memory、今日／明日 rain", async () => {
@@ -643,10 +759,78 @@ if (require.main === module) (async () => {
     data.system.battery.estimatedText = "約 5 小時";
     data.system.battery.rateText = "12.5% / 小時";
     data.system.memory.lines = [{ label: "記憶體", value: "3.1 / 8 GB" }, { label: "可用", value: "38%" }];
-    for (const family of ["medium", "large", "extraLarge"]) {
+    for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const output = texts((await run({ view: "info", family, iCloud: JSON.stringify(data) })).widget).join("\n");
       for (const value of ["雷暴警告", "約 5 小時", "12.5% / 小時", "3.1 / 8 GB", "今日降雨", "30%", "明日降雨", "70%", "HK$62,800", "正常", "行車大致正常"]) ok(output.includes(value), `${family}: ${value}`);
     }
+  });
+
+  console.log("\n【N】Scriptable 1.8 API 與相容 fallback");
+  await test("1.8 原生線性進度條使用 0–100、顏色、軌道同粗細", async () => {
+    const state = await run({ family: "large", device: { batteryLevel: () => 1.2 } });
+    const progress = all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear");
+    equal(progress.length, 3);
+    equal(progress[0].value, 100);
+    equal(progress[0].options.thickness, 6);
+    ok(progress[0].options.progressColor && progress[0].options.trackColor);
+  });
+  await test("1.8 鎖屏圓形電量用原生 circular progress；舊版退回符號", async () => {
+    const state = await run({ family: "accessoryCircular" });
+    const ring = all(state.widget, (e) => e.kind === "progress");
+    equal(ring.length, 1);
+    equal(ring[0].value, 75);
+    equal(ring[0].options.style, "circular");
+    equal(ring[0].options.thickness, 5);
+    equal(ring[0].children.filter((e) => e.kind === "text" && e.text === "75%").length, 1);
+    const legacy = await run({ family: "accessoryCircular", nativeProgress: false });
+    equal(all(legacy.widget, (e) => e.kind === "progress").length, 0);
+    ok(all(legacy.widget, (e) => e.kind === "image").some((e) => e.image.symbol === "battery.75percent"));
+  });
+  await test("透明背景只喺 iOS/iPadOS 27.2+ 同非鎖屏啟用", async () => {
+    for (const [systemName, systemVersion, family, expected] of [
+      ["iOS", "27.2", "large", true], ["iOS", "27.2.1", "small", true],
+      ["iPadOS", "27.2", "extraLargePortrait", true], ["iOS", "27.1.9", "large", false],
+      ["iOS", "26.9", "large", false], ["iOS", "27.2", "accessoryCircular", false],
+    ]) {
+      const state = await run({ family, device: { systemName: () => systemName, systemVersion: () => systemVersion }, parameterValues: { view: "today", background: "transparent" }, iCloud: JSON.stringify(fixture()) });
+      equal(state.widget.backgroundStyle, expected ? "transparent" : "default", `${systemName} ${systemVersion}/${family}`);
+      ok(state.widget.backgroundColor);
+    }
+    const defaultState = await run({ family: "large" });
+    equal(defaultState.widget.backgroundStyle, "default");
+    ok(defaultState.widget.backgroundColor);
+  });
+  await test("更新鈕只用喺支援互動嘅 Home Screen family，保留 URL 與舊版 fallback", async () => {
+    for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryRectangular"]) {
+      const state = await run({ view: "info", family, iCloud: JSON.stringify(fixture()) });
+      const buttons = all(state.widget, (e) => e.kind === "refreshButton");
+      const supported = ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family);
+      equal(buttons.length, supported ? 1 : 0, family);
+      if (supported) equal(buttons[0].title, "更新");
+      equal(state.widget.url, "iwidget://info");
+    }
+    const oldOS = await run({ view: "info", device: { systemVersion: () => "16.9" }, iCloud: JSON.stringify(fixture()) });
+    equal(all(oldOS.widget, (e) => e.kind === "refreshButton").length, 0);
+    const legacy = await run({ view: "info", refreshControls: false, iCloud: JSON.stringify(fixture()) });
+    equal(all(legacy.widget, (e) => e.kind === "refreshButton").length, 0);
+    equal(legacy.widget.url, "iwidget://info");
+  });
+  await test("extraLargePortrait 有完整 today 內容並用新預覽 API，缺少時退回 extraLarge", async () => {
+    const data = planningFixture();
+    const preview = await run({ view: "today", family: "extraLargePortrait", runsInWidget: false, iCloud: JSON.stringify(data) });
+    equal(preview.widgetObj.presented, "extraLargePortrait");
+    const output = texts(preview.widgetObj).join("\n");
+    for (const value of ["00158 屯門", "本週 5 更", "明日科學測驗", "重陽節"]) ok(output.includes(value), value);
+    const legacy = await run({ family: "extraLargePortrait", runsInWidget: false, portraitPreview: false, iCloud: JSON.stringify(data) });
+    equal(legacy.widgetObj.presented, "extraLarge");
+  });
+  await test("主要更份時間用 heavy monospaced font，倒數右對齊", async () => {
+    const state = await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) });
+    const times = all(state.widget, (e) => e.kind === "text" && e.text === "15:05–23:15")[0];
+    equal(times.font.name, "heavyMono");
+    const countdown = all(state.widget, (e) => e.kind === "text" && e.text.startsWith("返工 "))[0];
+    equal(countdown.textAlign, "right");
+    equal(countdown.minimumScaleFactor, 0.8);
   });
 
   console.log("\n【C】時鐘與 reload 邊界");
@@ -665,7 +849,7 @@ if (require.main === module) (async () => {
   equal(all(state.widget, (e) => e.kind === "date")[0].style, "timer");
 
   const delay = async (now) => (await run({ family: "small", now })).widget.refreshAfterDate - now;
-  equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 30 * 60000);
+  equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 60 * 60000);
   equal(await delay(new Date(2026, 9, 23, 23, 50, 0)), 10 * 60000 + 20000);
   equal(await delay(new Date(2026, 9, 23, 0, 40, 0)), 20 * 60000 + 20000);
   ok(await delay(new Date(2026, 9, 23, 0, 0, 20)) > 0);
@@ -676,11 +860,21 @@ if (require.main === module) (async () => {
   equal(cards.length, 4);
   ok(cards.every((c) => c.backgroundColor && c.padding && c.padding[1] === 12));
   ok(cards.every((c) => c.children.some((k) => k.kind === "spacer")));
-  equal(all(state.widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 3);
+  equal(all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear").length, 3);
+  equal(all(state.widget, (e) => e.kind === "progress")[0].value, 75);
+  ok(all(state.widget, (e) => e.kind === "progress").every((p) => p.options.thickness === 6 && p.options.trackColor));
   ok(has(state.widget, "75%"));
   ok(has(state.widget, "iOS 27.0.1"));
-  const fills = all(state.widget, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 70);
-  ok(fills.some((f) => f.size.width === Math.round(70 * 0.75)));
+  const mediumProgress = (await run({ family: "medium" })).widget;
+  const mediumBar = all(mediumProgress, (e) => e.kind === "progress")[0];
+  equal(mediumBar.size.width, 70);
+  equal(mediumBar.size.height, 6);
+  const legacy = (await run({ family: "large", nativeProgress: false })).widget;
+  equal(all(legacy, (e) => e.kind === "progress").length, 0);
+  equal(all((await run({ family: "medium", nativeProgress: false })).widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 1);
+  equal(all(legacy, (e) => e.kind === "stack" && e.size && e.size.width === 120).length, 3);
+  const legacyFills = all(legacy, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 120);
+  ok(legacyFills.some((f) => f.size.width === Math.round(120 * 0.75)));
 
   console.log("\n【D】缺資料／Device 錯誤／符號缺失");
   state = await run({ family: "large", device: { batteryLevel: () => -1 } });

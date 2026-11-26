@@ -17,7 +17,7 @@ enum WidgetSnapshotBuilder {
         return WidgetExport(
             schemaVersion: WidgetSchema.version,
             generatedAt: now,
-            serviceDate: entry.serviceToday,
+            serviceDate: exportDateCode(entry.serviceToday),
             theme: entry.theme.rawValue,
             freshness: WidgetFreshness(
                 today: OverviewEntry.lastSuccess(info: info, schedule: schedule, part: .today),
@@ -77,6 +77,8 @@ enum WidgetSnapshotBuilder {
                         note: event.note
                     )
                 },
+                week: dutyWeek(entry: entry),
+                shiftForecast: shiftForecast(entry: entry, now: now, calendar: calendar),
                 weekText: entry.weekSummary?.text,
                 nextHoliday: entry.nextHoliday.map {
                     WidgetHoliday(title: $0.title, rangeText: $0.rangeText, daysAway: $0.daysAway)
@@ -121,11 +123,60 @@ enum WidgetSnapshotBuilder {
         )
     }
 
+    private static func dutyWeek(entry: OverviewEntry) -> [WidgetDutyStripDay] {
+        let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+        return (0..<7).compactMap { offset in
+            guard let sourceDate = Days.add(entry.serviceToday, offset) else { return nil }
+            let day = entry.schedule.duty(on: sourceDate)
+            let parts = sourceDate.split(separator: "-")
+            return WidgetDutyStripDay(
+                date: exportDateCode(sourceDate),
+                weekday: Days.weekdayIndex(sourceDate).flatMap { weekdays.indices.contains($0) ? weekdays[$0] : nil } ?? "—",
+                dayNumber: parts.last.map(String.init) ?? "—",
+                label: day?.shortLabel ?? "—",
+                tone: day.map(dutyTone) ?? "unknown",
+                weather: entry.info.weather?.day(sourceDate).map(weatherDay)
+            )
+        }
+    }
+
+    private static func shiftForecast(entry: OverviewEntry, now: Date, calendar: Calendar) -> [WidgetShiftForecast] {
+        guard let day = entry.dutyToday, let weather = entry.info.weather else { return [] }
+        let moments: [(String, Int?)] = [("返工", day.on), ("放工", day.off)]
+        return moments.compactMap { label, seconds in
+            guard let seconds, let at = day.moment(atServiceSecond: seconds),
+                  at > now.addingTimeInterval(-3_600),
+                  let hour = weather.hour(at: at, calendar: calendar) else { return nil }
+            return WidgetShiftForecast(
+                label: "\(label) \(DutyDay.clock(seconds))",
+                code: hour.code,
+                symbol: hour.code.map(WeatherCode.symbol),
+                tempText: Formatting.degrees(hour.temp),
+                rainChance: hour.rainChance
+            )
+        }
+    }
+
+    private static func dutyTone(_ day: DutyDay) -> String {
+        switch day.kind {
+        case .rest: return "rest"
+        case .leave: return "leave"
+        case .pending: return "pending"
+        case .spare: return day.shift?.rawValue ?? "spare"
+        case .other: return day.shift?.rawValue ?? "other"
+        case .duty: return day.shift?.rawValue ?? "duty"
+        }
+    }
+
     private static func dutyDay(_ day: DutyDay, calendar: Calendar) -> WidgetDutyDay {
         WidgetDutyDay(
-            date: day.date,
+            date: exportDateCode(day.date),
             code: day.code,
             title: day.title,
+            group: day.group,
+            datedSheet: day.datedSheet,
+            isOverride: day.isOverride,
+            tone: dutyTone(day),
             times: day.times,
             route: day.route,
             mealText: day.mealText,
@@ -159,7 +210,7 @@ enum WidgetSnapshotBuilder {
             today: weatherDay(snapshot.today),
             tomorrow: snapshot.tomorrow.map(weatherDay),
             daily: Array(snapshot.days ?? []).prefix(7).map {
-                WidgetDatedWeather(date: $0.date, day: weatherDay($0.day))
+                WidgetDatedWeather(date: exportDateCode($0.date), day: weatherDay($0.day))
             }
         )
     }
@@ -189,7 +240,7 @@ enum WidgetSnapshotBuilder {
             total: day.total,
             truncated: relevant.count > WidgetSchema.maxCasesPerCourt,
             categories: day.categoryCounts.map {
-                WidgetCategoryCount(category: $0.category.rawValue, title: $0.category.title, count: $0.count)
+                WidgetCategoryCount(category: $0.category.rawValue, categoryTitle: $0.category.title, count: $0.count)
             },
             deepLink: CourtLink(code: day.code).url.absoluteString,
             cases: shown.map { item in
@@ -211,10 +262,27 @@ enum WidgetSnapshotBuilder {
         )
     }
 
-    /// 原站同快取用 DDMMYYYY；跨 app schema 統一用 YYYYMMDD。
+    /// 更份／天氣用 YYYY-MM-DD，法院用 DDMMYYYY；跨 app schema 統一轉做 YYYYMMDD。
     static func exportDateCode(_ value: String) -> String {
-        guard value.count == 8, value.allSatisfy(\.isNumber) else { return value }
-        return String(value.suffix(4)) + String(value.dropFirst(2).prefix(2)) + String(value.prefix(2))
+        let dashed = value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        let normalized = dashed ? value.replacingOccurrences(of: "-", with: "") : value
+        guard normalized.count == 8, normalized.allSatisfy(\.isNumber) else { return value }
+
+        let year = Int(normalized.suffix(4))
+        let firstMonth = Int(normalized.dropFirst(4).prefix(2))
+        let firstDay = Int(normalized.suffix(2))
+        if (2000...2100).contains(Int(normalized.prefix(4)) ?? 0),
+           (1...12).contains(firstMonth ?? 0), (1...31).contains(firstDay ?? 0) {
+            return normalized
+        }
+
+        let day = Int(normalized.prefix(2))
+        let month = Int(normalized.dropFirst(2).prefix(2))
+        guard (1...31).contains(day ?? 0), (1...12).contains(month ?? 0),
+              (2000...2100).contains(year ?? 0) else { return value }
+        return String(normalized.suffix(4))
+            + String(normalized.dropFirst(2).prefix(2))
+            + String(normalized.prefix(2))
     }
 
     private static func osStatusText(_ status: OSVersionStatus) -> String {

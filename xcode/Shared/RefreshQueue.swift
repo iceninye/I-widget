@@ -11,9 +11,35 @@ import Foundation
 /// 呢度唔重複一次。
 enum RefreshQueue {
 
+    /// 例行刷新統一 60 分鐘：原生 timeline、Scriptable BGTask 同 Scriptable script 各自使用。
+    /// 更份／午夜等可預測邊界仍由 timeline entry 或 Scriptable `nextReload` 另行處理。
+    static let routineRefreshInterval: TimeInterval = 60 * 60
+
+    /// 背景返前景嘅網絡刷新節流；通知同 Live Activity 唔受呢段限制。
+    static let foregroundThrottleInterval: TimeInterval = 30 * 60
+
+    /// 只有背景返前景先套用節流。冷啟（未有完成時間）、手動更新、deep link 同更份邊界
+    /// 都唔經呢個函數，所以仍然即時；時間倒退時保守節流，唔會立即再打網。
+    static func shouldRefreshOnForeground(lastRefreshAt: Date?, now: Date) -> Bool {
+        guard let lastRefreshAt else { return true }
+        return now.timeIntervalSince(lastRefreshAt) >= foregroundThrottleInterval
+    }
+
+    private static let lastRefreshAttemptKey = "refresh.lastNetworkAttemptAt"
+
+    /// BGTask 同 View 共用同一個最近網絡嘗試時間，避免 BGTask 啱啱跑完就返前景又打一輪。
+    /// 冷啟仍然即時刷新、唔讀呢個記錄；呢個值只供背景返前景節流使用。
+    static func lastRefreshAttemptAt(in defaults: UserDefaults = .standard) -> Date? {
+        defaults.object(forKey: lastRefreshAttemptKey) as? Date
+    }
+
+    static func recordRefreshAttempt(at: Date, in defaults: UserDefaults = .standard) {
+        defaults.set(at, forKey: lastRefreshAttemptKey)
+    }
+
     /// 一個刷新請求進入時點做。
     ///
-    /// 「一定要做到」嘅請求（deep link、返前景、跨過事件邊界、設定改完 token）喺有輪跑緊時
+    /// 「一定要做到」嘅請求（deep link、節流允許嘅返前景、跨過事件邊界、設定改完 token）喺有輪跑緊時
     /// 會被 `loading` guard 默默吞咗，就等於用戶改嘅最後幾個字、或者撳 Live Activity 入嚟嗰次
     /// 更新永遠做唔到；所以呢類要排返隊補跑（`.enqueue`），而「順手」請求（低耗電模式改變、
     /// 冷啟）就併入跑緊嗰輪（`.merge`），唔會一輪接一輪打網。

@@ -82,7 +82,7 @@ Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」
 3. 開 iWidget「設定」→「Scriptable 同步」→「選擇 Scriptable 資料夾」，揀 **Scriptable 資料夾本身**，唔好揀入面子資料夾。狀態應由「未選擇」變成已授權；按「立即寫入 JSON」。
 4. 同頁揀「Scriptable 主題」：預設、海藍、日落、森林、紫羅蘭或單色。主題寫落 JSON，只影響 Scriptable；原生 Widget 調色掣獨立。
 5. 喺 Scriptable 新增 `i-widget` script，貼入 [`scriptable/i-widget.js`](../scriptable/i-widget.js) 全文；加入 Scriptable widget，`Script` 揀 `i-widget`。
-6. Widget 編輯頁嘅 `Parameter` 用 `view=today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時用 script 嘅 `previewView`（出廠 `clock`）。鎖屏可用 Scriptable 行內／圓形／長方形。
+6. Widget 編輯頁嘅 `Parameter` 用 `view=today`、`info`、`court`、`clock` 或 `accessory`。冇 parameter 時用 script 嘅 `previewView`（出廠 `today`）。鎖屏可用 Scriptable 行內／圓形／長方形。
 
 正常資料路徑係 app 寫入，唔使先手放 JSON。手動 JSON 只適合進階診斷，唔可以當成 app bridge 驗收。詳細 view、schema、cache 同法院規則見 [`scriptable/README.md`](../scriptable/README.md)。
 
@@ -92,7 +92,7 @@ Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」
 - **iCloud 同步**：由 iCloud／File Provider 決定，app 冇提供同步完成通知。
 - **Scriptable Widget 實際刷新**：要 Scriptable extension 真係執行並重新渲染；app 只直接 reload 原生 Overview／Info timeline，唔保證 Scriptable 何時更新。
 
-`WidgetBackgroundRefresh.scheduleNext()` 請求 30 分鐘後嘅 `earliestBeginDate`；Scriptable `refreshAfterDate` 亦以 30 分鐘為一般最早間隔，午夜／01:00 會提前。兩者都**唔保證固定間隔**：iOS reload 預算、低耗電、背景限制、iCloud 下載同 extension 啟動時間都會影響實際結果。
+原生 Overview／Court timeline、`WidgetBackgroundRefresh.scheduleNext()` 同 Scriptable `refreshAfterDate` 嘅一般最早間隔統一為 **60 分鐘**；午夜／01:00 同更份等可預測邊界仍會提前，10 分鐘 timeline entry 只係本地切換，唔使上網。背景返前景另有 **30 分鐘節流**：夠鐘先重新上網同重讀 Widget；30 分鐘內只用現有資料重排通知同同步 Live Activity。冷啟、deep link、手動更新同更份邊界保持即時。所有時間都**唔保證固定間隔**：iOS reload 預算、低耗電、背景限制、iCloud 下載同 extension 啟動時間都會影響實際結果。
 
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
 鎖屏：長按鎖屏 → 自訂 → 加入元件 → 今日咭有行內／長方形，各項資訊有圓形（電量）。
@@ -152,7 +152,7 @@ App「設定」填 tml-roster token，再開「交接提示」，允許通知。
 ### 3. Widget 更新
 
 - [ ] 記錄 app 寫入、iCloud 可見最新 JSON、Scriptable extension 執行、Home Screen 實際轉畫嘅時間；確認 widget 真係由 A 轉 B。
-- [ ] 分開寫低三項結論：**「資料橋樑成立」**、**「離線快取成立」**、**「Widget 更新成立」**。第三項只證明真機曾更新，唔證明 `refreshAfterDate`／`earliestBeginDate` 會固定每 30 分鐘執行。
+- [ ] 分開寫低三項結論：**「資料橋樑成立」**、**「離線快取成立」**、**「Widget 更新成立」**。第三項只證明真機曾更新，唔證明 `refreshAfterDate`／`earliestBeginDate` 會固定每 60 分鐘執行。
 
 ### 4. 原生功能不受橋接影響
 
