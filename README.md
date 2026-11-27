@@ -4,7 +4,7 @@ iPhone Home Screen 嘅 widget。本 repo 保留三條並行路徑：
 
 - **Swift app＋原生 WidgetKit**（[`xcode/README.md`](xcode/README.md)）：更份、交接通知、AppIntents、法院、天氣、黃金、VPS，同鎖屏／動態島 `DutyLiveActivity`。
 - **Swift app → Scriptable**（[`scriptable/README.md`](scriptable/README.md)）：app 透過 security-scoped iCloud folder 匯出 `i-widget.json`，Scriptable 顯示今日、資訊、法院、時鐘或鎖屏元件。呢條係正式並行路徑，唔係備份。
-- **Pyto**（Python）：獨立時鐘／系統資訊 widget，保留原有自動更新機制。
+- **Pyto**（Python）：獨立時鐘／系統資訊 widget；遠端拉碼已封存，只執行驗證過嘅本地快取。
 
 ## Swift app → Scriptable 架構
 
@@ -45,20 +45,20 @@ Scriptable 路徑只使用 app 設定保存嘅認證；原生 Widget 仍沿用�
 iOS 27 新增嘅 widget family、Liquid Glass 嘅 tinted／clear 渲染模式由系統決定，
 Pyto 冇 API 去控制；所以 widget 只可以做到「用系統色、用系統填充色，等系統重新上色時唔會出事」。
 
-## 自動更新
+## Pyto 遠端拉碼（已封存）
 
-Widget 會**自動跟 GitHub 最新版本**——改完 `i_widget.py` push 上 `main`，
-手機下次 reload 就會自己攞新版，唔使再手動抄入 Pyto。
+`i_widget_launcher.py` **唔會再下載 GitHub 指紋或 `i_widget.py`**，亦唔會更新遠端程式碼。
+launcher 保留嘅本地功能只有：讀取先前已存嘅快取，確認快取指紋格式合法、SHA256 前綴同內容相符、
+語法通過 `compile()`，而且含有 `CACHE_MARKER`，先會執行。
 
-做法係「指紋檢查 + 本地快取 + 三層回退」：
-widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落載完整程式碼；
-下載完核對 SHA256 同指紋一致、再做語法檢查，先寫入快取。任何一步失敗都繼續行舊快取，
-所以網絡斷、GitHub 掛、推咗個壞 commit 落 `main`，widget 都唔會空白。
+任何指紋不符、指紋缺失、驗證或 cache sanity 失敗都會中止；冷啟動冇可信快取時，
+**唔會退回「下載 → compile → exec」嘅無驗證分支**。widget 會顯示「Pyto 遠端拉碼已封存」
+同本地快取驗證錯誤。快取存喺 Pyto 官方 `userkeys`，檔案只係後備。
 
-快取存喺 Pyto 官方 `userkeys`（`NSUserDefaults` suite，extension 同主 app 共用，
-唔會被 iOS 清理），檔案只係後備。
+⚠️ 呢個指紋只係同內容一齊存放、未加金鑰嘅 SHA256 前綴，用來發現損壞／誤配，**唔係數碼簽章，亦唔能證明來源可信**。若本機儲存被惡意同時改寫程式碼同指紋，仍可偽造相符組合；封存措施消除嘅係自動遠端拉碼風險，唔係本機已被完全控制嘅情況。
 
-設計理由同驗證見 [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md)。
+首次安裝、離線使用或者想手動更新時，請改用下面嘅本地模式，直接執行 `i_widget.py`。
+舊自動更新設計只供歷史參考：[docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md)。
 
 ## 疑難雜症
 
@@ -83,26 +83,24 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 
 ## 安裝
 
-**用自動更新（建議）**
+**沿用現有 launcher 快取（只適用於已有可信快取）**
 
 1. 喺 iPhone 裝 Pyto（App Store 搜尋「Pyto」，開發者 Emma Labbé）。
 2. 將 **`i_widget_launcher.py`** 放入 Pyto 嘅 scripts 資料夾。
-   唔使抄 `i_widget.py`——launcher 會自己落載。
 3. 長按 Home Screen → 加**Pyto** widget → 揀尺寸 → 長按 widget → **編輯 Widget**：
    - `Widget Type`：`Run Script`
    - `Script`：揀 **`i_widget_launcher.py`**
-4. 完成。第一次 reload 會落載（大約幾秒），之後自動跟最新版。
+4. launcher 只會執行指紋相符、語法同 sanity 檢查通過嘅現有快取，唔會上網。
+   如果顯示封存／驗證錯誤，請改用本地模式。
 
-**本地執行（離線用）**
-
-如果要完全離線、唔想佢上網，就直接用 `i_widget.py`：
+**本地執行（新安裝／離線用手動更新）**
 
 1. 將 `i_widget.py` 放入 Pyto 嘅 scripts 資料夾。
 2. 喺 Pyto 開 `i_widget.py` 行一次，確認冇紅字錯誤。
 3. Widget 嘅 `Script` 揀 `i_widget.py`。
 
-⚠️ 本地模式唔會自動更新，改咗 GitHub 都唔會生效。
-兩種模式嘅檔案唔會互相影響，想轉換只需要改 widget 設定。
+⚠️ 本地模式同封存 launcher 都唔會自動更新；改完程式碼後要人手更新 Pyto 入面嘅檔案。
+想轉換只需要改 widget 設定。
 
 ## 自訂
 
@@ -128,10 +126,10 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | 檔案 | 角色 | 幾常改 |
 | --- | --- | --- |
 | `i_widget.py` | widget 本體 | 改版面／內容時 |
-| `i_widget_launcher.py` | 自動更新啟動器，**widget 指向嘅係佢** | 幾乎唔使 |
-| `i_widget.fingerprint` | 版本指紋（SHA256 前綴） | GitHub Action 自動生成 |
-| `make_fingerprint.py` | 手動重算指紋 | 唔使 |
-| `test_launcher.py` | 更新邏輯測試（72 項斷言） | 改 launcher 時 |
+| `i_widget_launcher.py` | 已封存遠端更新，只執行驗證過嘅本地快取 | 幾乎唔使 |
+| `i_widget.fingerprint` | 舊遠端版本指紋；封存後 launcher 唔會讀取 | GitHub Action 自動生成 |
+| `make_fingerprint.py` | 手動重算舊遠端指紋 | 唔使 |
+| `test_launcher.py` | 封存模式回歸測試：零下載、本地快取指紋／語法／sanity 驗證 | 改 launcher 時 |
 | `test_widget.py` | widget 本體 smoke test（用 mock Pyto 砌齊四個尺寸） | 改 `i_widget.py` 時 |
 | `mock_pyto.py` | 測試用嘅假 `widgets`／`userkeys` | 用到新 Pyto API 時 |
 | `scriptable/i-widget.js` | Scriptable widget，讀 app 匯出嘅 iCloud JSON | 改 Scriptable 版面時 |
@@ -143,7 +141,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 | `xcode/iWidget/ScriptableBridgeController.swift` | 授權、快取最新 entry、排程寫入 | 改 app 橋接時 |
 | `xcode/iWidget/ScriptableFolderStore.swift` | Keychain 內本機 folder bookmark | 改授權儲存時 |
 | `xcode/iWidget/WidgetBackgroundRefresh.swift` | 前景 flush 同 BGTask 匯出 | 改背景匯出時 |
-| `docs/AUTO-UPDATE.md` | Pyto 自更新設計文檔 | 唔使 |
+| `docs/AUTO-UPDATE.md` | 已封存嘅 Pyto 自更新設計（歷史參考） | 唔使 |
 | `docs/POSTMORTEM.md` | 綠色事故分析 | 唔使 |
 | `LICENSE` | MIT | 唔使 |
 
@@ -156,7 +154,7 @@ widget 每次 reload 先問 GitHub 個極小嘅指紋檔有無變，變咗先落
 # 喺 repo 根目錄
 node scriptable/test-i-widget.js   # Scriptable schema、cache、view 同版面
 python3 test_widget.py            # Pyto widget smoke test
-python3 test_launcher.py          # Pyto launcher 更新邏輯
+python3 test_launcher.py          # Pyto 封存模式：只驗證本地快取、永不遠端拉碼
 
 # 喺 xcode/ 產生專案；完整 xcodebuild test 指令見 xcode/README.md
 (cd xcode && xcodegen generate)
@@ -164,11 +162,12 @@ python3 test_launcher.py          # Pyto launcher 更新邏輯
 
 自動測試唔等於真機驗收；iCloud bookmark、Scriptable extension 權限、離線 cache 同 Widget 實際 reload 要跟 [`xcode/README.md`](xcode/README.md) 嘅清單逐項試。
 
-Push 咗之後，GitHub Action 會自動更新 `i_widget.fingerprint`，
-手機下次 reload 就會自己攞新版。
+Pyto 已經封存遠端拉碼：即使 GitHub Action 更新 `i_widget.fingerprint`，手機都唔會再攞新版。
+要更新 Pyto widget，請人手更新本地 `i_widget.py` 並改用本地模式。
 
-PR 同 `main` 都會自動跑兩個測試（`.github/workflows/tests.yml`）；
-指紋 Action 亦會先跑 `test_widget.py`，失敗就唔發佈新指紋。
+PR 同 `main` 仍會跑 `.github/workflows/tests.yml`；`test_launcher.py` 已改為封存模式回歸測試，
+確認指紋不符、語法錯或缺 sanity marker 時唔會 exec，亦確認零快取唔會改行遠端下載。
+指紋 Action 仍會先跑 `test_widget.py`。
 
 ⚠️ 語法錯會被 launcher 擋（唔會炸 widget），smoke test 亦擋到大部分 crash，
 但 mock 唔等於真機 —— 用到新嘅 Pyto API 時，push 前喺 Pyto 試一次。

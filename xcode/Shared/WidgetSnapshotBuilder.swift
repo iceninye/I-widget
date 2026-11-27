@@ -17,7 +17,9 @@ enum WidgetSnapshotBuilder {
         return WidgetExport(
             schemaVersion: WidgetSchema.version,
             generatedAt: now,
-            serviceDate: exportDateCode(entry.serviceToday),
+            // 頂層 serviceDate 係 Scriptable 新鮮度語意，統一用香港 04:00 轉日；
+            // duty.today 仍保留 entry.serviceToday 嘅 00:00／通宵更語意。
+            serviceDate: exportDateCode(Days.serviceDate(now)),
             theme: entry.theme.rawValue,
             freshness: WidgetFreshness(
                 today: OverviewEntry.lastSuccess(info: info, schedule: schedule, part: .today),

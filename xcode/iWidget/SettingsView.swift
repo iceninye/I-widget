@@ -1,9 +1,11 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @State private var rosterToken = AppSettings.string(AppSettings.rosterToken) ?? ""
-    @State private var vpsToken = AppSettings.string(AppSettings.vpsToken) ?? ""
-    @State private var statusURL = AppSettings.string(AppSettings.statusURL) ?? ""
+    @State private var rosterToken = ""
+    @State private var vpsToken = ""
+    @State private var statusURL = ""
+    @State private var secretsReadable = false
+    @State private var secretReadError = ""
     @AppStorage(AppSettings.scriptableTheme) private var scriptableTheme = WidgetTheme.classic.rawValue
     @AppStorage(HandoverNotifier.enabledKey) private var handoverAlerts = false
     @State private var handoverStatus = ""
@@ -23,16 +25,23 @@ struct SettingsView: View {
         Form {
             Section {
                 SecureField("tml-roster 同步 token", text: $rosterToken)
+                    .disabled(!secretsReadable)
                 SecureField("VPS token", text: $vpsToken)
+                    .disabled(!secretsReadable)
                 TextField("VPS 網址（留空用預設）", text: $statusURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .disabled(!secretsReadable)
+                if !secretReadError.isEmpty {
+                    Text(secretReadError).font(.footnote).foregroundStyle(.red)
+                    Button("重新讀取私密資料") { loadSecrets() }
+                }
                 if !secretSaveError.isEmpty {
                     Text(secretSaveError).font(.footnote).foregroundStyle(.red)
                     Button("重試儲存私密資料") {
                         if persistSecrets() { onChange() }
-                    }
+                    }.disabled(!secretsReadable)
                 }
             } header: {
                 Text("私密資料")
@@ -110,11 +119,11 @@ struct SettingsView: View {
                 pickingFolder = false
             })
         }
-        .task { await refreshHandoverStatus() }
-        .onChange(of: scriptableTheme) { _, _ in onChange() }
-        .onChange(of: tokenKey) { _, _ in
-            _ = persistSecrets()
+        .task {
+            loadSecrets()
+            await refreshHandoverStatus()
         }
+        .onChange(of: scriptableTheme) { _, _ in onChange() }
         .onChange(of: handoverAlerts) { _, enabled in
             Task {
                 if enabled {
@@ -150,13 +159,39 @@ struct SettingsView: View {
                 // 期間又改咗字：呢個 task 已被取消，交俾最新嗰次輸入去發
                 guard !Task.isCancelled else { return }
                 firedKey = tokenKey
-                onChange()
+                // 停手後先寫 Keychain；成功先通知刷新，唔好網絡同 UI 已用新值但儲存其實失敗。
+                if persistSecrets() { onChange() }
             }
         }
     }
 
     @MainActor
+    private func loadSecrets() {
+        do {
+            let roster = try AppSettings.secretString(AppSettings.rosterToken)
+            let vps = try AppSettings.secretString(AppSettings.vpsToken)
+            let url = try AppSettings.secretString(AppSettings.statusURL)
+            rosterToken = roster ?? ""
+            vpsToken = vps ?? ""
+            statusURL = url ?? ""
+            secretsReadable = true
+            secretReadError = ""
+            secretSaveError = ""
+            // 讀取完成後先同步 baseline，避免非同步載入被誤判成用戶編輯而打網／重寫。
+            firedKey = tokenKey
+        } catch {
+            // 讀取失敗唔可以當成空值：保持欄位停用，亦阻止 debounce／重試按鈕盲寫三個值。
+            secretsReadable = false
+            secretReadError = "無法讀取私密資料，已停止編輯以避免覆蓋現有 token。請重試。"
+        }
+    }
+
+    @MainActor
     private func persistSecrets() -> Bool {
+        guard secretsReadable else {
+            secretSaveError = "私密資料尚未成功讀取，不能儲存。請先重新讀取。"
+            return false
+        }
         let saved = AppSettings.saveSecrets(rosterToken: rosterToken, vpsToken: vpsToken, statusURL: statusURL)
         secretSaveError = saved ? "" : "私密資料儲存失敗，可能仍在使用舊 token。請重試。"
         return saved

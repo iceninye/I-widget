@@ -149,6 +149,7 @@ struct ContentView: View {
                 boundaries = Self.eventBoundaries(from: model.entry, now: now)
             }
             forceNextRound = pendingForceNetwork
+            pendingForceNetwork = false
         } while RefreshQueue.followUp(pending: pendingRefresh, overshot: overshot)
         pendingForceNetwork = false
         refreshing = false

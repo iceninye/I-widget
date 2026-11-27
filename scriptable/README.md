@@ -52,7 +52,7 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 
 法院非空案件表沿用到下一個發布點；18:30–19:00 空結果每 15 分鐘重試，19:00–20:00 空結果／失敗每 30 分鐘重試，20:00 後沿用到下一個發布點。其他成功快取：天氣警告／港鐵 30 分鐘、黃金 60 分鐘、空氣 2 小時、匯率 12 小時、最新 iOS 24 小時、VPS 60 分鐘、學校日曆 6 小時。天氣一般 60 分鐘、今日卡 10 分鐘去重；更份 basic／sheet 6 小時、cards 12 小時、places 7 日、公眾假期 7 日；通知同 Live Activity 冇獨立網絡 polling。完整對照見 [`../xcode/README.md`](../xcode/README.md)「更新間距記錄」。
 
-**範圍：** 今次只走 Xcode Build → iPhone + Scriptable；ipa 功能擱置，workflow 只移除未審 PR 上 self-hosted runner 嘅入口，Pyto／Python 路徑唔處理，原生 WidgetKit extension 同通知／AppIntents／Live Activity 保留。
+**範圍：** 今次只走 Xcode Build → iPhone + Scriptable；ipa 功能擱置，workflow 只移除未審 PR 上 self-hosted runner 嘅入口，Pyto 只封存未驗證遠端拉碼，原生 WidgetKit extension 同通知／AppIntents／Live Activity 保留。
 
 ## 有效資料、last-good cache 與新鮮度
 
@@ -134,12 +134,14 @@ courts: { listDate, updatedAt, items }
 喺 repo 根目錄：
 
 ```sh
-node scriptable/test-i-widget.js
+for zone in UTC Asia/Hong_Kong America/New_York Pacific/Kiritimati; do
+  TZ="$zone" node scriptable/test-i-widget.js
+done
 python3 test_widget.py
 python3 test_launcher.py
 ```
 
-Node 測試用 fake Scriptable environment，覆蓋 view × family、schema／大小／日期驗證、iCloud 損壞／離線、last-good cache、freshness、法院 20 分鐘邊界、缺資料提示、時鐘邊界同 Device 擲錯；亦覆蓋 1.8 原生進度條、透明背景 OS gate、更新鈕、特大直向預覽、重字型／右對齊同舊 API fallback。Swift 單元測試同 `xcodegen generate`、`xcodebuild test` 指令見 [`../xcode/README.md`](../xcode/README.md)。
+Node 測試不固定程序時區，必須以唔同 `TZ` 開獨立進程；香港法院日期同分鐘使用明確 UTC instant，UTC+14 亦唔可以搶先跟當地時鐘午夜。Node 測試用 fake Scriptable environment，覆蓋 view × family、schema／大小／日期驗證、iCloud 損壞／離線、last-good cache、freshness、法院 20 分鐘邊界、缺資料提示、時鐘邊界同 Device 擲錯；亦覆蓋 1.8 原生進度條、透明背景 OS gate、更新鈕、特大直向預覽、重字型／右對齊同舊 API fallback。Swift 單元測試同 `xcodegen generate`、`xcodebuild test` 指令見 [`../xcode/README.md`](../xcode/README.md)。
 
 自動測試**唔等於真機驗收**。完整「UUID A → app 重啟寫 B」、「飛行模式 cache」、「三項獨立結論」、「原生通知／Live Activity 不受 bridge 影響」清單，見 [`../xcode/README.md`](../xcode/README.md)「真機驗收清單（尚未執行）」。Scriptable stack 對齊、字級、accessory 內容、iCloud bookmark／extension 權限同實際 reload 仍未在真機確認。
 

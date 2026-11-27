@@ -120,15 +120,44 @@ enum RefreshQueue {
 /// Widget「即時更新」掣喺 extension 容器留一個短時 force flag；provider 下一次被喚醒先繞過 TTL。
 /// 唔使 App Group，亦唔會永久強制每次 timeline 都上網。
 enum WidgetRefreshForce {
+    enum Kind: String, CaseIterable {
+        case today
+        case info
+        case court
+    }
+
+    private static let lock = NSLock()
     static let untilKey = "widget.forceNetworkUntil"
+    private static let consumedKey = "widget.forceNetworkConsumedKinds"
     static let window: TimeInterval = 5 * 60
 
     static func request(now: Date = Date(), in defaults: UserDefaults = .standard) {
+        lock.lock()
+        defer { lock.unlock() }
         defaults.set(now.addingTimeInterval(window), forKey: untilKey)
+        defaults.removeObject(forKey: consumedKey)
     }
 
-    static func isRequested(now: Date = Date(), in defaults: UserDefaults = .standard) -> Bool {
-        guard let until = defaults.object(forKey: untilKey) as? Date else { return false }
-        return until > now
+    /// 每種 provider 只消費一次；重複 timeline 喚醒唔會繼續繞過 TTL。
+    /// 同時拒絕超過五分鐘嘅有效期，避免裝置時間倒退將一次請求無限延長。
+    static func consume(
+        _ kind: Kind,
+        now: Date = Date(),
+        in defaults: UserDefaults = .standard
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let until = defaults.object(forKey: untilKey) as? Date,
+              until > now,
+              until.timeIntervalSince(now) <= window else {
+            defaults.removeObject(forKey: untilKey)
+            defaults.removeObject(forKey: consumedKey)
+            return false
+        }
+        var consumed = defaults.stringArray(forKey: consumedKey) ?? []
+        guard !consumed.contains(kind.rawValue) else { return false }
+        consumed.append(kind.rawValue)
+        defaults.set(consumed, forKey: consumedKey)
+        return true
     }
 }

@@ -11,7 +11,7 @@ Swift app 同時支援原生 WidgetKit 同 Scriptable，兩者並行：
 - **授權**：`ScriptableFolderStore` 用 Keychain 保存 device-only folder bookmark；每次寫入先 resolve bookmark，再 `startAccessingSecurityScopedResource()`。搬走／取代 folder 或 bookmark 失效要重新授權。
 - **背景**：`WidgetBackgroundRefresh` 喺有授權時排 `BGAppRefreshTask`，到期獨立匯出；前景落背景亦會嘗試 flush。
 
-app 設定獨有 roster／VPS token 同私人 VPS URL，保存在 device-only Keychain（`AfterFirstUnlockThisDeviceOnly`）；舊版 `UserDefaults` 值會自動遷移，成功後先刪除明文。JSON 唔包含 token、`Authorization` header 或私人 VPS URL。原生 Widget 仍沿用自己「編輯小工具」入面嘅 token，唔係由 Scriptable JSON 共享。橋樑未授權、斷線或寫入失敗只影響同步狀態，`AppModel.refresh()` 仍會排通知／同步 Live Activity；唔可以為咗 Scriptable 刪 extension 或改壞原生功能。
+app 設定獨有 roster／VPS token 同私人 VPS URL，保存在 device-only Keychain（`AfterFirstUnlockThisDeviceOnly`）；舊版 `UserDefaults` 值會自動遷移，成功後先刪除明文。Keychain 讀取錯誤會同「未有值」分開：設定頁停用私密欄位並阻止三格覆寫，背景工作只跳過相關讀取；輸入改動停手 500 毫秒先儲存，成功先觸發刷新。JSON 唔包含 token、`Authorization` header 或私人 VPS URL。原生 Widget 仍沿用自己「編輯小工具」入面嘅 token，唔係由 Scriptable JSON 共享。橋樑未授權、斷線或寫入失敗只影響同步狀態，`AppModel.refresh()` 仍會排通知／同步 Live Activity；唔可以為咗 Scriptable 刪 extension 或改壞原生功能。
 
 `project.yml` 沿用本機 Live Activity、`fetch` background mode 同 Scriptable refresh BGTask identifier；**毋須新增 App Group 或 push entitlement**，`pushType` 維持 `nil`。
 
@@ -114,12 +114,12 @@ Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」
 | VPS | 60 分鐘 TTL，對齊上游每小時輸出 |
 | 學校日曆 | 6 小時 TTL |
 | 更份 roster／basic／sheet／cards／places | 每次刷新試 roster；basic／sheet 6 小時、cards 12 小時、places 7 日，維持不變 |
-| 公眾假期 | 7 日 TTL，維持不變 |
+| 公眾假期 | 7 日新鮮 TTL；遠端快取超過 30 日改用內嵌 2026–2027 官方清單 |
 | 通知／Live Activity | 無獨立網絡 polling；絕對時間 trigger／系統倒數，維持不變 |
 
-手動刷新（資料頁下拉、法院頁下拉、原生 Widget「即時更新」掣）繞過成功快取，但仍保留舊資料作離線 fallback；Widget 掣只喺 extension 容器留 5 分鐘 force flag，唔會令之後每次 timeline 都上網。法院同各來源 TTL 分開記錄：重新渲染、成功下載、重新匯出 JSON 唔係同一件事。
+手動刷新（資料頁下拉、法院頁下拉、原生 Widget「即時更新」掣）繞過成功快取，但仍保留舊資料作離線 fallback；Widget 掣只喺 extension 容器留 5 分鐘 force flag；每種 provider 只消費一次，時間倒退超過窗口亦會拒絕，唔會令之後每次 timeline 都上網。法院同各來源 TTL 分開記錄：重新渲染、成功下載、重新匯出 JSON 唔係同一件事。
 
-**剔除／擱置：** 今次 PR 只走 Xcode Build → iPhone + Scriptable 路線；ipa 功能仍擱置，`.github/workflows/ipa.yml` 只移除未審 PR 上 self-hosted runner 嘅入口，並限制 release 只能喺 main，唔改打包功能。Pyto／Python 診斷路徑唔處理。保留 `iWidgetExtension`、通知、AppIntents、交接提示同 Live Activity。
+**剔除／擱置：** 今次 PR 只走 Xcode Build → iPhone + Scriptable 路線；ipa 功能仍擱置，`.github/workflows/ipa.yml` 只移除未審 PR 上 self-hosted runner 嘅入口，並限制 release 只能喺 main，唔改打包功能。Pyto 只封存未驗證遠端拉碼，唔恢復自更新。保留 `iWidgetExtension`、通知、AppIntents、交接提示同 Live Activity。
 
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
 鎖屏：長按鎖屏 → 自訂 → 加入元件 → 今日咭有行內／長方形，各項資訊有圓形（電量）。

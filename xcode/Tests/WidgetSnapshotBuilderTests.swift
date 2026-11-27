@@ -42,6 +42,14 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
         XCTAssertEqual(exported.duty.week.first?.weather?.maxTemp, 31)
     }
 
+    func testExportServiceDateUsesHongKongFourAmBoundary() {
+        for (hour, minute, expected) in [(0, 2, "20261023"), (3, 59, "20261023"), (4, 0, "20261024")] {
+            let now = hongKongDate(2026, 10, 24, hour, minute)
+            let exported = WidgetSnapshotBuilder.build(entry: entry(at: now), now: now)
+            XCTAssertEqual(exported.serviceDate, expected, "HK \(hour):\(minute)")
+        }
+    }
+
     func testExportDateCodePreservesYYYYMMDDAndConvertsDMY() {
         XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("2026-10-23"), "20261023")
         XCTAssertEqual(WidgetSnapshotBuilder.exportDateCode("20261023"), "20261023")

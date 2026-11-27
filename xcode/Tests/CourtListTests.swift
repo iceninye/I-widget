@@ -86,6 +86,15 @@ final class CourtListTests: XCTestCase {
         XCTAssertFalse(CourtList.hasCourtTable("<html>網站維護中，請稍後再試</html>"))
     }
 
+    func testExplicitNoHearingPageIsValidButUnpublishedPageIsNot() {
+        XCTAssertTrue(CourtList.isExplicitNoHearingPage("<html>There is no hearing on this day.</html>"))
+        XCTAssertTrue(CourtList.isExplicitNoHearingPage("<html>此日並無法庭聆訊。</html>"))
+        XCTAssertTrue(CourtList.isExplicitNoHearingPage("<html>此日并无法庭聆讯。</html>"))
+        XCTAssertFalse(CourtList.isExplicitNoHearingPage("<html>The list will be uploaded after 6:30 p.m.</html>"))
+        XCTAssertFalse(CourtList.isExplicitNoHearingPage("<html>案件表將於下午六時三十分後公布。</html>"))
+        XCTAssertFalse(CourtList.isExplicitNoHearingPage("<html>網站維護中，請稍後再試</html>"))
+    }
+
     func testTimeParsing() {
         XCTAssertEqual(CourtList.parseTime("9:30 am"), 570)
         XCTAssertEqual(CourtList.parseTime("12:05 PM"), 12 * 60 + 5)
@@ -181,12 +190,36 @@ final class CourtListTests: XCTestCase {
         let attempt = date(2026, 10, 26, 18, 31)
         XCTAssertEqual(CourtPublication.decision(
             cached: nil, savedAt: nil, lastAttemptAt: attempt,
-            now: date(2026, 10, 26, 18, 45), holidays: []
+            now: date(2026, 10, 26, 18, 40), holidays: []
         ), .reuse)
         XCTAssertEqual(CourtPublication.decision(
             cached: nil, savedAt: nil, lastAttemptAt: attempt,
-            now: date(2026, 10, 26, 19, 1), holidays: []
+            now: date(2026, 10, 26, 18, 45), holidays: []
         ), .fetch)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: attempt,
+            now: date(2026, 10, 26, 19, 0), holidays: []
+        ), .fetch)
+
+        let secondAttempt = date(2026, 10, 26, 18, 45)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: secondAttempt,
+            now: date(2026, 10, 26, 18, 50), holidays: []
+        ), .reuse)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: secondAttempt,
+            now: date(2026, 10, 26, 19, 0), holidays: []
+        ), .fetch)
+        // 若系統延遲到 19:10 先醒，仍要補做 19:00 探測；唔可以被 30 分鐘 backoff 吞咗。
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: secondAttempt,
+            now: date(2026, 10, 26, 19, 10), holidays: []
+        ), .fetch)
+        let thirdAttempt = date(2026, 10, 26, 19, 10)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: thirdAttempt,
+            now: date(2026, 10, 26, 19, 11), holidays: []
+        ), .reuse)
         XCTAssertEqual(CourtPublication.decision(
             cached: nil, savedAt: nil, lastAttemptAt: attempt,
             now: date(2026, 10, 26, 18, 40), holidays: [], force: true
@@ -234,6 +267,9 @@ final class CourtListTests: XCTestCase {
             now: date(2026, 10, 26, 18, 45), holidays: [], hasCourtData: false
         ), date(2026, 10, 26, 19, 0))
         XCTAssertEqual(CourtPublication.nextReload(
+            now: date(2026, 10, 26, 18, 50), holidays: [], hasCourtData: false
+        ), date(2026, 10, 26, 19, 0), "18:50 後短重試唔可以越過 19:00 確認點")
+        XCTAssertEqual(CourtPublication.nextReload(
             now: date(2026, 10, 26, 19, 0), holidays: [], hasCourtData: false
         ), date(2026, 10, 26, 19, 30))
         XCTAssertEqual(CourtPublication.nextReload(
@@ -270,6 +306,17 @@ final class CourtListTests: XCTestCase {
         let json = #"{"vcalendar":[{"vevent":[{"dtstart":["20261225",{"value":"DATE"}],"summary":"聖誕節"},{"dtstart":["20261226",{"value":"DATE"}]},{"summary":"x"}]}]}"#
         XCTAssertEqual(PublicHolidays.parse(Data(json.utf8)), ["20261225", "20261226"])
         XCTAssertEqual(PublicHolidays.parse(Data("oops".utf8)), [])
+    }
+
+    func testBundledHolidaysCover2026And2027WithoutRemoteCache() {
+        XCTAssertTrue(PublicHolidays.bundled.contains("20261001"))
+        XCTAssertTrue(PublicHolidays.bundled.contains("20270405"))
+        XCTAssertFalse(PublicHolidays.bundled.contains("20261002"))
+        let stale = PublicHolidays.resolved(cached: ["20261002"], savedAt: date(2026, 8, 1, 0, 0), now: date(2026, 10, 26, 9, 0))
+        XCTAssertTrue(stale.contains("20261001"))
+        XCTAssertFalse(stale.contains("20261002"), "過期遠端快取唔可以覆蓋內嵌清單")
+        let fresh = PublicHolidays.resolved(cached: ["20261002"], savedAt: date(2026, 10, 25, 0, 0), now: date(2026, 10, 26, 9, 0))
+        XCTAssertTrue(fresh.contains("20261001") && fresh.contains("20261002"))
     }
 
     func testJudgeCellIgnoresRemarks() {

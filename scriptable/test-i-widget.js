@@ -2,9 +2,6 @@
 // 執行：node scriptable/test-i-widget.js
 "use strict";
 
-// 固定時區，令 ISO freshness 顯示時間喺任何機器都一致。
-process.env.TZ = "UTC";
-
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
@@ -97,9 +94,32 @@ function all(el, pred) { const out = []; walk(el, (e) => pred(e) && out.push(e))
 function texts(el) { return all(el, (e) => e.kind === "text").map((e) => e.text); }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-const DEFAULT_NOW = new Date(2026, 9, 23, 14, 5, 30);
-const COURT_NOW = new Date("2026-10-23T06:05:30Z"); // 香港 10/23 14:05:30，唔受測試程序時區影響
-const iso = (hours, minutes, day = 23) => new Date(2026, 9, day, hours, minutes, 0).toISOString();
+// Fixture 一律用明確香港 instant；顯示 freshness／clock 時仍跟執行程序本地時區。
+const hkIso = (hours, minutes = 0, day = 23, second = 0) =>
+  new Date(Date.UTC(2026, 9, day, hours - 8, minutes, second)).toISOString();
+const hkDate = (hours, minutes = 0, day = 23, second = 0) => new Date(hkIso(hours, minutes, day, second));
+const DEFAULT_NOW = hkDate(14, 5, 23, 30);
+const COURT_NOW = new Date(DEFAULT_NOW.getTime());
+const pad = (value) => String(value).padStart(2, "0");
+const localHM = (value) => {
+  const date = new Date(value);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+const localDate = (value) => {
+  const date = new Date(value);
+  return `${date.getMonth() + 1}月${date.getDate()}日`;
+};
+function freshnessLabel(stamp, now = DEFAULT_NOW, cached = false) {
+  const date = new Date(stamp);
+  const when = date.toDateString() === now.toDateString() ? localHM(date) : `${localDate(date)} ${localHM(date)}`;
+  return `更新於 ${when}${cached ? " · 快取" : ""}`;
+}
+function weatherWhen(stamp, now) {
+  const date = new Date(stamp);
+  if (date.toDateString() === now.toDateString()) return localHM(date);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Date.parse(stamp) >= startOfToday - 86400000 ? `昨日${localHM(date)}` : `${date.getMonth() + 1}/${date.getDate()} ${localHM(date)}`;
+}
 function caseEntry(minutes, caseNo, deepLink = "iwidget://court?code=DC") {
   return {
     room: "3", judge: "陳法官", minutes, timeText: minutes === null ? "--:--" : `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`,
@@ -113,8 +133,8 @@ function dutyEvent(at, overrides = {}) {
   };
 }
 function datedWeather(day, codeText, rainChance) {
-  const date = new Date(2026, 9, day);
-  const code = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
+  const date = new Date(Date.UTC(2026, 9, day));
+  const code = `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`;
   return {
     date: code,
     day: { code: 3, codeText, symbol: "cloud.fill", minTemp: 23, maxTemp: 31, tempText: "23°–31°", rainChance, uvIndex: 5 },
@@ -122,11 +142,11 @@ function datedWeather(day, codeText, rainChance) {
 }
 function planningFixture() {
   const data = fixture();
-  data.duty.events = [dutyEvent(iso(13, 0), { title: "已發生事件" }), dutyEvent(iso(15, 30))];
+  data.duty.events = [dutyEvent(hkIso(13, 0), { title: "已發生事件" }), dutyEvent(hkIso(15, 30))];
   data.duty.weekText = "5 更";
   data.duty.tomorrow = { ...data.duty.today, date: "20261024", code: "1101158", title: "00158 屯門", times: "06:00–14:00" };
   data.duty.nextHoliday = { title: "重陽節", rangeText: "10月26日", daysAway: 3 };
-  data.school.tomorrow = { cycle: ["Day 5"], items: [{ title: "明日科學測驗", start: iso(9, 0, 24), end: iso(10, 0, 24), allDay: false }] };
+  data.school.tomorrow = { cycle: ["Day 5"], items: [{ title: "明日科學測驗", start: hkIso(9, 0, 24), end: hkIso(10, 0, 24), allDay: false }] };
   data.weather.tomorrow = { ...data.weather.today, codeText: "小雨", rainChance: 70 };
   data.weather.daily = Array.from({ length: 7 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, index * 10));
   data.duty.week = data.duty.week.map((item) => ({
@@ -136,10 +156,11 @@ function planningFixture() {
   return data;
 }
 function dutyStripDay(offset, label, tone) {
-  const date = new Date(2026, 9, 23 + offset);
+  const date = new Date(Date.UTC(2026, 9, 23 + offset));
   const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
-  const weekday = weekdays[(date.getDay() + 6) % 7];
-  return { date: `202610${String(23 + offset).padStart(2, "0")}`, weekday, dayNumber: String(23 + offset), label, tone };
+  const weekday = weekdays[(date.getUTCDay() + 6) % 7];
+  const dateCode = `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`;
+  return { date: dateCode, weekday, dayNumber: String(date.getUTCDate()), label, tone };
 }
 
 function fixture(now = DEFAULT_NOW) {
@@ -148,9 +169,9 @@ function fixture(now = DEFAULT_NOW) {
     generatedAt: now.toISOString(),
     serviceDate: "20261023",
     theme: "classic",
-    freshness: { today: iso(11, 47), info: iso(9, 12), schedule: iso(8, 1), weather: iso(11, 40), warningsToday: iso(11, 45), warningsInfo: iso(9, 10), court: iso(12, 36) },
+    freshness: { today: hkIso(11, 47), info: hkIso(9, 12), schedule: hkIso(8, 1), weather: hkIso(11, 40), warningsToday: hkIso(11, 45), warningsInfo: hkIso(9, 10), court: hkIso(12, 36) },
     system: {
-      capturedAt: iso(13, 55),
+      capturedAt: hkIso(13, 55),
       battery: { level: 0.75, charging: false, fullyCharged: false, lowPowerMode: true, estimatedText: "約 5 小時", rateText: "正常" },
       storage: { freeBytes: 32600000000, totalBytes: 255400000000, freeText: "32.6 GB", totalText: "255.4 GB", usedText: "222.8 GB" },
       memory: { totalBytes: 8000000000, availableBytes: 3100000000, lines: [{ label: "記憶體", value: "3.1 / 8 GB" }] },
@@ -161,7 +182,7 @@ function fixture(now = DEFAULT_NOW) {
     },
     duty: {
       configured: true, failed: false,
-      today: { date: "20261023", code: "1101157", title: "00157 錦上路", group: "KSR", datedSheet: null, isOverride: true, tone: "dawn", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: iso(15, 5), offAt: iso(23, 15) },
+      today: { date: "20261023", code: "1101157", title: "00157 錦上路", group: "KSR", datedSheet: null, isOverride: true, tone: "dawn", times: "15:05–23:15", route: "屯馬綫", mealText: "18:00", hoursText: "7.5 小時", hint: "帶八達通", onAt: hkIso(15, 5), offAt: hkIso(23, 15) },
       tomorrow: null,
       events: [],
       week: ["死早", "死早", "死早", "休", "死早", "死夜", "死夜"].map((label, index) => dutyStripDay(index, label, label === "休" ? "rest" : label === "死夜" ? "night" : "dawn")),
@@ -172,11 +193,11 @@ function fixture(now = DEFAULT_NOW) {
       weekText: "5 更", nextHoliday: null, detailLines: [],
     },
     school: {
-      failed: [], today: { cycle: ["Day 4"], items: [{ title: "中三家長會", start: iso(18, 0), end: iso(19, 0), allDay: false }] },
+      failed: [], today: { cycle: ["Day 4"], items: [{ title: "中三家長會", start: hkIso(18, 0), end: hkIso(19, 0), allDay: false }] },
       tomorrow: { cycle: [], items: [] },
     },
     weather: {
-      available: true, fetchedAt: iso(11, 40), currentTemp: 28.4,
+      available: true, fetchedAt: hkIso(11, 40), currentTemp: 28.4,
       today: { code: 3, codeText: "多雲", symbol: "cloud.fill", minTemp: 24, maxTemp: 31, tempText: "24°–31°", rainChance: 30, uvIndex: 6 },
       tomorrow: null, daily: [],
     },
@@ -185,9 +206,9 @@ function fixture(now = DEFAULT_NOW) {
     environment: { sections: [{ id: "gold", title: "黃金", lines: [{ label: "999.9 金", value: "HK$62,800" }] }] },
     vps: { configured: true, available: true, failed: false, lines: [{ label: "狀態", value: "正常" }] },
     courts: {
-      listDate: iso(12, 30), updatedAt: iso(12, 35),
+      listDate: hkIso(12, 30), updatedAt: hkIso(12, 35),
       items: [{
-        code: "DC", name: "區域法院", dateCode: "20261023", fetchedAt: iso(12, 36), error: false, total: 6, truncated: false, categories: [], deepLink: "iwidget://court?code=DC",
+        code: "DC", name: "區域法院", dateCode: "20261023", fetchedAt: hkIso(12, 36), error: false, total: 6, truncated: false, categories: [], deepLink: "iwidget://court?code=DC",
         cases: [caseEntry(830, "已過20分鐘"), caseEntry(829, "已篩走"), caseEntry(845, "DCCJ 1/2026"), caseEntry(849, "DCCJ 2/2026"), caseEntry(null, "沒有時間"), caseEntry(850, "DCCJ 3/2026")],
       }],
     },
@@ -383,12 +404,12 @@ if (require.main === module) (async () => {
       const cached = JSON.stringify(fixture());
       const state = await run({ view: "info", iCloud, cache: cached });
       equal(state.local.files.get(cachePath(state)), cached);
-      ok(has(state.widget, "更新於 09:12 · 快取"));
+      ok(has(state.widget, freshnessLabel(hkIso(9, 12), DEFAULT_NOW, true)));
     });
   }
   await test("cache fallback 顯示舊 freshness 與快取標記", async () => {
     const state = await run({ view: "info", iCloud: "broken", cache: JSON.stringify(fixture()) });
-    ok(has(state.widget, "更新於 09:12 · 快取"));
+    ok(has(state.widget, freshnessLabel(hkIso(9, 12), DEFAULT_NOW, true)));
     equal(has(state.widget, "32.6 GB / 255.4 GB 可用"), true);
   });
   await test("iCloud 缺失／download 失敗／read 失敗都用 cache", async () => {
@@ -427,12 +448,12 @@ if (require.main === module) (async () => {
   console.log("\n【T】freshness 語意");
   await test("generatedAt 唔當資料更新時間", async () => {
     const data = fixture();
-    data.freshness.today = iso(1, 2);
-    data.freshness.info = iso(3, 4);
-    data.freshness.court = iso(5, 6);
+    data.freshness.today = hkIso(1, 2);
+    data.freshness.info = hkIso(3, 4);
+    data.freshness.court = hkIso(5, 6);
     const state = await run({ view: "today", family: "small", iCloud: JSON.stringify(data) });
-    ok(has(state.widget, "更新於 01:02"));
-    ok(!texts(state.widget).includes("更新於 14:05"));
+    ok(has(state.widget, freshnessLabel(hkIso(1, 2))));
+    ok(!texts(state.widget).includes(freshnessLabel(DEFAULT_NOW.getTime())));
   });
   await test("freshness null 顯示未有資料", async () => {
     const data = fixture();
@@ -442,10 +463,10 @@ if (require.main === module) (async () => {
   });
   await test("court freshness 優先；null 先 courts.updatedAt", async () => {
     let data = fixture();
-    data.courts.updatedAt = iso(1, 1);
-    ok(has((await run({ view: "court", iCloud: JSON.stringify(data) })).widget, "更新於 12:36"));
+    data.courts.updatedAt = hkIso(1, 1);
+    ok(has((await run({ view: "court", iCloud: JSON.stringify(data) })).widget, freshnessLabel(hkIso(12, 36))));
     data.freshness.court = null;
-    ok(has((await run({ view: "court", iCloud: JSON.stringify(data) })).widget, "更新於 01:01"));
+    ok(has((await run({ view: "court", iCloud: JSON.stringify(data) })).widget, freshnessLabel(hkIso(1, 1))));
   });
 
   console.log("\n【V】today / info / court / accessory 內容");
@@ -460,12 +481,12 @@ if (require.main === module) (async () => {
   });
   await test("04:00 後舊 serviceDate 明確標示日期已過", async () => {
     const raw = JSON.stringify(fixture());
-    // 明確用 UTC instant：HK 10/24 03:59 = 10/23 19:59Z；04:05 = 20:05Z。
-    const beforeRollover = texts((await run({ view: "today", now: new Date("2026-10-23T19:59:00Z"), iCloud: raw })).widget);
+    // 明確用香港 instant：10/24 03:59 = 10/23 19:59Z；04:05 = 20:05Z。
+    const beforeRollover = texts((await run({ view: "today", now: hkDate(3, 59, 24), iCloud: raw })).widget);
     ok(!beforeRollover.some((value) => value.includes("更份日期已過")));
-    const afterRollover = texts((await run({ view: "today", now: new Date("2026-10-23T20:05:00Z"), iCloud: raw })).widget);
+    const afterRollover = texts((await run({ view: "today", now: hkDate(4, 5, 24), iCloud: raw })).widget);
     ok(afterRollover.includes("更份日期已過 · JSON 為 10月23日"));
-    const accessory = texts((await run({ view: "today", family: "accessoryRectangular", now: new Date("2026-10-23T20:05:00Z"), iCloud: raw })).widget);
+    const accessory = texts((await run({ view: "today", family: "accessoryRectangular", now: hkDate(4, 5, 24), iCloud: raw })).widget);
     ok(accessory.includes("更份日期已過"));
   });
   await test("today 顯示更份、學校、天氣、屯馬綫", async () => {
@@ -681,7 +702,15 @@ if (require.main === module) (async () => {
     const expected = { today: "iwidget://duty", info: "iwidget://info", court: data.courts.items[0].deepLink, clock: "iwidget://duty", accessory: "iwidget://duty" };
     for (const [view, url] of Object.entries(expected)) {
       equal((await run({ view, iCloud: JSON.stringify(data) })).widget.url, url, view);
-      equal((await run({ view })).widget.url, view === "court" ? "iwidget://court" : url, `${view} no JSON`);
+      equal((await run({ view })).widget.url, view === "court" ? "iwidget://court?code=DC" : url, `${view} no JSON`);
+    }
+  });
+  await test("court 冇 snapshot item 時 fallback 帶有效 DC code", async () => {
+    const data = fixture();
+    data.courts.items = [];
+    for (const iCloud of [undefined, JSON.stringify(data)]) {
+      const widget = (await run({ view: "court", iCloud })).widget;
+      equal(widget.url, "iwidget://court?code=DC");
     }
   });
   await test("court 每宗案件 stack/text 有 deepLink", async () => {
@@ -695,22 +724,22 @@ if (require.main === module) (async () => {
   });
   await test("court 18:30 後下一工作日顯示全部有時間案件與日期", async () => {
     const data = fixture();
-    data.courts.listDate = iso(12, 30, 26);
+    data.courts.listDate = hkIso(12, 30, 26);
     data.courts.items[0].dateCode = "20261026";
-    data.courts.items[0].fetchedAt = iso(18, 35);
+    data.courts.items[0].fetchedAt = hkIso(18, 35);
     data.courts.items[0].cases = [caseEntry(540, "下周一第一宗"), caseEntry(600, "下周一第二宗"), caseEntry(null, "沒有時間"), caseEntry(780, "下周一第三宗")];
-    const state = await run({ view: "court", now: new Date(2026, 9, 23, 19, 0), iCloud: JSON.stringify(data) });
+    const state = await run({ view: "court", now: hkDate(19, 0), iCloud: JSON.stringify(data) });
     const output = texts(state.widget).join("\n");
     ok(output.includes("區域法院 · 10月26日"));
     ok(output.includes("下周一第一宗") && output.includes("下周一第二宗") && output.includes("下周一第三宗"));
     ok(!output.includes("沒有時間"));
     ok(!output.includes("今日沒有案件"));
-    const accessory = texts((await run({ view: "court", family: "accessoryCircular", now: new Date(2026, 9, 23, 19, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    const accessory = texts((await run({ view: "court", family: "accessoryCircular", now: hkDate(19, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(accessory.includes("3 宗"));
   });
   await test("court listDate 過去日期顯示沒有相關案件", async () => {
     const data = fixture();
-    data.courts.listDate = iso(12, 30, 22);
+    data.courts.listDate = hkIso(12, 30, 22);
     data.courts.items[0].dateCode = "20261022";
     const state = await run({ view: "court", iCloud: JSON.stringify(data) });
     ok(has(state.widget, "沒有相關案件"));
@@ -718,22 +747,38 @@ if (require.main === module) (async () => {
   });
   await test("court 同日較早 listDate 仍保留今日 ongoing window", async () => {
     const data = fixture();
-    data.courts.listDate = iso(9, 0);
+    data.courts.listDate = hkIso(9, 0);
     const output = texts((await run({ view: "court", now: new Date(COURT_NOW.getTime() + 5 * 60000), iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(output.includes("DCCJ 1/2026"));
     ok(!output.includes("已篩走"));
   });
   await test("court 跨香港午夜仍用當地日期同 20 分鐘視窗", async () => {
-    const now = new Date("2026-10-23T16:30:00Z"); // 香港 10/24 00:30
+    const now = hkDate(0, 30, 24); // 明確香港 10/24 00:30 instant
     const data = fixture(now);
-    data.courts.listDate = "2026-10-23T16:00:00Z"; // 香港 10/24 00:00
+    data.courts.listDate = hkIso(0, 0, 24);
     data.courts.items[0].dateCode = "20261024";
     data.courts.items[0].fetchedAt = data.courts.listDate;
     data.courts.items[0].cases = [caseEntry(5, "已過25分鐘"), caseEntry(10, "跨日20分鐘"), caseEntry(40, "跨日稍後")];
-    const output = texts((await run({ view: "court", now, iCloud: JSON.stringify(data) })).widget).join("\n");
+    const widget = (await run({ view: "court", now, iCloud: JSON.stringify(data) })).widget;
+    const output = texts(widget).join("\n");
+    ok(has(widget, freshnessLabel(data.freshness.court, now)));
     ok(output.includes("跨日20分鐘"));
     ok(output.includes("跨日稍後"));
     ok(!output.includes("已過25分鐘"));
+  });
+  await test("非香港時區仍以香港午夜服務日為準，freshness 用本地時間", async () => {
+    const now = hkDate(0, 30, 24); // UTC 10/23 16:30；紐約 10/23 12:30
+    const data = fixture(now);
+    const today = texts((await run({ view: "today", family: "small", now, iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(!today.includes("更份日期已過"), today);
+    ok(today.includes(freshnessLabel(data.freshness.today, now)), `${freshnessLabel(data.freshness.today, now)}\n${today}`);
+
+    data.courts.listDate = hkIso(0, 0, 24);
+    data.courts.items[0].dateCode = "20261024";
+    data.courts.items[0].cases = [caseEntry(10, "香港午夜案件")];
+    const court = (await run({ view: "court", now, iCloud: JSON.stringify(data) })).widget;
+    ok(texts(court).some((value) => value.includes("香港午夜案件")), texts(court).join("\n"));
+    ok(has(court, freshnessLabel(data.freshness.court, now)), `${freshnessLabel(data.freshness.court, now)}\n${texts(court).join("\n")}`);
   });
   await test("court 省略 optional listDate 仍顯示今日案件", async () => {
     const data = fixture();
@@ -783,11 +828,31 @@ if (require.main === module) (async () => {
     ok(!output.includes("本週 5 更"));
     ok(!output.includes("天氣7"));
   });
+  await test("today small 過期橫幅仍限四行，優先保留主要更份同錯誤", async () => {
+    const bodyRows = (widget) => widget.children.filter((child) => child.kind !== "spacer").slice(1);
+    const regular = (await run({ view: "today", family: "small", iCloud: JSON.stringify(fixture()) })).widget;
+    equal(bodyRows(regular).length, 3);
+    ok(has(regular, "00157 錦上路 · 15:05–23:15"));
+
+    const data = planningFixture();
+    data.duty.failed = true;
+    data.school.failed = ["中三"];
+    const widget = (await run({ view: "today", family: "small", now: hkDate(4, 5, 24), iCloud: JSON.stringify(data) })).widget;
+    const rows = bodyRows(widget);
+    const output = texts(widget).join("\n");
+    equal(rows.length, 4);
+    ok(rows.every((row) => row.kind === "text" && row.lineLimit === 1));
+    ok(output.includes("更份日期已過 · JSON 10月23日"));
+    ok(output.includes("更份讀取失敗 · 沿用快取"));
+    ok(output.includes("00157 錦上路 · 15:05–23:15"));
+    ok(output.includes("中三") && output.includes("讀唔到"));
+    ok(!output.includes("多雲"));
+  });
   await test("today 原生式版面限制事件、7 日色條同學校行數", async () => {
     const data = planningFixture();
-    data.duty.events = Array.from({ length: 200 }, (_, index) => dutyEvent(iso(15, index), { title: `事件${index}` }));
+    data.duty.events = Array.from({ length: 200 }, (_, index) => dutyEvent(hkIso(15, index), { title: `事件${index}` }));
     data.weather.daily = Array.from({ length: 14 }, (_, index) => datedWeather(23 + index, `天氣${index + 1}`, 10));
-    data.school.today.items = Array.from({ length: 10 }, (_, index) => ({ title: `活動${index}`, start: iso(9, index), end: iso(10, index), allDay: false }));
+    data.school.today.items = Array.from({ length: 10 }, (_, index) => ({ title: `活動${index}`, start: hkIso(9, index), end: hkIso(10, index), allDay: false }));
     for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const widget = (await run({ view: "today", family, iCloud: JSON.stringify(data) })).widget;
       const output = texts(widget).join("\n");
@@ -908,100 +973,122 @@ if (require.main === module) (async () => {
   });
   await test("放工後倒數改為下一更返工時間", async () => {
     const data = planningFixture();
-    data.duty.today.offAt = iso(14, 0);
-    data.duty.tomorrow.onAt = iso(6, 15, 24);
-    const output = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    data.duty.today.offAt = hkIso(14, 0);
+    data.duty.tomorrow.onAt = hkIso(6, 15, 24);
+    const output = texts((await run({ view: "today", family: "large", now: hkDate(16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(output.includes("下一更 14 小時 15 分"), output);
     ok(!output.includes("已放工"));
 
     data.duty.tomorrow = null;
-    data.duty.events.push(dutyEvent(iso(6, 15, 24), { action: "返工" }));
-    const fromEvents = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
+    data.duty.events.push(dutyEvent(hkIso(6, 15, 24), { action: "返工" }));
+    const fromEvents = texts((await run({ view: "today", family: "large", now: hkDate(16, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(fromEvents.includes("下一更 14 小時 15 分"), fromEvents);
   });
   await test("天氣新鮮度用天氣來源時間；超過六小時標示舊資料", async () => {
     const data = planningFixture();
-    data.freshness.today = iso(13, 55);
-    data.freshness.weather = iso(1, 2);
+    data.freshness.today = hkIso(13, 55);
+    data.freshness.weather = hkIso(1, 2);
     const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget;
-    const status = all(widget, (e) => e.kind === "text" && e.text === "天氣 01:02·舊")[0];
+    const statusText = `天氣 ${weatherWhen(hkIso(1, 2), DEFAULT_NOW)}·舊`;
+    const status = all(widget, (e) => e.kind === "text" && e.text === statusText)[0];
     ok(status);
     equal(status.textColor.light.hex, "#ff9500");
-    ok(!texts(widget).includes("更新於 13:55"));
+    ok(!texts(widget).includes(freshnessLabel(hkIso(13, 55))));
 
-    data.freshness.weather = iso(8, 6);
+    data.freshness.weather = hkIso(8, 6);
+    const boundaryWhen = weatherWhen(hkIso(8, 6), DEFAULT_NOW);
     const boundary = texts((await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(boundary.includes("天氣 08:06"), boundary);
-    ok(!boundary.includes("天氣 08:06·舊"), boundary);
+    ok(boundary.includes(`天氣 ${boundaryWhen}`), boundary);
+    ok(!boundary.includes(`天氣 ${boundaryWhen}·舊`), boundary);
 
-    data.freshness.weather = iso(22, 14, 22);
-    const yesterday = texts((await run({ view: "today", family: "large", now: new Date(2026, 9, 23, 8, 0), iCloud: JSON.stringify(data) })).widget).join("\n");
-    ok(yesterday.includes("天氣 昨日22:14·舊"), yesterday);
+    const yesterdayNow = hkDate(8, 0);
+    data.freshness.weather = hkIso(22, 14, 22);
+    const yesterday = texts((await run({ view: "today", family: "large", now: yesterdayNow, iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(yesterday.includes(`天氣 ${weatherWhen(hkIso(22, 14, 22), yesterdayNow)}·舊`), yesterday);
 
     const cached = texts((await run({ view: "today", family: "large", iCloud: "broken", cache: JSON.stringify(fixture()) })).widget).join("\n");
-    ok(cached.includes("天氣 11:40·快取"), cached);
+    ok(cached.includes(`天氣 ${weatherWhen(hkIso(11, 40), DEFAULT_NOW)}·快取`), cached);
   });
 
   console.log("\n【C】時鐘與 reload 邊界");
-  let state = await run({ family: "large", now: new Date(2026, 9, 23, 14, 5, 30) });
-  let clocks = all(state.widget, (e) => e.kind === "date");
-  equal(clocks.length, 1);
-  equal(clocks[0].style, "timer");
-  equal([clocks[0].date.getHours(), clocks[0].date.getMinutes(), clocks[0].date.getDate()], [0, 0, 23]);
-  equal(clocks[0].font.size, 60);
-  equal(all((await run({ family: "small" })).widget, (e) => e.kind === "date")[0].font.size, 30);
-  equal(all((await run({ family: "medium" })).widget, (e) => e.kind === "date")[0].font.size, 50);
-  state = await run({ family: "large", now: new Date(2026, 9, 23, 0, 30, 0) });
-  equal(all(state.widget, (e) => e.kind === "date")[0].style, "time");
-  state = await run({ family: "accessoryRectangular", now: new Date(2026, 9, 23, 14, 5, 30) });
-  equal(all(state.widget, (e) => e.kind === "date").length, 1);
-  equal(all(state.widget, (e) => e.kind === "date")[0].style, "timer");
-
   const delay = async (now) => (await run({ family: "small", now })).widget.refreshAfterDate - now;
-  equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 60 * 60000);
-  equal(await delay(new Date(2026, 9, 23, 23, 50, 0)), 10 * 60000 + 20000);
-  equal(await delay(new Date(2026, 9, 23, 0, 40, 0)), 20 * 60000 + 20000);
-  ok(await delay(new Date(2026, 9, 23, 0, 0, 20)) > 0);
-
   const courtSnapshot = JSON.stringify(fixture());
   const delayCourt = async (now, iCloud = courtSnapshot) =>
     (await run({ family: "large", view: "court", now, iCloud })).widget.refreshAfterDate - now;
-  // 固定 UTC instant，分別等如香港時間週一 17:50／18:50 同週六 17:50。
-  equal(await delayCourt(new Date("2026-10-26T09:50:00Z")), 55 * 60000 + 20000);
-  equal(await delayCourt(new Date("2026-10-26T10:50:00Z")), 60 * 60000);
-  equal(await delayCourt(new Date("2026-10-31T09:50:00Z")), 60 * 60000);
-  ok(await delayCourt(new Date("2026-10-26T10:45:00Z")) > 0);
 
-  const emptyCourt = fixture();
-  emptyCourt.courts.items = [];
-  const emptyJSON = JSON.stringify(emptyCourt);
-  equal(await delayCourt(new Date("2026-10-26T10:50:00Z"), emptyJSON), 10 * 60000 + 20000);
-  equal(await delayCourt(new Date("2026-10-26T11:05:00Z"), emptyJSON), 30 * 60000);
+  await test("clock 大中小尺寸字級、live timer 同本地午夜靜態時間", async () => {
+    const now = new Date(2026, 9, 23, 14, 5, 30);
+    const state = await run({ family: "large", now });
+    const clocks = all(state.widget, (e) => e.kind === "date");
+    equal(clocks.length, 1);
+    equal(clocks[0].style, "timer");
+    equal([clocks[0].date.getHours(), clocks[0].date.getMinutes(), clocks[0].date.getDate()], [0, 0, 23]);
+    equal(clocks[0].font.size, 60);
+    equal(all((await run({ family: "small" })).widget, (e) => e.kind === "date")[0].font.size, 30);
+    equal(all((await run({ family: "medium" })).widget, (e) => e.kind === "date")[0].font.size, 50);
+
+    const midnight = await run({ family: "large", now: new Date(2026, 9, 23, 0, 30, 0) });
+    equal(all(midnight.widget, (e) => e.kind === "date")[0].style, "time");
+  });
+  await test("clock 鎖屏矩形沿用 live timer", async () => {
+    const state = await run({ family: "accessoryRectangular", now: new Date(2026, 9, 23, 14, 5, 30) });
+    const clocks = all(state.widget, (e) => e.kind === "date");
+    equal(clocks.length, 1);
+    equal(clocks[0].style, "timer");
+  });
+  await test("clock reload 遵守本地每小時、午夜同 01:00 邊界", async () => {
+    equal(await delay(new Date(2026, 9, 23, 14, 0, 0)), 60 * 60000);
+    equal(await delay(new Date(2026, 9, 23, 23, 50, 0)), 10 * 60000 + 20000);
+    equal(await delay(new Date(2026, 9, 23, 0, 40, 0)), 20 * 60000 + 20000);
+    ok(await delay(new Date(2026, 9, 23, 0, 0, 20)) > 0);
+  });
+  await test("court reload 跟香港週一 18:45，週末唔設邊界（含 UTC+14 進程回歸）", async () => {
+    // 固定 UTC instant，分別等如香港時間週一 17:50／18:50 同週六 17:50。
+    equal(await delayCourt(new Date("2026-10-26T09:50:00Z")), 55 * 60000 + 20000);
+    equal(await delayCourt(new Date("2026-10-26T10:50:00Z")), 60 * 60000);
+    equal(await delayCourt(new Date("2026-10-31T09:50:00Z")), 60 * 60000);
+    ok(await delayCourt(new Date("2026-10-26T10:45:00Z")) > 0);
+    // 以 TZ=Pacific/Kiritimati 開獨立進程跑時，17:50 香港等如當地 23:50；
+    // 上面第一條同一斷言會捕捉誤用當地 clock 午夜邊界嘅回歸。
+  });
+  await test("court 冇案件時 18:45 後短重試，19:05 起半小時重試", async () => {
+    const emptyCourt = fixture();
+    emptyCourt.courts.items = [];
+    const emptyJSON = JSON.stringify(emptyCourt);
+    equal(await delayCourt(new Date("2026-10-26T10:50:00Z"), emptyJSON), 10 * 60000 + 20000);
+    equal(await delayCourt(new Date("2026-10-26T11:05:00Z"), emptyJSON), 30 * 60000);
+  });
 
   console.log("\n【L】clock 大尺寸舊版面");
-  state = await run({ family: "large" });
-  const cards = state.widget.children.filter((e) => e.kind === "stack" && e.cornerRadius === 12);
-  equal(cards.length, 4);
-  ok(cards.every((c) => c.backgroundColor && c.padding && c.padding[1] === 12));
-  ok(cards.every((c) => c.children.some((k) => k.kind === "spacer")));
-  equal(all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear").length, 3);
-  equal(all(state.widget, (e) => e.kind === "progress")[0].value, 75);
-  ok(all(state.widget, (e) => e.kind === "progress").every((p) => p.options.thickness === 6 && p.options.trackColor));
-  ok(has(state.widget, "75%"));
-  ok(has(state.widget, "iOS 27.0.1"));
-  const mediumProgress = (await run({ family: "medium" })).widget;
-  const mediumBar = all(mediumProgress, (e) => e.kind === "progress")[0];
-  equal(mediumBar.size.width, 70);
-  equal(mediumBar.size.height, 6);
-  const legacy = (await run({ family: "large", nativeProgress: false })).widget;
-  equal(all(legacy, (e) => e.kind === "progress").length, 0);
-  equal(all((await run({ family: "medium", nativeProgress: false })).widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 1);
-  equal(all(legacy, (e) => e.kind === "stack" && e.size && e.size.width === 120).length, 3);
-  const legacyFills = all(legacy, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 120);
-  ok(legacyFills.some((f) => f.size.width === Math.round(120 * 0.75)));
+  await test("clock large 四張卡、三條進度條同主要文字", async () => {
+    const state = await run({ family: "large" });
+    const cards = state.widget.children.filter((e) => e.kind === "stack" && e.cornerRadius === 12);
+    equal(cards.length, 4);
+    ok(cards.every((c) => c.backgroundColor && c.padding && c.padding[1] === 12));
+    ok(cards.every((c) => c.children.some((k) => k.kind === "spacer")));
+    equal(all(state.widget, (e) => e.kind === "progress" && e.options.style === "linear").length, 3);
+    equal(all(state.widget, (e) => e.kind === "progress")[0].value, 75);
+    ok(all(state.widget, (e) => e.kind === "progress").every((p) => p.options.thickness === 6 && p.options.trackColor));
+    ok(has(state.widget, "75%"));
+    ok(has(state.widget, "iOS 27.0.1"));
+  });
+  await test("clock medium 進度條尺寸", async () => {
+    const widget = (await run({ family: "medium" })).widget;
+    const mediumBar = all(widget, (e) => e.kind === "progress")[0];
+    equal(mediumBar.size.width, 70);
+    equal(mediumBar.size.height, 6);
+  });
+  await test("clock 舊版 progress fallback 保留色條尺寸", async () => {
+    const legacy = (await run({ family: "large", nativeProgress: false })).widget;
+    equal(all(legacy, (e) => e.kind === "progress").length, 0);
+    equal(all((await run({ family: "medium", nativeProgress: false })).widget, (e) => e.kind === "stack" && e.size && e.size.width === 70).length, 1);
+    equal(all(legacy, (e) => e.kind === "stack" && e.size && e.size.width === 120).length, 3);
+    const legacyFills = all(legacy, (e) => e.kind === "stack" && e.size && e.size.height === 6 && e.size.width !== 120);
+    ok(legacyFills.some((f) => f.size.width === Math.round(120 * 0.75)));
+  });
 
   console.log("\n【D】缺資料／Device 錯誤／符號缺失");
-  state = await run({ family: "large", device: { batteryLevel: () => -1 } });
+  let state = await run({ family: "large", device: { batteryLevel: () => -1 } });
   ok(has(state.widget, "—"));
   state = await run({ family: "large", device: { batteryLevel: () => { throw new Error("x"); }, systemVersion: () => { throw new Error("x"); } } });
   ok(state.widget && has(state.widget, "電量"));

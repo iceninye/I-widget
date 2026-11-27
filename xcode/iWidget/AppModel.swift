@@ -3,33 +3,6 @@ import SwiftUI
 
 /// App 內嘅設定、資料預覽同 Scriptable 匯出。Token 只留喺 app；
 /// Scriptable 由 app 寫入授權資料夾嘅 JSON 讀資料，唔需要再填 token。
-enum AppSettings {
-    static let rosterToken = "settings.rosterToken"
-    static let vpsToken = "settings.vpsToken"
-    static let statusURL = "settings.statusURL"
-    static let scriptableTheme = "settings.scriptableTheme"
-
-    static func string(_ key: String) -> String? {
-        let raw = [rosterToken, vpsToken, statusURL].contains(key)
-            ? SecretStore.load(account: key)
-            : UserDefaults.standard.string(forKey: key)
-        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (value ?? "").isEmpty ? nil : value
-    }
-
-    @discardableResult
-    static func saveSecrets(rosterToken: String, vpsToken: String, statusURL: String) -> Bool {
-        let rosterSaved = SecretStore.save(rosterToken, account: Self.rosterToken)
-        let vpsSaved = SecretStore.save(vpsToken, account: Self.vpsToken)
-        let urlSaved = SecretStore.save(statusURL, account: statusURL)
-        return rosterSaved && vpsSaved && urlSaved
-    }
-
-    static func loadScriptableTheme() -> WidgetTheme {
-        WidgetTheme(rawValue: UserDefaults.standard.string(forKey: scriptableTheme) ?? "") ?? .classic
-    }
-}
-
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var entry: OverviewEntry

@@ -1,21 +1,16 @@
-"""i-widget 自更新啟動器 —— 從 GitHub 拉最新版 i_widget.py 執行。
+"""i-widget 本地快取啟動器 —— Pyto 遠端拉碼已封存。
 
-設計重點（按 iOS WidgetKit extension 的實際限制而訂）：
+封存原則：
 
-* **Extension 有 RAM 上限**，所以唔可以每次都重新 parse 一個大檔再 exec。
-  做法係：先只下載一個極小的「版本指紋」檔，確認同本地快取唔同先
-  真正下載完整程式碼。15 分鐘 reload 一次之下，網絡用量近乎零。
-* **網絡可能失敗**（飛機模式、GitHub 故障、限流）。任何一步失敗就
-  靜靜行本地快取，widget 照樣出畫面，唔會變空白。
-* **最新嘅程式碼可能有 bug**。所以先下載、再做語法檢查（compile），
-  通過才覆寫快取並執行；語法錯就繼續行舊快取。呢個令「推壞咗去 main」
-  唔會即刻炸你個 home screen。
-* **下載嘅內容要同指紋對得上**。GitHub raw 有 CDN 快取，指紋同程式碼
-  可能唔同步；下載亦可能唔完整。SHA256 對唔上就唔用，下次再試。
-* **時間預算**：WidgetKit 每次 reload 給嘅時間有限，所以所有網絡請求
-  都設短 timeout，抓唔到就當冇更新。
+* **永不發出遠端下載請求**，唔再更新 `i_widget.py` 或佢嘅指紋。
+* 只執行先前已經存喺本地嘅快取；快取必須同時通過指紋、語法同
+  `CACHE_MARKER` sanity 檢查。任何一項失敗都唔會 exec。
+* 冷啟動冇可信快取時，唔會退回「下載 → compile → exec」嘅無驗證分支，
+  而係顯示明確嘅封存／驗證錯誤。
+* 本地快取仍可用；需要完全離線或者首次安裝時，請直接令 widget 指向
+  `i_widget.py`。
 
-用法：呢個檔案就係 widget 指向嘅 script（取代直接指向 i_widget.py）。
+用法：現有用戶可保留呢個 launcher 行驗證過嘅快取；新安裝請用本地模式。
 """
 
 import os
@@ -27,16 +22,16 @@ import widgets as wd
 
 # --- 設定 ---------------------------------------------------------------
 
+# 封存前嘅 URL 只留作舊工具／測試參考；封存模式唔會讀取或下載。
 SOURCE = "https://raw.githubusercontent.com/iceninye/I-widget/main"
 FINGERPRINT = SOURCE + "/i_widget.fingerprint"
 WIDGET_PY = SOURCE + "/i_widget.py"
 
-# Extension 記憶體緊，timeout 要短。抓唔到就當今次冇更新。
-# 最差情況要連續拉兩個檔（指紋 + 程式碼），所以每個唔可以太長。
+# 封存模式唔會有網絡 timeout。
 TIMEOUT = 5
 
-# 下載上限。i_widget.py 正常只有十幾 KB，超過呢個數就當異常，
-# 唔好俾一個異常回應食晒 extension 嘅記憶體。
+# 本地快取大小上限。i_widget.py 正常只有十幾 KB，超過呢個數就當異常，
+# 唔好俾一個損壞快取食晒 extension 嘅記憶體。
 MAX_DOWNLOAD_BYTES = 256 * 1024
 
 # 指紋格式（make_fingerprint.py：SHA256 前 16 個 hex 字元）。
@@ -55,8 +50,8 @@ CHECK_GRACE = 60
 
 # 版本標記：顯示喺錯誤畫面。用戶一眼睇到就知行緊邊個版本，
 # 唔使再靠估 — 空白畫面本身零資訊量。
-LAUNCHER_VERSION = "1.7.0"
-REMOTE_FP = None  # 執行時填入（如果成功問過 GitHub）
+LAUNCHER_VERSION = "1.8.0"
+REMOTE_FP = None  # 遠端拉碼已封存，永遠唔會填入
 
 
 # ==========================================================================
@@ -226,7 +221,7 @@ MAX_USERKEYS_BYTES = 100 * 1024
 
 # --- 儲存層 -------------------------------------------------------------
 # 兩種儲存，userkeys 優先（官方、extension 同 app 共用、唔會被清理），
-# 檔案後備。兩者都失敗都唔會 crash —— 寧願每次重新落載。
+# 檔案後備。兩者都失敗都唔會 crash —— 封存模式唔會改行遠端落載。
 
 
 def _userkeys():
@@ -255,33 +250,25 @@ def _keys_get(key):
 
 
 def load_code():
-    """讀快取程式碼。userkeys → 檔案 → None。
+    """讀取同驗證一組本地快取（程式碼＋指紋）。userkeys → 檔案 → None。
 
-    ⚠️ 一定要經 `_code_is_usable()` 驗證先可以攞返去做。
-    呢個係 2026-10-22 真機事故嘅直接教訓：
-
-        舊版 `load_code()` 讀到乜就返乜，冇任何驗證。
-        配合 `_should_check()` 嘅 30 分鐘節流 →
-        **一次壞快取可以永久鎖死個 widget**（永遠唔會去 GitHub 攞新版）。
-
-        真機證實：`i_widget.py` 本身完全正常（exec 跑完、show_widget
-        叫咗 1 次），但 launcher 行嘅係 userkeys 入面嘅舊壞版本 →
-        home screen 永遠綠色 default template。
-
-    所以：任何快取都必須通過語法 + sanity check，唔過就當冇記錄。
+    封存模式唔會再落載替代品。任何後備快取缺指紋、指紋格式錯、內容
+    雜湊唔相符、語法錯或者 sanity marker 唔存在，都只會被丟棄。
     """
     code = _keys_get(KEY_CODE)
-    if code and _code_is_usable(code, "userkeys"):
+    fingerprint = _keys_get(KEY_FINGERPRINT)
+    if code and _code_is_usable(code, "userkeys", fingerprint):
         return code
 
-    code = _read(CACHED_PY)
-    if code and _code_is_usable(code, "檔案"):
+    code = _read(CACHED_PY, strip=False)
+    fingerprint = _read(CACHED_FP)
+    if code and _code_is_usable(code, "檔案", fingerprint):
         return code
 
     return None
 
 
-# 快取必須包含嘅 sanity marker。冇咗就係舊／壞版本，丟掉重下載。
+# 快取必須包含嘅 sanity marker。冇咗就係舊／壞版本，丟掉。
 #
 # 點解唔淨係靠 compile()？因為 syntax 完全合法嘅舊版本（例如裸讀
 # `wd.COLOR_SECONDARY_LABEL` 嘅早期版）一樣會令 widget 死，但 compile 過得到。
@@ -290,23 +277,43 @@ def load_code():
 CACHE_MARKER = "I_WIDGET_API_2"
 
 
-def _code_is_usable(code, source):
+def _normalise_fingerprint(value):
+    """回傳合法嘅 16 位 hex 指紋；缺少／格式錯就回傳 None。"""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if FINGERPRINT_PATTERN.fullmatch(value) else None
+
+
+def _code_is_usable(code, source, fingerprint=None):
     """快取程式碼係咪可信。
 
-    三重檢查，任何一項唔過就當冇快取（下次 reload 會重新落載）：
-      1. 內容夠長（唔係被截斷嘅回應）
-      2. 語法通過 `compile()`
-      3. 含有 `CACHE_MARKER`（即係新架構嘅版本，唔係舊殘留）
+    Fail-closed 四重檢查，任何一項唔過都唔可以 exec：
+      1. 內容大小正常
+      2. 已存指紋格式合法，而且同內容 SHA256 前綴相符
+      3. 語法通過 `compile()`
+      4. 含有 `CACHE_MARKER`（即係新架構嘅版本，唔係舊殘留）
     """
     try:
-        if not code or len(code) < 200:
-            _log(f"{source} 快取太短，丟棄")
+        if not isinstance(code, str) or len(code) < 200:
+            _log(f"{source} 快取太短或唔係文字，丟棄")
+            return False
+        if len(code.encode("utf-8")) > MAX_DOWNLOAD_BYTES:
+            _log(f"{source} 快取超過 {MAX_DOWNLOAD_BYTES} bytes，丟棄")
+            return False
+
+        expected = _normalise_fingerprint(fingerprint)
+        if expected is None:
+            _log(f"{source} 快取指紋缺少或格式錯，丟棄")
+            return False
+        if fingerprint_of(code) != expected:
+            _log(f"{source} 快取指紋同內容對唔上，丟棄")
             return False
 
         compile(code, WIDGET_PY, "exec")
 
         if CACHE_MARKER not in code:
-            _log(f"{source} 快取冇 {CACHE_MARKER} marker（舊版本），丟棄並重新落載")
+            _log(f"{source} 快取冇 {CACHE_MARKER} marker（舊版本），丟棄")
             return False
 
         return True
@@ -321,8 +328,8 @@ def _code_is_usable(code, source):
 def load_fingerprint():
     value = _keys_get(KEY_FINGERPRINT)
     if value:
-        return str(value).strip()
-    return _read(CACHED_FP)
+        return _normalise_fingerprint(value)
+    return _normalise_fingerprint(_read(CACHED_FP))
 
 
 def load_checked():
@@ -342,8 +349,12 @@ def load_checked():
 def save(code, fingerprint, checked):
     """一次過寫晒三樣。返回 True 代表至少有一個後端成功。
 
-    兩者都失敗唔會 raise —— 寧願下次重新落載，都唔好令 widget 死掉。
+    封存模式只接受已經通過指紋、語法同 sanity 驗證嘅快取。驗證失敗
+    就唔會寫入任何後端，避免製造出一個下次有機會用到嘅未驗證快取。
     """
+    if not _code_is_usable(code, "新快取", fingerprint):
+        return False
+
     stored = False
 
     keys = _userkeys()
@@ -371,7 +382,7 @@ def save(code, fingerprint, checked):
         stored = True
 
     if not stored:
-        _log("警告：userkeys 同檔案都寫唔到，下次會重新落載")
+        _log("警告：userkeys 同檔案都寫唔到，本地快取可能唔可用")
     else:
         _yield_after_write()
     return stored
@@ -432,10 +443,12 @@ def _log(message):
         pass
 
 
-def _read(path):
+def _read(path, strip=True):
     try:
-        with open(path, encoding="utf-8") as handle:
-            return handle.read().strip()
+        # newline="" 保留原本換行；快取指紋係對完整內容計算，唔可以正規化。
+        with open(path, encoding="utf-8", newline="") as handle:
+            value = handle.read()
+        return value.strip() if strip else value
     except Exception:
         return None
 
@@ -450,21 +463,9 @@ def _write(path, text):
 
 
 def _fetch(url):
-    """下載一段文字。失敗或超過 MAX_DOWNLOAD_BYTES 回傳 None（唔會 raise）。"""
-    try:
-        from urllib.request import Request, urlopen
-
-        # no-cache：叫 CDN 盡量俾最新版，減少指紋同程式碼唔同步。
-        request = Request(url, headers={"Cache-Control": "no-cache"})
-        with urlopen(request, timeout=TIMEOUT) as response:
-            data = response.read(MAX_DOWNLOAD_BYTES + 1)
-        if len(data) > MAX_DOWNLOAD_BYTES:
-            _log(f"{url} 超過 {MAX_DOWNLOAD_BYTES} bytes，唔用")
-            return None
-        return data.decode("utf-8")
-    except Exception as error:
-        _log(f"取唔到 {url}：{error}")
-        return None
+    """遠端拉碼已封存：呢個函式永遠唔會發出網絡請求。"""
+    _log(f"遠端拉碼已封存，拒絕下載 {url}")
+    return None
 
 
 def fingerprint_of(code):
@@ -479,112 +480,35 @@ def fingerprint_of(code):
 
 
 def _should_check():
-    """上次檢查過就唔好即刻再打網絡。
-
-    ⚠️ 但有一個例外，而且係最重要嗰個：**快取唔可信就一定要查**。
-
-    原本呢度淨係睇時間，導致：userkeys 入面有壞快取 → 30 分鐘內唔查
-    → 就算壞版本擺喺度，launcher 都唔會去 GitHub 攞新版。
-    如果壞快取已經 `touch_checked()` 過，更加係永久鎖死。
-
-    而家先問「快取可唔可信」，唔可信就即刻查，唔理時間。
-    """
-    if load_code() is None:
-        return True          # 冇可信快取 → 必須即刻去攞
-    checked = load_checked()
-    if not checked:
-        return True          # 冇記錄 = 即刻查一次
-    return (time.time() - checked) >= CHECK_INTERVAL - CHECK_GRACE
+    """舊更新節流介面；遠端拉碼封存後永遠唔需要檢查更新。"""
+    return False
 
 
 # --- 更新邏輯 -----------------------------------------------------------
 
 def _try_update():
-    """嘗試拉新版。成功返回 True；任何一步失敗都返回 False。"""
-    if not _should_check():
-        return False
-
-    _crumb("4a 問 GitHub 指紋")
-    remote_fp = _fetch(FINGERPRINT)
-    _crumb(f"4b 指紋回應 {'失敗' if remote_fp is None else remote_fp.strip()}")
-    if remote_fp is None:
-        return False
-
-    # GitHub 上面嘅指紋檔有結尾換行；唔 strip 就永遠同快取對唔上。
-    remote_fp = remote_fp.strip()
-    if not FINGERPRINT_PATTERN.fullmatch(remote_fp):
-        _log("指紋格式唔啱，當今次冇更新")
-        touch_checked(time.time())
-        return False
-
-    global REMOTE_FP
-    REMOTE_FP = remote_fp
-
-    if remote_fp == load_fingerprint() and load_code():
-        _log("已經係最新版")
-        touch_checked(time.time())  # 問過咗，唔使十秒後再問
-        return False
-
-    _log(f"發現新版 {remote_fp}，落載中")
-    _crumb("4c 落載 i_widget.py")
-    code = _fetch(WIDGET_PY)
-    _crumb(f"4d 落載完 {'失敗' if not code else str(len(code)) + ' bytes'}")
-    if not code or len(code) < 200:
-        _log("程式碼下載失敗或太短，維持舊快取")
-        touch_checked(time.time())
-        return False
-
-    # 完整性檢查：內容一定要同指紋對得上。
-    # 對唔上通常係 CDN 未同步（指紋新、程式碼舊）或者下載唔完整，
-    # 所以唔記錄檢查時間 → 下次 reload 即刻再試。
-    if fingerprint_of(code) != remote_fp:
-        _log("程式碼同指紋對唔上（CDN 未同步？），維持舊快取")
-        return False
-
-    # 語法檢查：壞咗的 commit 唔好污染快取。
-    try:
-        compile(code, WIDGET_PY, "exec")
-    except SyntaxError as error:
-        _log(f"新版本語法錯（{error}），維持舊快取")
-        # 指紋刻意唔更新 → 等你修好再 push，下次 reload 會自動再試。
-        # 但要更新檢查時間，否則每次 reload 都撲去 GitHub 撞同一個壞版本。
-        touch_checked(time.time())
-        return False
-
-    _crumb("4e 寫入快取")
-    save(code, remote_fp, time.time())
-    _crumb("4f 寫入完")
-    _log("已更新到本地快取")
-    return True
+    """遠端更新入口保留作相容介面，但封存後永遠唔做任何事。"""
+    _log("Pyto 遠端拉碼已封存；不下載指紋或程式碼")
+    _crumb("4a 遠端拉碼已封存，跳過更新")
+    return False
 
 
 def _load_code():
-    """決定今次行邊份程式碼。永遠唔會回傳 None 除非真係咩都冇。"""
-    _crumb("4 開始 _try_update")
+    """只載入通過驗證嘅本地快取；冇可信快取就回傳 None。"""
+    _crumb("4 遠端拉碼已封存")
     try:
         _try_update()
     except Exception as error:
-        _log(f"更新過程出錯，繼續用快取：{error}")
+        _log(f"封存更新介面出錯，改用本地快取：{error}")
         _crumb(f"4x _try_update 爆 {type(error).__name__}: {error}")
-    _crumb("5 _try_update 完，讀快取")
+    _crumb("5 讀取並驗證本地快取")
 
     code = load_code()
     if code:
-        _crumb(f"6 用快取 {len(code)} bytes")
+        _crumb(f"6 用可信快取 {len(code)} bytes")
         return code, "cache"
-    _crumb("6 冇可用快取，直接下載")
 
-    # 連快取都冇（例如第一次執行）→ 直接拉一次，順手寫入快取。
-    code = _fetch(WIDGET_PY)
-    if code and len(code) >= 200:
-        try:
-            compile(code, WIDGET_PY, "exec")
-        except SyntaxError:
-            return None, None
-        # 存程式碼本身嘅指紋，下次遠端指紋一樣就唔使再落載。
-        save(code, fingerprint_of(code), time.time())
-        return code, "remote"
-
+    _crumb("6 冇可信本地快取；唔會改行遠端下載")
     return None, None
 
 
@@ -641,7 +565,7 @@ def _show_offline_widget(reason, title="更新失敗", detail=None):
             # 版本標記：空白畫面零資訊量，一定要令用戶一眼睇到行緊邊個版本。
             _try(lambda: layout.add_row([_text("i-widget",
                                               font=_font(20, bold=True), color=fg)]), None)
-            _try(lambda: layout.add_row([_text(f"{LAUNCHER_VERSION} · {REMOTE_FP or '?'}",
+            _try(lambda: layout.add_row([_text(f"{LAUNCHER_VERSION} · 遠端拉碼已封存",
                                               font=_font(11), color=muted)]), None)
             _try(lambda: layout.add_row([_text(title, font=_font(13), color=muted)]), None)
             if detail:
@@ -689,22 +613,31 @@ def main():
     except Exception as error:
         _log(f"_load_code 爆：{type(error).__name__}: {error}")
         _show_offline_widget(
-            "載入階段出錯",
-            title="載入失敗",
+            "本地快取載入／驗證失敗",
+            title="Pyto 遠端拉碼已封存",
             detail=f"{type(error).__name__}: {error}"[:140],
         )
         return
 
     if not code:
-        _show_offline_widget("攞唔到任何程式碼")
+        _show_offline_widget(
+            "遠端拉碼已封存，而且冇通過驗證嘅本地快取",
+            title="Pyto 遠端拉碼已封存",
+            detail="本地快取驗證失敗（指紋／語法／sanity）；請改用本機 i_widget.py",
+        )
         return
 
-    # exec 之前再 compile 一次：cache 檔可能已經被手動改壞。
+    # `_load_code()` 已經核對過已存指紋、語法同 sanity marker。呢度再
+    # compile 只係最後防線，絕唔係取而代之嘅驗證。
     try:
         compiled = compile(code, "i_widget.py", "exec")
     except SyntaxError as error:
-        _log(f"快取語法錯（{error}），退回離線畫面")
-        _show_offline_widget("快取已損壞")
+        _log(f"快取語法錯（{error}），退回封存錯誤畫面")
+        _show_offline_widget(
+            "本地快取驗證失敗",
+            title="Pyto 遠端拉碼已封存",
+            detail=f"快取語法錯：{error}"[:140],
+        )
         return
 
     _log(f"執行中（來源：{origin}）")
