@@ -13,9 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 已審查嘅 branch、tag 或 commit SHA
+        description: 已審查嘅 branch、tag 或 commit SHA（留空取觸發時 SHA）
         required: false
-        default: main
 
 permissions:
   contents: read
@@ -33,6 +32,14 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
+
+      - name: 核對 checkout ref
+        env:
+          REQUESTED_REF: ${{ inputs.ref || github.sha }}
+        run: |
+          printf 'requested ref: %s\n' "$REQUESTED_REF"
+          printf 'checked out: '
+          git rev-parse HEAD
 
       - name: Xcode 版本
         run: |

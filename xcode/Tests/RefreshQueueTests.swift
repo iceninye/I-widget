@@ -35,10 +35,32 @@ final class RefreshQueueTests: XCTestCase {
     func testWidgetRefreshForceExpiresAfterFiveMinutes() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "RefreshQueueTests.widget-force"))
         defer { defaults.removePersistentDomain(forName: "RefreshQueueTests.widget-force") }
-        XCTAssertFalse(WidgetRefreshForce.isRequested(now: now, in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.today, now: now, in: defaults))
         WidgetRefreshForce.request(now: now, in: defaults)
-        XCTAssertTrue(WidgetRefreshForce.isRequested(now: at(5 * 60 - 1), in: defaults))
-        XCTAssertFalse(WidgetRefreshForce.isRequested(now: at(5 * 60), in: defaults))
+        XCTAssertTrue(WidgetRefreshForce.consume(.today, now: at(5 * 60 - 1), in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.today, now: at(5 * 60), in: defaults))
+    }
+
+    func testWidgetRefreshForceIsConsumedOncePerKind() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RefreshQueueTests.widget-force-once"))
+        defer { defaults.removePersistentDomain(forName: "RefreshQueueTests.widget-force-once") }
+        WidgetRefreshForce.request(now: now, in: defaults)
+        XCTAssertTrue(WidgetRefreshForce.consume(.today, now: now, in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.today, now: at(1), in: defaults))
+        XCTAssertTrue(WidgetRefreshForce.consume(.info, now: at(1), in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.info, now: at(1), in: defaults))
+        XCTAssertTrue(WidgetRefreshForce.consume(.court, now: at(1), in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.court, now: at(2), in: defaults))
+        WidgetRefreshForce.request(now: at(2), in: defaults)
+        XCTAssertTrue(WidgetRefreshForce.consume(.today, now: at(2), in: defaults))
+    }
+
+    func testWidgetRefreshForceRejectsClockRollbackPastWindow() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RefreshQueueTests.widget-force-rollback"))
+        defer { defaults.removePersistentDomain(forName: "RefreshQueueTests.widget-force-rollback") }
+        WidgetRefreshForce.request(now: now, in: defaults)
+        XCTAssertFalse(WidgetRefreshForce.consume(.today, now: at(-5 * 60 - 1), in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.consume(.today, now: at(1), in: defaults))
     }
 
     /// 未刷新過（冷啟）唔會被節流；30 分鐘內返前景唔打網，夠 30 分鐘先再打。
@@ -105,6 +127,21 @@ final class RefreshQueueTests: XCTestCase {
             overshot = false
         }
         XCTAssertEqual(rounds, 2, "兩個 mustRefresh 請求併做一輪補跑就得，唔使一輪一個")
+    }
+
+    func testForceLatchOnlyAppliesToOneFollowUpRound() {
+        var pendingRefresh = true
+        var pendingForceNetwork = true
+        var forceRounds: [Bool] = []
+        var rounds = 0
+        while RefreshQueue.followUp(pending: pendingRefresh, overshot: false) {
+            rounds += 1
+            forceRounds.append(pendingForceNetwork)
+            pendingRefresh = false
+            pendingForceNetwork = false
+            XCTAssertLessThan(rounds, 4, "force latch 必須收斂")
+        }
+        XCTAssertEqual(forceRounds, [true], "只有一輪補跑繼承 force，唔可以每輪都全抓")
     }
 
     /// 順手請求（例如低耗電模式改變）喺跑緊時應該完全唔再加輪。

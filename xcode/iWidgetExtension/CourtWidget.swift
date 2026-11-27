@@ -88,7 +88,7 @@ struct CourtProvider: AppIntentTimelineProvider {
         let days = await withDeadline(20, fallback: cached) {
             await CourtList.loadAll(
                 codes: codes, day: day, now: now, holidays: holidays,
-                force: WidgetRefreshForce.isRequested(now: now)
+                force: WidgetRefreshForce.consume(.court, now: now)
             )
         }
         let theme = WidgetTheme.load()

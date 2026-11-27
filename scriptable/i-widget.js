@@ -692,7 +692,7 @@ function addClock(parent, size, align) {
 function nextReload(now, view, snapshot) {
   // 00:xx 靜態時鐘要喺 01:00 前 reload；跨日亦要喺 00:00 前 reload。
   const limit = CONFIG.reloadMinutes * 60000;
-  const edges = [0, 1].map((hour) => {
+  const edges = view === "court" ? [] : [0, 1].map((hour) => {
     const edge = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 20);
     return edge <= now ? new Date(edge.getTime() + 86400000) : edge;
   });
@@ -1371,29 +1371,33 @@ function buildToday(w, family, snapshot) {
   const data = snapshot && snapshot.data;
   if (!data) { setupNotice(w); return; }
   const staleServiceDate = serviceDateWarning(snapshot);
-  if (staleServiceDate) text(w, staleServiceDate, 9, C.orange, true);
+  if (staleServiceDate && family !== "small") text(w, staleServiceDate, 9, C.orange, true);
   if (family === "small") {
-    const status = dutyStatus(data.duty);
     viewHeading(w, "today", snapshot, family);
     w.addSpacer(6);
-    // small 只保留四行內；有事件時用第一宗即將發生嘅事件取代靜態更份。
-    const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
-    if (status) {
-      text(w, status, 11, status.includes("失敗") ? C.red : C.secondary, true);
-      if (data.duty.today) text(w, `${data.duty.today.title || "今日更份"}${data.duty.today.times ? ` · ${data.duty.today.times}` : ""}`, 10, C.label, false);
-    } else if (event) text(w, `${event.displayAt} · ${event.action} ${event.title}`, 11, C.label, true);
-    else {
-      text(w, data.duty.today.title || "今日更份", 12, C.label, true);
-      text(w, data.duty.today.times || MISSING, 11, C.secondary, false);
+    // Heading 以下最多四行。先保留過期／更份／學校錯誤同主要更份，再省略天氣等細節。
+    const lines = [];
+    const add = (value, color = C.label, bold = false, size = 11) => {
+      if (lines.length < rowBudget("small")) lines.push({ value, color, bold, size });
+    };
+    if (staleServiceDate) add(staleServiceDate.replace("JSON 為 ", "JSON "), C.orange, true, 9);
+    const status = dutyStatus(data.duty);
+    if (status) add(status, status.includes("失敗") ? C.red : C.secondary, true);
+    if (data.duty.today) {
+      add(`${data.duty.today.title || "今日更份"}${data.duty.today.times ? ` · ${data.duty.today.times}` : ""}`, C.label, true);
+    } else {
+      const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
+      if (event) add(`${event.displayAt} · ${event.action} ${event.title}`, C.label, true);
     }
     const school = data.school.today;
     const failure = schoolFailureText(data.school.failed);
-    const schoolText = failure || school.items[0]?.title || school.cycle.join("／") || "沒有日程";
-    text(w, `學校 · ${schoolText}`, 10, failure ? C.red : C.indigo, false);
+    const schoolText = failure ? `${failure.replace("學校讀取失敗／部分失敗：", "")} 讀唔到` : school.items[0]?.title || school.cycle.join("／") || "沒有日程";
+    add(`學校 · ${schoolText}`, failure ? C.red : C.indigo, false, 10);
     const weather = data.weather.available && data.weather.today;
     const weatherText = weather ? `${weather.codeText} ${weather.tempText}` : "天氣未有資料";
     const trainText = data.train.available ? data.train.stateText : "屯馬綫未有資料";
-    text(w, `${weatherText} · ${trainText}`, 10, C.secondary, false);
+    add(`${weatherText} · ${trainText}`, C.secondary, false, 10);
+    for (const line of lines) text(w, line.value, line.size, line.color, line.bold);
     return;
   }
 
@@ -1677,7 +1681,7 @@ function widgetURL(view, snapshot) {
   if (view === "info") return "iwidget://info";
   if (view === "court") {
     const day = snapshot && snapshot.data.courts.items[0];
-    return appDeepLink(day && day.deepLink) || "iwidget://court";
+    return appDeepLink(day && day.deepLink) || "iwidget://court?code=DC";
   }
   // clock／accessory 冇獨立 JSON 頁；開 app 今日更份，冇資料時亦適用。
   return "iwidget://duty";

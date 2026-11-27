@@ -199,6 +199,13 @@ enum CourtPublication {
         // 只對「失敗」套 backoff；成功空表嘅 savedAt 比舊 failure 新，15 分鐘窗口重試仍然有效。
         if let lastAttemptAt, lastAttemptAt <= now, now.timeIntervalSince(lastAttemptAt) < failureBackoff,
            savedAt == nil || (savedAt.map { lastAttemptAt > $0 } ?? true) {
+            // 未公布頁嘅失敗唔可以吞咗 18:45／19:00 兩個發布探測。
+            if cached == nil, inRetryWindow(now: now, holidays: holidays, calendar: calendar) {
+                let day = calendar.startOfDay(for: now)
+                let probes = [at(day, hour: 18, minute: 45, calendar: calendar),
+                              at(day, hour: 19, minute: 0, calendar: calendar)]
+                if probes.contains(where: { now >= $0 && lastAttemptAt < $0 }) { return .fetch }
+            }
             return .reuse
         }
         guard let cached, let savedAt, savedAt <= now else { return .fetch }
@@ -288,7 +295,10 @@ enum CourtPublication {
         let day = calendar.startOfDay(for: now)
         if minute < 18 * 60 + 30 { return nil }
         if minute < 18 * 60 + 45 { return at(day, hour: 18, minute: 45, calendar: calendar) }
-        if minute < 19 * 60 { return now.addingTimeInterval(retryInterval) }
+        if minute < 19 * 60 {
+            let confirmation = at(day, hour: 19, minute: 0, calendar: calendar)
+            return min(now.addingTimeInterval(retryInterval), confirmation)
+        }
         if minute < 20 * 60 { return now.addingTimeInterval(failureBackoff) }
         return nil
     }
@@ -411,6 +421,20 @@ enum CourtList {
             if columns.count >= 2, columns.contains(.caseNo) { return true }
         }
         return false
+    }
+
+    /// 合法「無聆訊日」可能完全冇 `<tr>`；要同 18:30 前未公布頁分開。
+    static func isExplicitNoHearingPage(_ html: String) -> Bool {
+        let text = cleanText(html).lowercased()
+        if text.contains("6:30"), ["upload", "publish", "公布", "上載", "上传"].contains(where: text.contains) {
+            return false
+        }
+        let markers = [
+            "there is no hearing on this day",
+            "此日並無法庭聆訊", "此日并无法庭聆讯",
+            "當日並無法庭聆訊", "当日并无法庭聆讯",
+        ]
+        return markers.contains { text.contains($0) }
     }
 
     /// 裁判法院嘅行（已驗證版面）：`[時間] | 案號 | 被告 | 控罪 | 聆訊`。
@@ -748,7 +772,7 @@ enum CourtList {
             let cases = parse(html)
             if cases.isEmpty {
                 // 維護頁／錯誤頁多數都係 2xx + 空 parse；只有真案件表結構先當有效空結果。
-                guard hasCourtTable(html) else { return failure() }
+                guard hasCourtTable(html) || isExplicitNoHearingPage(html) else { return failure() }
                 // 今次空但之前有資料：連舊案件表同舊成功時間一齊保留，唔好蓋走。
                 if let cached, cached.total > 0 { return failure() }
             }

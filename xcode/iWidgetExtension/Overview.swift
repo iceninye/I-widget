@@ -76,7 +76,8 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         var loadedSchedule = ScheduleData.cached(token: config.rosterToken)
         var loadedVPS = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         if !justFlipped {
-            let forceNetwork = WidgetRefreshForce.isRequested(now: now)
+            let forceKind: WidgetRefreshForce.Kind = part == .today ? .today : .info
+            let forceNetwork = WidgetRefreshForce.consume(forceKind, now: now)
             switch part {
             case .today:
                 async let schedule = ScheduleData.load(token: config.rosterToken, now: now, force: forceNetwork)
