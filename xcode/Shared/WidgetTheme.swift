@@ -22,3 +22,10 @@ enum WidgetTheme: String, Codable, CaseIterable {
         return all[(index + 1) % all.count]
     }
 }
+
+enum WidgetReloadKinds {
+    /// 反轉資料格只影響今日咭同資訊。
+    static let data = ["IWidgetOverview", "IWidgetInfo"]
+    /// 主題掣亦出現喺法院 widget。
+    static let themed = data + ["IWidgetCourt"]
+}

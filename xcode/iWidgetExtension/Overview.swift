@@ -47,7 +47,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         if context.isPreview { return .sample }
         let now = Date()
         let config = settings(configuration)
-        let stats = SystemStats.read()
+        let stats = await SystemStats.read()
         let reading = Self.recordBattery(stats, now: now)
         let info = ExtraInfo.cached(now: now, part: part)
         let schedule = ScheduleData.cached(token: config.rosterToken)
@@ -64,7 +64,7 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
     func timeline(for configuration: Intent, in context: Context) async -> Timeline<OverviewEntry> {
         let now = Date()
         let config = settings(configuration)
-        let stats = SystemStats.read()
+        let stats = await SystemStats.read()
         let reading = Self.recordBattery(stats, now: now)
         var flips = FlipState.load()
         flips.prune(now: now)
@@ -76,14 +76,19 @@ struct OverviewProvider<Intent: WidgetConfigurationIntent>: AppIntentTimelinePro
         var loadedSchedule = ScheduleData.cached(token: config.rosterToken)
         var loadedVPS = VPSState.cached(url: config.statusURL, token: config.vpsToken)
         if !justFlipped {
+            let forceNetwork = WidgetRefreshForce.isRequested(now: now)
             switch part {
             case .today:
-                async let schedule = ScheduleData.load(token: config.rosterToken, now: now)
-                async let info = withDeadline(15, fallback: ExtraInfo.cached(now: now, part: part)) { await ExtraInfo.loadToday(now: now) }
+                async let schedule = ScheduleData.load(token: config.rosterToken, now: now, force: forceNetwork)
+                async let info = withDeadline(15, fallback: ExtraInfo.cached(now: now, part: part)) {
+                    await ExtraInfo.loadToday(now: now, force: forceNetwork)
+                }
                 (loadedSchedule, loadedInfo) = await (schedule, info)
             case .info:
-                async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now, part: part)) { await ExtraInfo.load(now: now) }
-                async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now)
+                async let info = withDeadline(20, fallback: ExtraInfo.cached(now: now, part: part)) {
+                    await ExtraInfo.load(now: now, force: forceNetwork)
+                }
+                async let vps = VPSState.load(url: config.statusURL, token: config.vpsToken, now: now, force: forceNetwork)
                 (loadedInfo, loadedVPS) = await (info, vps)
             }
             DataCache.save(now, key: "dataAt")   // 最後「嘗試」讀取時間；同「最後成功時間」(updatedAt) 分開

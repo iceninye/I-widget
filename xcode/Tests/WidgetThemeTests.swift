@@ -12,6 +12,11 @@ final class WidgetThemeTests: XCTestCase {
         XCTAssertEqual(theme.next, .classic)
     }
 
+    func testThemeReloadIncludesCourtButTileFlipDoesNot() {
+        XCTAssertEqual(WidgetReloadKinds.data, ["IWidgetOverview", "IWidgetInfo"])
+        XCTAssertEqual(WidgetReloadKinds.themed, ["IWidgetOverview", "IWidgetInfo", "IWidgetCourt"])
+    }
+
     func testLabelsAreUniqueAndStored() throws {
         XCTAssertEqual(Set(WidgetTheme.allCases.map(\.label)).count, WidgetTheme.allCases.count)
         let data = try JSONEncoder().encode(WidgetTheme.sunset)

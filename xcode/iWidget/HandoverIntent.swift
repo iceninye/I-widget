@@ -28,11 +28,10 @@ struct ScheduleHandoverAlertsIntent: LiveActivityIntent {
         if DutyActivityManager.isEnabled {
             countdown = "\n" + (await DutyActivityManager.sync(events: data.dutyEvents(now: now), now: now))
         }
-        if count == 0 {
-            return .result(dialog: "今日同明日冇提示（休息，或者已經放工）。\(countdown)")
-        }
-        let first = alerts.first.map { "，第一個 \(Self.clock($0.fireAt))" } ?? ""
-        return .result(dialog: "已排好 \(count) 個交接提示\(first)。\(countdown)")
+        let summary = HandoverScheduleSummary.text(rosterFailed: data.rosterFailed, scheduled: count)
+        let first = alerts.first.map { "第一個 \(Self.clock($0.fireAt))" } ?? ""
+        let detail = first.isEmpty ? "" : (summary.hasSuffix("。") ? "\n" : "，") + first
+        return .result(dialog: "\(summary)\(detail)\(countdown)")
     }
 
     private static func clock(_ date: Date) -> String {

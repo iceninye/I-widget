@@ -2,7 +2,7 @@ import Foundation
 
 /// 更份卡一段行程：`[類別, Run, 接班地點, 接班時間, 離班地點, 離班時間]`（TML-traffic `data/duties/DS????.json` 嘅 `legs`）。
 /// 時間係服務日 00:00 起計嘅秒數，過咗午夜會超過 86400。
-struct DutyLeg: Codable, Equatable {
+struct DutyLeg: Codable, Equatable, Sendable {
     /// drive、empty、park、prep、ride、wait …
     var kind: String
     var run: Int
@@ -37,14 +37,14 @@ struct DutyLeg: Codable, Equatable {
 }
 
 /// 交接對象：邊個更、幾點、喺邊個月台。
-struct DutyRelief: Codable, Equatable {
+struct DutyRelief: Codable, Equatable, Sendable {
     var id: String
     var at: Int
     var place: String
 }
 
 /// 某段行程：邊個將車交俾你（from），你落車之後交俾邊個（to）。
-struct LegRelief: Codable, Equatable {
+struct LegRelief: Codable, Equatable, Sendable {
     var from: DutyRelief?
     var to: DutyRelief?
 
@@ -55,6 +55,19 @@ struct LegRelief: Codable, Equatable {
 /// 同一張 Duty Sheet、同一個 Run、同一個站（錦上路1、2 當同一站），
 /// 對方嗰段喺你開始前 20 分鐘內完結（接車），或者喺你完結後 20 分鐘內開始（交車）。
 /// 自己上一段／下一段仍然係同一個 Run（例如出車準備之後直接開），就唔算交接。
+enum HandoverScheduleSummary {
+    static func text(rosterFailed: Bool, scheduled: Int) -> String {
+        if rosterFailed {
+            return scheduled > 0
+                ? "更表讀取失敗，已沿用快取排好 \(scheduled) 個交接提示。"
+                : "讀唔到更表，未能確認今日同明日有冇提示。"
+        }
+        return scheduled > 0
+            ? "已排好 \(scheduled) 個交接提示。"
+            : "今日同明日冇提示（休息，或者已經放工）。"
+    }
+}
+
 enum Relief {
     static let window = 20 * 60
     static let trainKinds: Set<String> = ["drive", "empty", "park", "prep"]
@@ -196,6 +209,14 @@ enum HandoverAlerts {
     static func moment(date: String, second: Int) -> Date? {
         guard let day = Days.number(date) else { return nil }
         return Date(timeIntervalSince1970: Double(day) * 86_400 - 8 * 3_600 + Double(second))
+    }
+
+    /// 逐筆排程先至取 `now`：網絡同 TTS 可能耗時，唔可以沿用成輪開始時間。
+    static func notificationTiming(for alert: HandoverAlert, now: Date) -> (interval: TimeInterval, scheduledAt: Date)? {
+        let remaining = alert.fireAt.timeIntervalSince(now)
+        guard remaining > 0 else { return nil }
+        let interval = max(1, remaining)
+        return (interval, now.addingTimeInterval(interval))
     }
 
     /// 「15 分鐘後」「1 小時後」「1 小時 30 分鐘後」

@@ -37,6 +37,7 @@ struct SystemStats: Equatable {
         systemVersion: "27.0.1"
     )
 
+    @MainActor
     static func read() -> SystemStats {
         let device = UIDevice.current
         device.isBatteryMonitoringEnabled = true

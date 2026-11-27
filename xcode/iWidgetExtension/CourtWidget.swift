@@ -38,6 +38,8 @@ struct CourtEntry: TimelineEntry {
     /// 最後**任一**法院成功取得案件表嘅時間（唔係「全部法院都成功」）；一個都冇成功記錄就 nil，標題顯示「未有資料」。
     let updatedAt: Date?
     let theme: WidgetTheme
+    /// 跨過 18:30 之後、新案件表未載入前：顯示下一個工作日，但唔好繼續展示舊日期案件。
+    var pending = false
 
     static let sample = CourtEntry(
         date: Date(),
@@ -52,7 +54,8 @@ struct CourtEntry: TimelineEntry {
     )
 }
 
-/// 法院案件表：一般每 60 分鐘重讀（各法院各自有 10 分鐘快取），中間每 10 分鐘一個 entry，「下一庭」會自己前進。
+/// 法院案件表：一般每 60 分鐘重讀，18:45 發布探測同空結果短重試會提前；
+/// 中間每 10 分鐘一個本地 entry，「下一庭」會自己前進，但唔會喺 reload 之後再展示舊日期。
 struct CourtProvider: AppIntentTimelineProvider {
     static let maxCourts = 4
 
@@ -82,22 +85,38 @@ struct CourtProvider: AppIntentTimelineProvider {
         let day = CourtList.listDate(now: now, holidays: holidays)
         let codes = codes(configuration)
         let cached = codes.map { CourtList.cached(code: $0, day: day) }
-        let days = await withDeadline(20, fallback: cached) { await CourtList.loadAll(codes: codes, day: day, now: now) }
+        let days = await withDeadline(20, fallback: cached) {
+            await CourtList.loadAll(
+                codes: codes, day: day, now: now, holidays: holidays,
+                force: WidgetRefreshForce.isRequested(now: now)
+            )
+        }
         let theme = WidgetTheme.load()
         // 只有真係成功取得案件表嘅法院先計；全部失敗／冇快取就 nil（標題顯示「未有資料」），唔使 now 灌水
         let success = CourtList.lastSuccess(days: days)
-
-        var dates = (0..<12).map { now.addingTimeInterval(Double($0) * 600) }
-        // 18:30 轉去下一個工作天嘅案件表
-        let calendar = ICalendar.hongKong
-        if let next = calendar.nextDate(after: now, matching: DateComponents(hour: 18, minute: 30), matchingPolicy: .nextTime),
-           next < now.addingTimeInterval(2 * 3_600) {
-            dates.append(next)
+        let hasCourtData = days.contains { !$0.error && $0.total > 0 }
+        let awaitingPublication = CourtPublication.awaitingPublication(
+            now: now, hasCourtData: hasCourtData, holidays: holidays
+        )
+        let reloadAt = CourtPublication.nextReload(
+            now: now, holidays: holidays, hasCourtData: hasCourtData
+        )
+        // 18:30 只係 listDate 切日邊界；18:45 先請求新 timeline，而且唔保留 reload 之後嘅舊資料 entry。
+        var dates: [Date] = []
+        var date = now
+        while date < reloadAt {
+            dates.append(date)
+            date = date.addingTimeInterval(600)
         }
-        let entries = dates.sorted().map {
-            CourtEntry(date: $0, days: days, listDate: day, updatedAt: success, theme: theme)
+        let entries = dates.map { entryDate in
+            let state = CourtPublication.displayDay(now: entryDate, loadedDay: day, holidays: holidays)
+            let pending = !state.matchesLoadedDay || awaitingPublication
+            return CourtEntry(
+                date: entryDate, days: pending ? [] : days, listDate: state.day,
+                updatedAt: pending ? nil : success, theme: theme, pending: pending
+            )
         }
-        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(RefreshQueue.routineRefreshInterval)))
+        return Timeline(entries: entries, policy: .after(reloadAt))
     }
 }
 
@@ -147,7 +166,11 @@ struct CourtWidgetView: View {
                     ThemeButton()
                     RefreshButton(updatedAt: entry.updatedAt)
                 }
-                if entry.days.isEmpty {
+                if entry.pending {
+                    Text("案件表尚未公布，稍後會再更新")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else if entry.days.isEmpty {
                     Text("長按 widget →「編輯小工具」揀法院")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)

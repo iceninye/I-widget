@@ -32,6 +32,15 @@ final class RefreshQueueTests: XCTestCase {
         XCTAssertEqual(RefreshQueue.foregroundThrottleInterval, 30 * 60)
     }
 
+    func testWidgetRefreshForceExpiresAfterFiveMinutes() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RefreshQueueTests.widget-force"))
+        defer { defaults.removePersistentDomain(forName: "RefreshQueueTests.widget-force") }
+        XCTAssertFalse(WidgetRefreshForce.isRequested(now: now, in: defaults))
+        WidgetRefreshForce.request(now: now, in: defaults)
+        XCTAssertTrue(WidgetRefreshForce.isRequested(now: at(5 * 60 - 1), in: defaults))
+        XCTAssertFalse(WidgetRefreshForce.isRequested(now: at(5 * 60), in: defaults))
+    }
+
     /// 未刷新過（冷啟）唔會被節流；30 分鐘內返前景唔打網，夠 30 分鐘先再打。
     func testForegroundReturnThrottleUsesLastCompletedRefresh() {
         XCTAssertTrue(RefreshQueue.shouldRefreshOnForeground(lastRefreshAt: nil, now: now))

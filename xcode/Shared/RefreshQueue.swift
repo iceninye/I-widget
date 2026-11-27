@@ -116,3 +116,19 @@ enum RefreshQueue {
         return current == lastFired ? .unchanged : .fire
     }
 }
+
+/// Widget「即時更新」掣喺 extension 容器留一個短時 force flag；provider 下一次被喚醒先繞過 TTL。
+/// 唔使 App Group，亦唔會永久強制每次 timeline 都上網。
+enum WidgetRefreshForce {
+    static let untilKey = "widget.forceNetworkUntil"
+    static let window: TimeInterval = 5 * 60
+
+    static func request(now: Date = Date(), in defaults: UserDefaults = .standard) {
+        defaults.set(now.addingTimeInterval(window), forKey: untilKey)
+    }
+
+    static func isRequested(now: Date = Date(), in defaults: UserDefaults = .standard) -> Bool {
+        guard let until = defaults.object(forKey: untilKey) as? Date else { return false }
+        return until > now
+    }
+}

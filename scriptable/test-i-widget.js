@@ -85,10 +85,10 @@ class FakeVolume {
     if (!this.files.has(file)) throw new Error("missing");
     return this.files.get(file);
   }
-  writeString(value, file) {
-    this.calls.push(["writeString", file]);
+  writeString(filePath, content) {
+    this.calls.push(["writeString", filePath]);
     if (this.writeError) throw new Error("read-only");
-    this.files.set(file, value);
+    this.files.set(filePath, content);
   }
 }
 
@@ -98,6 +98,7 @@ function texts(el) { return all(el, (e) => e.kind === "text").map((e) => e.text)
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 const DEFAULT_NOW = new Date(2026, 9, 23, 14, 5, 30);
+const COURT_NOW = new Date("2026-10-23T06:05:30Z"); // 香港 10/23 14:05:30，唔受測試程序時區影響
 const iso = (hours, minutes, day = 23) => new Date(2026, 9, day, hours, minutes, 0).toISOString();
 function caseEntry(minutes, caseNo, deepLink = "iwidget://court?code=DC") {
   return {
@@ -194,9 +195,9 @@ function fixture(now = DEFAULT_NOW) {
 }
 
 async function run({
-  family = "large", view = "clock", now = DEFAULT_NOW, device = {}, runsInWidget = true,
+  family = "large", view = "clock", now = view === "court" ? COURT_NOW : DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
-  parameterValues = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
+  widgetParameter = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
   nativeProgress = true, refreshControls = true, portraitPreview = true,
 } = {}) {
   const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
@@ -213,11 +214,11 @@ async function run({
     Color: RuntimeColor, Font, Size, Point, LinearGradient, ListWidget,
     SFSymbol: { named: (name) => (noSymbols ? null : { image: { symbol: name } }) },
     Device: dev,
-    config: { widgetFamily: family === "app" ? null : family, runsInWidget, parameterValues },
+    config: { widgetFamily: family === "app" ? null : family, runsInWidget },
     Script: { setWidget: (w) => { state.widget = w; }, complete: () => { state.completed = true; } },
     IWIDGET_NOW: now,
   };
-  if (args !== undefined) globals.args = args;
+  globals.args = args !== undefined ? args : { widgetParameter };
   if (alerts !== undefined) {
     globals.Alert = class {
       async presentAlert() { state.alerts.push({ title: this.title, message: this.message }); }
@@ -289,14 +290,19 @@ if (require.main === module) (async () => {
       });
     }
   }
-  await test("parameter view 分流；未知值安全 fallback today", async () => {
-    equal(has((await run({ view: "today", parameterValues: { view: "court" }, iCloud: JSON.stringify(fixture()) })).widget, "法院案件"), true);
-    const fallback = await run({ parameterValues: { view: "unknown" }, iCloud: JSON.stringify(fixture()) });
+  await test("真實 args.widgetParameter 支援 dictionary、JSON 同字串", async () => {
+    const raw = JSON.stringify(fixture());
+    for (const parameter of [{ view: "court" }, '{"view":"court"}', "view=court", "court"]) {
+      const state = await run({ widgetParameter: parameter, iCloud: raw });
+      equal(has(state.widget, "法院案件"), true, String(parameter));
+      equal(state.widget.url, "iwidget://court?code=DC");
+    }
+    const fallback = await run({ widgetParameter: "view=unknown", iCloud: raw });
     equal(has(fallback.widget, "00157 錦上路"), true);
     equal(all(fallback.widget, (e) => e.kind === "date").length, 0);
   });
-  await test("舊 config 無 parameterValues 時預設 today", async () => {
-    const state = await run({ parameterValues: null, iCloud: JSON.stringify(fixture()) });
+  await test("沒有 widgetParameter 時預設 today，不依賴不存在嘅 config property", async () => {
+    const state = await run({ args: {}, iCloud: JSON.stringify(fixture()) });
     equal(has(state.widget, "00157 錦上路"), true);
     equal(all(state.widget, (e) => e.kind === "date").length, 0);
   });
@@ -310,6 +316,12 @@ if (require.main === module) (async () => {
     ok(state.iCloud.calls.some((call) => call[0] === "fileExists"));
     ok(state.iCloud.calls.some((call) => call[0] === "readString"));
     ok(state.local.calls.some((call) => call[0] === "writeString" && call[1] === cachePath(state)));
+  });
+  await test("writeString 使用官方 filePath, content 順序", async () => {
+    const raw = JSON.stringify(fixture());
+    const state = await run({ iCloud: raw });
+    equal(state.local.files.get(cachePath(state)), raw);
+    equal(state.local.calls.filter((call) => call[0] === "writeString"), [["writeString", cachePath(state)]]);
   });
   await test("Swift 省略 optional key 視為 null，仍可用", async () => {
     const data = fixture();
@@ -362,6 +374,9 @@ if (require.main === module) (async () => {
     ["改更標記類型錯誤", JSON.stringify({ ...fixture(), duty: { ...fixture().duty, today: { ...fixture().duty.today, isOverride: "yes" } } })],
     ["儲存越界", JSON.stringify({ ...fixture(), system: { ...fixture().system, storage: { ...fixture().system.storage, freeBytes: -1 } } })],
     ["案件 minutes 越界", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], cases: [caseEntry(1440, "bad")] }] } })],
+    ["法院 deepLink 唔容許外部 scheme", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], deepLink: "https://example.com/phishing" }] } })],
+    ["案件 deepLink 唔容許外部 scheme", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], cases: [caseEntry(900, "bad", "javascript:alert(1)")] }] } })],
+    ["法院 deepLink 唔容許其他 app host", JSON.stringify({ ...fixture(), courts: { ...fixture().courts, items: [{ ...fixture().courts.items[0], deepLink: "iwidget://duty" }] } })],
     ["過大 payload", " ".repeat(513 * 1024)],
   ]) {
     await test(`${name} 用 cache，唔覆蓋 cache`, async () => {
@@ -434,6 +449,25 @@ if (require.main === module) (async () => {
   });
 
   console.log("\n【V】today / info / court / accessory 內容");
+  await test("weather.currentTemp 省略時顯示未有資料，不出現 NaN", async () => {
+    const data = fixture();
+    delete data.weather.currentTemp;
+    for (const view of ["today", "info"]) {
+      const output = texts((await run({ view, family: "large", iCloud: JSON.stringify(data) })).widget);
+      ok(output.includes("未有資料"), view);
+      ok(!output.some((value) => value.includes("NaN")), view);
+    }
+  });
+  await test("04:00 後舊 serviceDate 明確標示日期已過", async () => {
+    const raw = JSON.stringify(fixture());
+    // 明確用 UTC instant：HK 10/24 03:59 = 10/23 19:59Z；04:05 = 20:05Z。
+    const beforeRollover = texts((await run({ view: "today", now: new Date("2026-10-23T19:59:00Z"), iCloud: raw })).widget);
+    ok(!beforeRollover.some((value) => value.includes("更份日期已過")));
+    const afterRollover = texts((await run({ view: "today", now: new Date("2026-10-23T20:05:00Z"), iCloud: raw })).widget);
+    ok(afterRollover.includes("更份日期已過 · JSON 為 10月23日"));
+    const accessory = texts((await run({ view: "today", family: "accessoryRectangular", now: new Date("2026-10-23T20:05:00Z"), iCloud: raw })).widget);
+    ok(accessory.includes("更份日期已過"));
+  });
   await test("today 顯示更份、學校、天氣、屯馬綫", async () => {
     const state = await run({ view: "today", iCloud: JSON.stringify(fixture()) });
     for (const value of ["00157 錦上路", "15:05–23:15", "Day 4", "中三家長會", "多雲", "KSR", "改"]) ok(texts(state.widget).some((t) => t.includes(value)), value);
@@ -461,7 +495,7 @@ if (require.main === module) (async () => {
     ok(!texts(state.widget).includes("開啟"));
   });
   await test("court 以分鐘篩 20 分鐘 ongoing window、排序、顯示狀熊", async () => {
-    const state = await run({ view: "court", now: new Date(2026, 9, 23, 14, 10, 0), iCloud: JSON.stringify(fixture()) });
+    const state = await run({ view: "court", now: new Date(COURT_NOW.getTime() + 5 * 60000), iCloud: JSON.stringify(fixture()) });
     // 13:50 喺 14:10 嘅 20 分鐘邊界內；13:49 同無時間項目被篩走。
     const courtText = texts(state.widget).join("\n");
     ok(courtText.includes("DCCJ 1/2026"));
@@ -685,9 +719,21 @@ if (require.main === module) (async () => {
   await test("court 同日較早 listDate 仍保留今日 ongoing window", async () => {
     const data = fixture();
     data.courts.listDate = iso(9, 0);
-    const output = texts((await run({ view: "court", now: new Date(2026, 9, 23, 14, 10), iCloud: JSON.stringify(data) })).widget).join("\n");
+    const output = texts((await run({ view: "court", now: new Date(COURT_NOW.getTime() + 5 * 60000), iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(output.includes("DCCJ 1/2026"));
     ok(!output.includes("已篩走"));
+  });
+  await test("court 跨香港午夜仍用當地日期同 20 分鐘視窗", async () => {
+    const now = new Date("2026-10-23T16:30:00Z"); // 香港 10/24 00:30
+    const data = fixture(now);
+    data.courts.listDate = "2026-10-23T16:00:00Z"; // 香港 10/24 00:00
+    data.courts.items[0].dateCode = "20261024";
+    data.courts.items[0].fetchedAt = data.courts.listDate;
+    data.courts.items[0].cases = [caseEntry(5, "已過25分鐘"), caseEntry(10, "跨日20分鐘"), caseEntry(40, "跨日稍後")];
+    const output = texts((await run({ view: "court", now, iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("跨日20分鐘"));
+    ok(output.includes("跨日稍後"));
+    ok(!output.includes("已過25分鐘"));
   });
   await test("court 省略 optional listDate 仍顯示今日案件", async () => {
     const data = fixture();
@@ -794,13 +840,21 @@ if (require.main === module) (async () => {
       ["iPadOS", "27.2", "extraLargePortrait", true], ["iOS", "27.1.9", "large", false],
       ["iOS", "26.9", "large", false], ["iOS", "27.2", "accessoryCircular", false],
     ]) {
-      const state = await run({ family, device: { systemName: () => systemName, systemVersion: () => systemVersion }, parameterValues: { view: "today", background: "transparent" }, iCloud: JSON.stringify(fixture()) });
+      const state = await run({ family, device: { systemName: () => systemName, systemVersion: () => systemVersion }, widgetParameter: "view=today&background=transparent", iCloud: JSON.stringify(fixture()) });
       equal(state.widget.backgroundStyle, expected ? "transparent" : "default", `${systemName} ${systemVersion}/${family}`);
       ok(state.widget.backgroundColor);
     }
     const defaultState = await run({ family: "large" });
     equal(defaultState.widget.backgroundStyle, "default");
     ok(defaultState.widget.backgroundColor);
+  });
+  await test("today 中同大尺寸即使冇未來事件都有重讀鈕", async () => {
+    for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
+      const state = await run({ view: "today", family, iCloud: JSON.stringify(fixture()) });
+      equal(all(state.widget, (e) => e.kind === "refreshButton").length, 1, family);
+    }
+    const small = await run({ view: "today", family: "small", iCloud: JSON.stringify(fixture()) });
+    equal(all(small.widget, (e) => e.kind === "refreshButton").length, 0);
   });
   await test("更新鈕只用喺支援互動嘅 Home Screen family，保留 URL 與舊版 fallback", async () => {
     for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryRectangular"]) {
@@ -909,6 +963,21 @@ if (require.main === module) (async () => {
   equal(await delay(new Date(2026, 9, 23, 0, 40, 0)), 20 * 60000 + 20000);
   ok(await delay(new Date(2026, 9, 23, 0, 0, 20)) > 0);
 
+  const courtSnapshot = JSON.stringify(fixture());
+  const delayCourt = async (now, iCloud = courtSnapshot) =>
+    (await run({ family: "large", view: "court", now, iCloud })).widget.refreshAfterDate - now;
+  // 固定 UTC instant，分別等如香港時間週一 17:50／18:50 同週六 17:50。
+  equal(await delayCourt(new Date("2026-10-26T09:50:00Z")), 55 * 60000 + 20000);
+  equal(await delayCourt(new Date("2026-10-26T10:50:00Z")), 60 * 60000);
+  equal(await delayCourt(new Date("2026-10-31T09:50:00Z")), 60 * 60000);
+  ok(await delayCourt(new Date("2026-10-26T10:45:00Z")) > 0);
+
+  const emptyCourt = fixture();
+  emptyCourt.courts.items = [];
+  const emptyJSON = JSON.stringify(emptyCourt);
+  equal(await delayCourt(new Date("2026-10-26T10:50:00Z"), emptyJSON), 10 * 60000 + 20000);
+  equal(await delayCourt(new Date("2026-10-26T11:05:00Z"), emptyJSON), 30 * 60000);
+
   console.log("\n【L】clock 大尺寸舊版面");
   state = await run({ family: "large" });
   const cards = state.widget.children.filter((e) => e.kind === "stack" && e.cornerRadius === 12);
@@ -938,6 +1007,8 @@ if (require.main === module) (async () => {
   ok(state.widget && has(state.widget, "電量"));
   state = await run({ family: "large", noSymbols: true });
   ok(has(state.widget, "電量") && all(state.widget, (e) => e.kind === "image").length === 0);
+  state = await run({ view: "accessory", family: "accessoryRectangular", device: { batteryLevel: () => { throw new Error("x"); } } });
+  ok(!texts(state.widget).some((t) => t.includes("-100%")));
   state = await run({ family: "large", device: { screenBrightness: () => { throw new Error("x"); } } });
   ok(!has(state.widget, "螢幕亮度"));
   state = await run({ family: "large", device: { isCharging: () => true } });

@@ -9,10 +9,13 @@ on:
     paths:
       - "xcode/**"
       - ".github/workflows/ios.yml"
-  pull_request:
-    paths:
-      - "xcode/**"
-      - ".github/workflows/ios.yml"
+  # PR 唔自動上 self-hosted runner；review 後先手動揀可信 branch／SHA 執行。
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 已審查嘅 branch、tag 或 commit SHA
+        required: false
+        default: main
 
 permissions:
   contents: read
@@ -27,6 +30,9 @@ jobs:
         working-directory: xcode
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - name: Xcode 版本
         run: |

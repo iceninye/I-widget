@@ -11,7 +11,7 @@ Swift app 同時支援原生 WidgetKit 同 Scriptable，兩者並行：
 - **授權**：`ScriptableFolderStore` 用 Keychain 保存 device-only folder bookmark；每次寫入先 resolve bookmark，再 `startAccessingSecurityScopedResource()`。搬走／取代 folder 或 bookmark 失效要重新授權。
 - **背景**：`WidgetBackgroundRefresh` 喺有授權時排 `BGAppRefreshTask`，到期獨立匯出；前景落背景亦會嘗試 flush。
 
-app 設定獨有 roster／VPS token 同私人 VPS URL；JSON 唔包含 token、`Authorization` header 或私人 VPS URL。原生 Widget 仍沿用自己「編輯小工具」入面嘅 token，唔係由 Scriptable JSON 共享。橋樑未授權、斷線或寫入失敗只影響同步狀態，`AppModel.refresh()` 仍會排通知／同步 Live Activity；唔可以為咗 Scriptable 刪 extension 或改壞原生功能。
+app 設定獨有 roster／VPS token 同私人 VPS URL，保存在 device-only Keychain（`AfterFirstUnlockThisDeviceOnly`）；舊版 `UserDefaults` 值會自動遷移，成功後先刪除明文。JSON 唔包含 token、`Authorization` header 或私人 VPS URL。原生 Widget 仍沿用自己「編輯小工具」入面嘅 token，唔係由 Scriptable JSON 共享。橋樑未授權、斷線或寫入失敗只影響同步狀態，`AppModel.refresh()` 仍會排通知／同步 Live Activity；唔可以為咗 Scriptable 刪 extension 或改壞原生功能。
 
 `project.yml` 沿用本機 Live Activity、`fetch` background mode 同 Scriptable refresh BGTask identifier；**毋須新增 App Group 或 push entitlement**，`pushType` 維持 `nil`。
 
@@ -40,6 +40,9 @@ open iWidget.xcodeproj
 4. 第一次會提示「不受信任嘅開發者」：設定 → 一般 → **VPN 與裝置管理** → 揀你個 Apple ID → 信任。再 Run 一次。
 
 ## 3b. 用 AltStore 安裝（唔使每 7 日插線）
+
+> 2026-11-27：ipa／AltStore 路線暫時擱置，今次 PR 只喺 ipa workflow 移除未審 PR 嘅 self-hosted 入口，冇恢復 ipa 流程；以下保留作舊資料。目前驗收路線係上方 Xcode Build → iPhone + Scriptable。
+
 免費 Apple ID 簽名 7 日就過期。AltStore 會喺 Mac／PC 嘅 AltServer 同 iPhone 喺同一個 WiFi 時自動重新簽名，唔使再用 Xcode 重裝。
 
 1. Mac 裝好 AltServer、iPhone 裝好 AltStore（照 AltStore 官方步驟，用你自己嘅 Apple ID）。
@@ -92,7 +95,31 @@ Token 係各個 widget 自己儲存嘅，所以拆咗之後，「各項資訊」
 - **iCloud 同步**：由 iCloud／File Provider 決定，app 冇提供同步完成通知。
 - **Scriptable Widget 實際刷新**：要 Scriptable extension 真係執行並重新渲染；app 只直接 reload 原生 Overview／Info timeline，唔保證 Scriptable 何時更新。
 
-原生 Overview／Court timeline、`WidgetBackgroundRefresh.scheduleNext()` 同 Scriptable `refreshAfterDate` 嘅一般最早間隔統一為 **60 分鐘**；午夜／01:00 同更份等可預測邊界仍會提前，10 分鐘 timeline entry 只係本地切換，唔使上網。背景返前景另有 **30 分鐘節流**：夠鐘先重新上網同重讀 Widget；30 分鐘內只用現有資料重排通知同同步 Live Activity。冷啟、deep link、手動更新同更份邊界保持即時。所有時間都**唔保證固定間隔**：iOS reload 預算、低耗電、背景限制、iCloud 下載同 extension 啟動時間都會影響實際結果。
+原生 Overview／Info／Court timeline、`WidgetBackgroundRefresh.scheduleNext()` 同 Scriptable `refreshAfterDate` 嘅一般最早間隔統一為 **60 分鐘**；午夜／01:00、更份邊界同法院發布窗口仍會提前，10 分鐘 timeline entry 只係本地切換，唔使上網。背景返前景另有 **30 分鐘節流**：夠鐘先重新上網同重讀 Widget；30 分鐘內只用現有資料重排通知同同步 Live Activity。冷啟、deep link、手動更新同更份邊界保持即時；手動下拉先至繞過各來源 TTL。所有時間都**唔保證固定間隔**：iOS reload 預算、低耗電、背景限制、iCloud 下載同 extension 啟動時間都會影響實際結果。
+
+### 更新間距記錄（2026-11-27）
+
+| 項目 | 目前規則 |
+| --- | --- |
+| 法院非空案件表 | 沿用到下一個發布點；官方規律係前一個工作天約 18:30 公佈下一個聆訊日 |
+| 法院空結果／失敗 | 18:30–19:00 空結果每 15 分鐘重試；19:00–20:00 空結果／失敗每 30 分鐘重試；20:00 後沿用到下一個發布點 |
+| 法院 timeline／BGTask | 18:45 發布探測；空結果再短重試。18:30 entry 唔會假裝已切日，18:45 先請求新 timeline |
+| Scriptable 法院 view | 跟香港時間，工作日 18:45:20 提早 reload；冇案件 19:00:20 再試，之後 30 分鐘 backoff；只重讀 JSON |
+| 天氣 | 一般 60 分鐘；今日卡 10 分鐘成功快取去重，維持不變 |
+| 天氣警告／港鐵 | 30 分鐘成功快取去重；警告超過 30 分鐘仍當過期 |
+| 黃金 | 60 分鐘 TTL |
+| 空氣質素 | 2 小時 TTL |
+| 匯率 | 12 小時 TTL |
+| 最新 iOS 版本 | 24 小時 TTL |
+| VPS | 60 分鐘 TTL，對齊上游每小時輸出 |
+| 學校日曆 | 6 小時 TTL |
+| 更份 roster／basic／sheet／cards／places | 每次刷新試 roster；basic／sheet 6 小時、cards 12 小時、places 7 日，維持不變 |
+| 公眾假期 | 7 日 TTL，維持不變 |
+| 通知／Live Activity | 無獨立網絡 polling；絕對時間 trigger／系統倒數，維持不變 |
+
+手動刷新（資料頁下拉、法院頁下拉、原生 Widget「即時更新」掣）繞過成功快取，但仍保留舊資料作離線 fallback；Widget 掣只喺 extension 容器留 5 分鐘 force flag，唔會令之後每次 timeline 都上網。法院同各來源 TTL 分開記錄：重新渲染、成功下載、重新匯出 JSON 唔係同一件事。
+
+**剔除／擱置：** 今次 PR 只走 Xcode Build → iPhone + Scriptable 路線；ipa 功能仍擱置，`.github/workflows/ipa.yml` 只移除未審 PR 上 self-hosted runner 嘅入口，並限制 release 只能喺 main，唔改打包功能。Pyto／Python 診斷路徑唔處理。保留 `iWidgetExtension`、通知、AppIntents、交接提示同 Live Activity。
 
 電量剩餘時間係 widget 自己記錄電量變化估算，拔電後大約 40 分鐘先有數。
 鎖屏：長按鎖屏 → 自訂 → 加入元件 → 今日咭有行內／長方形，各項資訊有圓形（電量）。
@@ -176,7 +203,7 @@ python3 test_launcher.py
 xcodegen generate
 ```
 
-`xcodebuild test` 使用 CI（`.github/workflows/ios.yml`）相同嘅 simulator 指令：
+CI（`.github/workflows/ios.yml`）只喺 main push 或 review 後手動揀可信 branch／SHA 執行，PR 唔會自動喺 self-hosted runner 跑未審 code。`xcodebuild test` 使用相同嘅 simulator 指令：
 
 ```sh
 UDID=$(xcrun simctl list devices available -j | python3 -c "

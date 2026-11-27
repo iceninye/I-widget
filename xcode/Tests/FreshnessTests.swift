@@ -61,6 +61,32 @@ final class FreshnessTests: XCTestCase {
     }
 
     /// 舊裝置容錯：分範圍 key 同升級前共用 key 要唔同（讀嗰時新 key 冇記錄就 fallback 舊 key）。
+    func testNetworkSourceTTLsMatchApprovedSchedule() {
+        XCTAssertEqual(InfoRefreshPolicy.weatherReuse, 10 * 60, "天氣去重維持不變")
+        XCTAssertEqual(InfoRefreshPolicy.live, 30 * 60, "警告／港鐵只做 30 分鐘去重")
+        XCTAssertEqual(InfoRefreshPolicy.gold, 60 * 60)
+        XCTAssertEqual(InfoRefreshPolicy.air, 2 * 3_600)
+        XCTAssertEqual(InfoRefreshPolicy.fx, 12 * 3_600)
+        XCTAssertEqual(InfoRefreshPolicy.latestOS, 24 * 3_600)
+        XCTAssertEqual(VPSState.cacheTTL, 60 * 60)
+        XCTAssertEqual(ScheduleData.schoolCacheTTL, 6 * 3_600)
+    }
+
+    func testGoldTTLRequiresSuccessTimestamp() {
+        let key = "test.gold.ttl"
+        defer {
+            UserDefaults.standard.removeObject(forKey: "cache.\(key)")
+            UserDefaults.standard.removeObject(forKey: "cache.\(key).at")
+        }
+        DataCache.save(GoldQuote.sample, key: key, stamped: old)
+        XCTAssertNotNil(DataCache.fresh(
+            GoldQuote.self, key: key, maxAge: InfoRefreshPolicy.gold, now: old.addingTimeInterval(59 * 60)
+        ))
+        XCTAssertNil(DataCache.fresh(
+            GoldQuote.self, key: key, maxAge: InfoRefreshPolicy.gold, now: old.addingTimeInterval(61 * 60)
+        ))
+    }
+
     func testScopeKeysAreSeparateButLegacyReadable() {
         XCTAssertEqual(Freshness.warningsKey(.today), "warnings.today")
         XCTAssertEqual(Freshness.warningsKey(.info), "warnings.info")

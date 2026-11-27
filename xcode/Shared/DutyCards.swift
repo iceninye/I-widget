@@ -9,14 +9,14 @@ struct DutySheet: Codable, Equatable {
     var dates: [String]
 }
 
-struct DutyMeal: Codable, Equatable {
+struct DutyMeal: Codable, Equatable, Sendable {
     var start: Int
     var end: Int?
     var from: String
     var to: String?
 }
 
-struct DutyCard: Codable, Equatable {
+struct DutyCard: Codable, Equatable, Sendable {
     var id: String
     var group: String?
     var on: Int
@@ -57,14 +57,15 @@ enum DutyData {
     static func parseCards(_ data: Data, ids: Set<String>) throws -> [String: DutyCard] {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let duties = root["duties"] as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
-        let everyone: [(id: String, legs: [DutyLeg])] = duties.compactMap { duty in
+        let everyone: [(id: String, duty: [String: Any], legs: [DutyLeg])] = duties.compactMap { duty in
             guard let id = duty["id"] as? String else { return nil }
-            return (id: id, legs: (duty["legs"] as? [[Any]] ?? []).compactMap(DutyLeg.init(raw:)))
+            return (id: id, duty: duty, legs: (duty["legs"] as? [[Any]] ?? []).compactMap(DutyLeg.init(raw:)))
         }
+        let reliefSource = everyone.map { (id: $0.id, legs: $0.legs) }
         var result: [String: DutyCard] = [:]
-        for (duty, own) in zip(duties, everyone) {
-            guard ids.contains(own.id),
-                  let on = duty["on"] as? [Any], let off = duty["off"] as? [Any],
+        for own in everyone where ids.contains(own.id) {
+            let duty = own.duty
+            guard let on = duty["on"] as? [Any], let off = duty["off"] as? [Any],
                   let onAt = (on.first as? NSNumber)?.intValue, let offAt = (off.first as? NSNumber)?.intValue else { continue }
             var meal: DutyMeal?
             if let raw = duty["meal"] as? [Any], let start = (raw.first as? NSNumber)?.intValue {
@@ -76,7 +77,7 @@ enum DutyData {
                 )
             }
             let reliefs = own.legs.indices.map {
-                Relief.of(id: own.id, legs: own.legs, off: offAt, index: $0, others: everyone)
+                Relief.of(id: own.id, legs: own.legs, off: offAt, index: $0, others: reliefSource)
             }
             result[own.id] = DutyCard(
                 id: own.id,

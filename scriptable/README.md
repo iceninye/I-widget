@@ -46,7 +46,13 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 2. **iCloud 同步**：由 iCloud／File Provider 決定；app 冇提供同步完成通知，另一部裝置可能仍未見到新檔。
 3. **Scriptable Widget 實際刷新**：要 extension 真係執行同重新渲染。app 只直接 reload 原生 Overview／Info timeline，唔保證 Scriptable 何時更新。
 
-有 folder 授權時，Swift `WidgetBackgroundRefresh` 會以 60 分鐘作為 `BGAppRefreshTaskRequest.earliestBeginDate`；Scriptable `refreshAfterDate` 亦以 60 分鐘為一般最早間隔，午夜／01:00 邊界會提前。app 背景返前景另有 30 分鐘網絡刷新節流，但通知同 Live Activity 仍會用現有資料更新；冷啟、deep link、手動更新同更份邊界保持即時。兩者都**唔保證固定間隔**：系統 reload 預算、低耗電、背景排程、iCloud 下載同 extension 啟動都會影響實際時間。
+有 folder 授權時，Swift `WidgetBackgroundRefresh` 一般以 60 分鐘作為 `BGAppRefreshTaskRequest.earliestBeginDate`；法院發布窗口會提前到 18:45，冇案件時再短重試。Scriptable `refreshAfterDate` 亦以 60 分鐘為一般最早間隔，午夜／01:00 邊界會提前；`view=court` 跟香港時間，工作日 18:45:20 提早 reload，冇案件時 19:00:20 再試、之後 30 分鐘 backoff。呢個 Scriptable 邊界只重讀現有 JSON，**唔會令 app 重新上網或匯出**。app 背景返前景另有 30 分鐘網絡刷新節流，但通知同 Live Activity 仍會用現有資料更新；冷啟、deep link、手動更新同更份邊界保持即時，手動下拉繞過成功快取 TTL。兩者都**唔保證固定間隔**：系統 reload 預算、低耗電、背景排程、iCloud 下載同 extension 啟動都會影響實際時間。
+
+### app 來源 TTL（2026-11-27）
+
+法院非空案件表沿用到下一個發布點；18:30–19:00 空結果每 15 分鐘重試，19:00–20:00 空結果／失敗每 30 分鐘重試，20:00 後沿用到下一個發布點。其他成功快取：天氣警告／港鐵 30 分鐘、黃金 60 分鐘、空氣 2 小時、匯率 12 小時、最新 iOS 24 小時、VPS 60 分鐘、學校日曆 6 小時。天氣一般 60 分鐘、今日卡 10 分鐘去重；更份 basic／sheet 6 小時、cards 12 小時、places 7 日、公眾假期 7 日；通知同 Live Activity 冇獨立網絡 polling。完整對照見 [`../xcode/README.md`](../xcode/README.md)「更新間距記錄」。
+
+**範圍：** 今次只走 Xcode Build → iPhone + Scriptable；ipa 功能擱置，workflow 只移除未審 PR 上 self-hosted runner 嘅入口，Pyto／Python 路徑唔處理，原生 WidgetKit extension 同通知／AppIntents／Live Activity 保留。
 
 ## 有效資料、last-good cache 與新鮮度
 
@@ -55,12 +61,13 @@ Scriptable app 內預覽唔代表 widget extension 已經有 iCloud 權限；兩
 3. iCloud 缺失、離線、下載／讀取失敗、JSON 損壞、新 schema 或驗證失敗時，讀 local last-good；無效新檔**唔會覆蓋**有效 cache。
 4. cache 都不可用時，`today`／`info`／`court` 顯示「未有資料」同設定提示；`clock`／`accessory` 仍可顯示裝置電量等內容。
 
-FileManager API 或整個 FileManager 缺失都會安全 fallback。正常呼叫形狀為 `downloadFileFromiCloud(path)`、`fileExists(path)`、`readString(path)`、`writeString(contents, path)`；部分版本回傳 Promise，script 用 `await` 兼容。
+FileManager API 或整個 FileManager 缺失都會安全 fallback。正常呼叫形狀為 `downloadFileFromiCloud(path)`、`fileExists(path)`、`readString(path)`、`writeString(path, contents)`；部分版本回傳 Promise，script 用 `await` 兼容。
 
 讀取失敗時，`today`／`info`／`court` widget 會顯示具體階段（下載、`fileExists`、讀取、JSON 驗證或 cache），而唔再靜靜吞錯；喺 Scriptable app 直接執行腳本亦會彈出安全診斷 Alert。診斷只包含階段、系統錯誤訊息同 schema 欄位，不列 JSON 內容、token 或 Authorization header。
 
 `i-widget-last-good.json does not exist` 只表示 local cache 未建立，唔單獨證明 iCloud JSON 缺失。最常見原因係 Scriptable 腳本仍係舊版、widget 未設定 `view`，或者 iCloud JSON 未通過 schema 驗證。
 
+- `serviceDate` 會同香港時間 04:00 轉日後嘅服務日比較；唔同日會顯示「更份日期已過」，唔會將舊更份繼續當「今日」。
 - `generatedAt` 只表示 JSON 何時產生，**唔當資料 freshness**。
 - `today` 用 `freshness.today`；`info` 用 `freshness.info`；`court` 先用 `freshness.court`，`null` 時退回 `courts.updatedAt`。冇時間就顯示「未有資料」。
 - 用 cache 時保留 JSON 內原有 freshness，再加「快取」標記，唔假裝啱啱更新。`system.capturedAt`／`bootAt` 亦只反映快取收集時嘅狀態。`today` 大尺寸天氣行改用 `freshness.weather`（缺少時用 `weather.fetchedAt`），超過 6 小時會以橙色標示「舊」。
@@ -111,7 +118,7 @@ courts: { listDate, updatedAt, items }
 - `reloadMinutes`：一般最早 reload 間隔，預設 60 分鐘；午夜／01:00 正確性邊界仍會提前。
 - `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽；`previewFamily` 可設 `extraLargePortrait`。
 - `transparentBackground`：設 `true` 可預設透明背景；仍受 iOS／iPadOS 27.2+ 同非鎖屏限制。widget parameter `background=transparent` 亦可個別開啟。
-- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge` 會顯示「重讀」鈕。按鈕只重新執行 Scriptable 同讀取現有 JSON／cache，**唔會令 app 重新上網或匯出**；呢個互動範圍優先於 containing stack 嘅 URL。
+- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge`／`extraLargePortrait` 會顯示「重讀」鈕，`today` 唔需要先有未來事件。按鈕只重新執行 Scriptable 同讀取現有 JSON／cache，**唔會令 app 重新上網或匯出**；呢個互動範圍優先於 containing stack 嘅 URL。
 - `maxPayloadBytes`、`cacheName`：512 KiB 上限同 `i-widget-last-good.json`。
 
 ## Scriptable 1.8 增強

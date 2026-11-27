@@ -8,6 +8,8 @@ struct SchoolDay {
 /// 更份同學校日曆嘅原始資料；每個 entry 再按自己嘅時間計今日、明日。
 /// 每個來源各自有逾時同快取：一個慢或者失敗，唔會拖累其他。
 struct ScheduleData {
+    static let schoolCacheTTL: TimeInterval = 6 * 3_600
+
     var roster: Roster?
     var basic: [String: DutyTime]
     var cards: [String: DutyCard]
@@ -47,24 +49,24 @@ struct ScheduleData {
         return keys.compactMap { DataCache.savedAt($0) }.max()
     }
 
-    static func load(token: String?, now: Date) async -> ScheduleData {
+    static func load(token: String?, now: Date, force: Bool = false) async -> ScheduleData {
         async let roster = withDeadline(12, fallback: (DataCache.load(Roster.self, key: "roster"), true)) {
             await loadRoster(token: token, now: now)
         }
         async let basic = withDeadline(12, fallback: DataCache.load([String: DutyTime].self, key: "duties") ?? [:]) {
-            await loadBasic(now: now)
+            await loadBasic(now: now, force: force)
         }
         async let sheets = withDeadline(10, fallback: DataCache.load([DutySheet].self, key: "dutySheets") ?? []) {
-            await loadSheets(now: now)
+            await loadSheets(now: now, force: force)
         }
         async let places = withDeadline(10, fallback: DataCache.load(PlaceNames.self, key: "places") ?? .empty) {
-            await loadPlaces(now: now)
+            await loadPlaces(now: now, force: force)
         }
-        async let school = loadSchool(now: now)
+        async let school = loadSchool(now: now, force: force)
 
         let (rosterResult, sheetList) = await (roster, sheets)
-        let cards = await withDeadline(8, fallback: DataCache.load([String: DutyCard].self, key: "dutyCards") ?? [:]) {
-            await loadCards(roster: rosterResult.0, sheets: sheetList, now: now)
+        let cards = await withDeadline(25, fallback: DataCache.load([String: DutyCard].self, key: "dutyCards") ?? [:]) {
+            await loadCards(roster: rosterResult.0, sheets: sheetList, now: now, force: force)
         }
         let schoolResult = await school
         return ScheduleData(
@@ -93,8 +95,8 @@ struct ScheduleData {
         }
     }
 
-    private static func loadBasic(now: Date) async -> [String: DutyTime] {
-        if let fresh = DataCache.fresh([String: DutyTime].self, key: "duties", maxAge: 6 * 3_600, now: now), !fresh.isEmpty {
+    private static func loadBasic(now: Date, force: Bool) async -> [String: DutyTime] {
+        if !force, let fresh = DataCache.fresh([String: DutyTime].self, key: "duties", maxAge: 6 * 3_600, now: now), !fresh.isEmpty {
             return fresh
         }
         if let duties = try? DutyBasic.parse(try await Fetcher.firstData(from: DutyData.urls("data/duty-basic.json"), timeout: 10)),
@@ -105,8 +107,8 @@ struct ScheduleData {
         return DataCache.load([String: DutyTime].self, key: "duties") ?? [:]
     }
 
-    private static func loadSheets(now: Date) async -> [DutySheet] {
-        if let fresh = DataCache.fresh([DutySheet].self, key: "dutySheets", maxAge: 6 * 3_600, now: now), !fresh.isEmpty {
+    private static func loadSheets(now: Date, force: Bool) async -> [DutySheet] {
+        if !force, let fresh = DataCache.fresh([DutySheet].self, key: "dutySheets", maxAge: 6 * 3_600, now: now), !fresh.isEmpty {
             return fresh
         }
         if let sheets = try? DutyData.parseIndex(try await Fetcher.firstData(from: DutyData.urls("data/duties/index.json"))),
@@ -117,8 +119,8 @@ struct ScheduleData {
         return DataCache.load([DutySheet].self, key: "dutySheets") ?? []
     }
 
-    private static func loadPlaces(now: Date) async -> PlaceNames {
-        if let fresh = DataCache.fresh(PlaceNames.self, key: "places", maxAge: 7 * 86_400, now: now) {
+    private static func loadPlaces(now: Date, force: Bool) async -> PlaceNames {
+        if !force, let fresh = DataCache.fresh(PlaceNames.self, key: "places", maxAge: 7 * 86_400, now: now) {
             return fresh
         }
         if let places = try? PlaceNames.parse(try await Fetcher.firstData(from: DutyData.urls("data/tml-network.json"))) {
@@ -128,8 +130,22 @@ struct ScheduleData {
         return DataCache.load(PlaceNames.self, key: "places") ?? .empty
     }
 
-    /// 今日同明日（服務日）用到嘅更份卡。快取有齊而且 12 小時內讀過就唔再下載 sheet。
-    private static func loadCards(roster: Roster?, sheets: [DutySheet], now: Date) async -> [String: DutyCard] {
+    /// 每張 sheet 獨立記 freshness；一張失敗唔可以令其他成功張嘅整體時間蓋住失敗張。
+    static func cardsAreRecent(
+        wanted: [String: Set<String>],
+        cached: [String: DutyCard],
+        now: Date,
+        maxAge: TimeInterval = 12 * 3_600,
+        savedAt: (String) -> Date? = { DataCache.savedAt("dutyCards.\($0)") }
+    ) -> Bool {
+        wanted.allSatisfy { sheet, ids in
+            guard let at = savedAt(sheet), at <= now, now.timeIntervalSince(at) < maxAge else { return false }
+            return ids.allSatisfy { cached[DutyDay.cardKey(sheet: sheet, id: $0)]?.legs != nil }
+        }
+    }
+
+    /// 今日同明日（服務日）用到嘅更份卡。快取有齊而且每張 sheet 12 小時內讀過就唔再下載。
+    private static func loadCards(roster: Roster?, sheets: [DutySheet], now: Date, force: Bool) async -> [String: DutyCard] {
         let cached = DataCache.load([String: DutyCard].self, key: "dutyCards") ?? [:]
         guard let roster, !sheets.isEmpty else { return cached }
         let today = Days.serviceDate(now)
@@ -139,19 +155,38 @@ struct ScheduleData {
                   code.range(of: "^[0-9]{7}$", options: .regularExpression) != nil else { continue }
             wanted[DutyData.sheet(for: code, date: date, sheets: sheets), default: []].insert(code)
         }
-        let keys = wanted.flatMap { sheet, ids in ids.map { DutyDay.cardKey(sheet: sheet, id: $0) } }
-        let recent = DataCache.savedAt("dutyCards").map { now.timeIntervalSince($0) < 12 * 3_600 } ?? false
-        // 舊版快取冇行程（legs），要重新讀一次先計到交接
-        if recent, keys.allSatisfy({ cached[$0]?.legs != nil }) { return cached }
+        // 舊版快取冇行程（legs）或冇逐 sheet 時間，要重新讀一次先計到交接。
+        if !force, cardsAreRecent(wanted: wanted, cached: cached, now: now) { return cached }
+
+        let requests = wanted.sorted { $0.key < $1.key }.compactMap { sheet, ids -> (sheet: String, ids: Set<String>, file: String)? in
+            guard let file = sheets.first(where: { $0.code == sheet })?.file else { return nil }
+            return (sheet: sheet, ids: ids, file: file)
+        }
+        let loaded = await withTaskGroup(of: (String, Set<String>, [String: DutyCard]?).self) { group in
+            for request in requests {
+                group.addTask {
+                    do {
+                        let data = try await Fetcher.firstData(from: DutyData.urls("data/duties/\(request.file)"), timeout: 10)
+                        return (request.sheet, request.ids, try DutyData.parseCards(data, ids: request.ids))
+                    } catch {
+                        return (request.sheet, request.ids, nil)
+                    }
+                }
+            }
+            var results: [(String, Set<String>, [String: DutyCard]?)] = []
+            for await result in group { results.append(result) }
+            return results.sorted { $0.0 < $1.0 }
+        }
 
         var result: [String: DutyCard] = [:]
         var fetched = false
-        for (sheet, ids) in wanted {
-            guard let file = sheets.first(where: { $0.code == sheet })?.file else { continue }
-            if let data = try? await Fetcher.firstData(from: DutyData.urls("data/duties/\(file)"), timeout: 10),
-               let cards = try? DutyData.parseCards(data, ids: ids) {
+        for (sheet, ids, cards) in loaded {
+            if let cards {
                 for (id, card) in cards { result[DutyDay.cardKey(sheet: sheet, id: id)] = card }
-                fetched = fetched || !cards.isEmpty
+                if !cards.isEmpty {
+                    DataCache.save(cards, key: "dutyCards.\(sheet)", stamped: now)
+                    fetched = true
+                }
             } else {
                 for id in ids { result[DutyDay.cardKey(sheet: sheet, id: id)] = cached[DutyDay.cardKey(sheet: sheet, id: id)] }
             }
@@ -166,13 +201,13 @@ struct ScheduleData {
 
     private static func schoolKey(_ source: SchoolCalendars.Source) -> String { "school.\(source.name)" }
 
-    /// 每個日曆各自讀、各自快取（3 小時內讀過就唔再讀）。讀唔到又冇快取先當失敗。
-    private static func loadSchool(now: Date) async -> (events: [CalendarEvent], failed: [String]) {
+    /// 每個日曆各自讀、各自快取（6 小時內讀過就唔再讀）。讀唔到又冇快取先當失敗。
+    private static func loadSchool(now: Date, force: Bool) async -> (events: [CalendarEvent], failed: [String]) {
         await withTaskGroup(of: (String, [CalendarEvent]?).self) { group in
             for source in SchoolCalendars.sources {
                 group.addTask {
                     let key = schoolKey(source)
-                    if let fresh = DataCache.fresh([CalendarEvent].self, key: key, maxAge: 3 * 3_600, now: now) {
+                    if !force, let fresh = DataCache.fresh([CalendarEvent].self, key: key, maxAge: schoolCacheTTL, now: now) {
                         return (source.name, fresh)
                     }
                     let fetched: [CalendarEvent]? = await withDeadline(15, fallback: nil) {

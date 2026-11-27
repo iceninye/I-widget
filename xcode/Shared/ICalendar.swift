@@ -232,7 +232,7 @@ enum ICalendar {
     /// `dayStart`（今日 00:00）之後第 2 日起，`days` 日內第一個假期。今日同明日由日程行顯示，所以唔計。
     static func nextHoliday(of events: [CalendarEvent], after dayStart: Date, within days: Int = 400, calendar: Calendar = hongKong) -> Holiday? {
         let holidays = events.filter { $0.calendar == SchoolCalendars.holidayName }
-        guard !holidays.isEmpty else { return nil }
+        guard days >= 2, !holidays.isEmpty else { return nil }
         func titles(_ offset: Int) -> [String]? {
             guard let day = calendar.date(byAdding: .day, value: offset, to: dayStart) else { return nil }
             return occurrences(of: holidays, onDayStarting: day, calendar: calendar).map(\.title)

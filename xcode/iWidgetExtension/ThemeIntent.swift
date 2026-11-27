@@ -18,7 +18,9 @@ struct ThemeIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         WidgetTheme.load().next.save()
         DataCache.save(Date(), key: "flipAt")
-        WidgetCenter.shared.reloadAllTimelines()
+        for kind in WidgetReloadKinds.themed {
+            WidgetCenter.shared.reloadTimelines(ofKind: kind)
+        }
         return .result()
     }
 }

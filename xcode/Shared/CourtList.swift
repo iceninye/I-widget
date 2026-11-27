@@ -33,6 +33,15 @@ enum CourtCatalog {
     static func name(_ code: String) -> String {
         all.first { $0.code == code }?.name ?? code
     }
+
+    /// 統一 app／widget／export 嘅法院選擇：只認 catalog、去重、最多 4 個。
+    static func selected(_ raw: String?, limit: Int = 4) -> [String] {
+        var seen = Set<String>()
+        let codes = (raw ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+            .filter { code in all.contains { $0.code == code } && seen.insert(code).inserted }
+        return Array(codes.prefix(max(0, limit)))
+    }
 }
 
 /// 一個聆訊。刻意唔載入訴訟各方：網頁話明個人資料不可再用，所以只留法庭、時間、案件編號同法官。
@@ -173,6 +182,135 @@ enum CourtLayout {
     }
 }
 
+/// 司法機構 Daily Cause List 嘅發布節奏：前一個工作天約 18:30 公佈下一個聆訊日。
+/// 成功案件表沿用到下一個發布點；18:30–19:00 先短重試，之後失敗用 30 分鐘 backoff。
+enum CourtPublication {
+    enum CacheDecision: Equatable { case reuse, fetch }
+
+    static let retryInterval: TimeInterval = 15 * 60
+    static let failureBackoff: TimeInterval = 30 * 60
+
+    static func decision(
+        cached: CourtDay?, savedAt: Date?, lastAttemptAt: Date?,
+        now: Date, holidays: Set<String>, force: Bool = false,
+        calendar: Calendar = ICalendar.hongKong
+    ) -> CacheDecision {
+        if force { return .fetch }
+        // 只對「失敗」套 backoff；成功空表嘅 savedAt 比舊 failure 新，15 分鐘窗口重試仍然有效。
+        if let lastAttemptAt, lastAttemptAt <= now, now.timeIntervalSince(lastAttemptAt) < failureBackoff,
+           savedAt == nil || (savedAt.map { lastAttemptAt > $0 } ?? true) {
+            return .reuse
+        }
+        guard let cached, let savedAt, savedAt <= now else { return .fetch }
+        let expiresAt = nextPublication(after: savedAt, holidays: holidays, calendar: calendar)
+        if cached.total > 0 { return now < expiresAt ? .reuse : .fetch }
+        if inRetryWindow(now: now, holidays: holidays, calendar: calendar) {
+            let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+            if minute < 19 * 60 {
+                return now.timeIntervalSince(savedAt) < retryInterval ? .reuse : .fetch
+            }
+            // 18:45 成功空表都要喺 19:00 確認一次，唔好因為切咗 30 分鐘 interval 而漏咗。
+            let today = calendar.startOfDay(for: now)
+            if savedAt < at(today, hour: 19, minute: 0, calendar: calendar) { return .fetch }
+            return now.timeIntervalSince(savedAt) < failureBackoff ? .reuse : .fetch
+        }
+        return now < expiresAt ? .reuse : .fetch
+    }
+
+    static func displayDay(
+        now: Date, loadedDay: Date, holidays: Set<String>, calendar: Calendar = ICalendar.hongKong
+    ) -> (day: Date, matchesLoadedDay: Bool) {
+        let day = CourtList.listDate(now: now, holidays: holidays, calendar: calendar)
+        return (day, calendar.isDate(day, inSameDayAs: loadedDay))
+    }
+
+    static func awaitingPublication(
+        now: Date, hasCourtData: Bool, holidays: Set<String>, calendar: Calendar = ICalendar.hongKong
+    ) -> Bool {
+        !hasCourtData && inPublicationWindow(now: now, holidays: holidays, calendar: calendar)
+    }
+
+    static func inPublicationWindow(
+        now: Date, holidays: Set<String>, calendar: Calendar = ICalendar.hongKong
+    ) -> Bool {
+        guard inRetryWindow(now: now, holidays: holidays, calendar: calendar) else { return false }
+        return calendar.component(.hour, from: now) < 19
+    }
+
+    private static func inRetryWindow(
+        now: Date, holidays: Set<String>, calendar: Calendar
+    ) -> Bool {
+        guard isWorkingDay(now, holidays: holidays, calendar: calendar) else { return false }
+        let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        return (18 * 60 + 30..<20 * 60).contains(minute)
+    }
+
+    static func nextPublication(
+        after now: Date, holidays: Set<String>, calendar: Calendar = ICalendar.hongKong
+    ) -> Date {
+        var day = calendar.startOfDay(for: now)
+        var candidate = at(day, hour: 18, minute: 30, calendar: calendar)
+        if candidate <= now {
+            day = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+            candidate = at(day, hour: 18, minute: 30, calendar: calendar)
+        }
+        // 同 listDate 一樣最多跳 30 日，避免假期資料異常時死循環。
+        for _ in 0..<30 where !isWorkingDay(candidate, holidays: holidays, calendar: calendar) {
+            day = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+            candidate = at(day, hour: 18, minute: 30, calendar: calendar)
+        }
+        return candidate
+    }
+
+    /// 原生 provider 同 Scriptable BGTask 共用：發布點附近先重讀，冇案件先短重試。
+    /// 回傳值只係最早請求時間；WidgetKit／BGTaskScheduler 實際執行仍由系統決定。
+    static func nextReload(
+        now: Date, holidays: Set<String>, hasCourtData: Bool,
+        routineInterval: TimeInterval = RefreshQueue.routineRefreshInterval,
+        calendar: Calendar = ICalendar.hongKong
+    ) -> Date {
+        var next = now.addingTimeInterval(routineInterval)
+        let publication = nextPublication(after: now, holidays: holidays, calendar: calendar)
+        let probe = at(publication, hour: 18, minute: 45, calendar: calendar)
+        if probe > now, probe < next { next = probe }
+        if !hasCourtData, let retry = emptyRetry(now: now, holidays: holidays, calendar: calendar),
+           retry > now, retry < next {
+            next = retry
+        }
+        return next
+    }
+
+    private static func emptyRetry(
+        now: Date, holidays: Set<String>, calendar: Calendar
+    ) -> Date? {
+        guard isWorkingDay(now, holidays: holidays, calendar: calendar) else { return nil }
+        let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        let day = calendar.startOfDay(for: now)
+        if minute < 18 * 60 + 30 { return nil }
+        if minute < 18 * 60 + 45 { return at(day, hour: 18, minute: 45, calendar: calendar) }
+        if minute < 19 * 60 { return now.addingTimeInterval(retryInterval) }
+        if minute < 20 * 60 { return now.addingTimeInterval(failureBackoff) }
+        return nil
+    }
+
+    private static func isWorkingDay(
+        _ day: Date, holidays: Set<String>, calendar: Calendar
+    ) -> Bool {
+        (2...6).contains(calendar.component(.weekday, from: day))
+            && !holidays.contains(PublicHolidays.key(day, calendar: calendar))
+    }
+
+    private static func at(
+        _ day: Date, hour: Int, minute: Int, calendar: Calendar
+    ) -> Date {
+        var parts = calendar.dateComponents([.year, .month, .day], from: day)
+        parts.hour = hour
+        parts.minute = minute
+        parts.second = 0
+        return calendar.date(from: parts) ?? day
+    }
+}
+
 enum CourtList {
     // MARK: 解析
 
@@ -262,6 +400,17 @@ enum CourtList {
             cases.append(CourtCase(room: room, judge: judge, minutes: minutes, caseNo: trimCaseNo(caseNo), nature: nature, offence: offence))
         }
         return cases
+    }
+
+    /// 空結果都要確認頁面真係案件表結構；2xx 維護頁／錯誤頁唔可以當成有效空表覆寫快取。
+    static func hasCourtTable(_ html: String) -> Bool {
+        for row in matches(rowPattern, in: html) {
+            let cells = matches(cellPattern, in: row).map(cleanText)
+            if cells.contains(where: isTimeCell) && cells.contains(where: isCaseCell) { return true }
+            let columns = Set(cells.compactMap(column))
+            if columns.count >= 2, columns.contains(.caseNo) { return true }
+        }
+        return false
     }
 
     /// 裁判法院嘅行（已驗證版面）：`[時間] | 案號 | 被告 | 控罪 | 聆訊`。
@@ -465,23 +614,28 @@ enum CourtList {
 
     static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        let named = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&#39;": "'"]
+        let named = [
+            ("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"),
+            ("&quot;", "\""), ("&apos;", "'"), ("&#39;", "'"),
+        ]
         var result = text
         for (key, value) in named { result = result.replacingOccurrences(of: key, with: value) }
-        guard result.contains("&#"), let numeric = try? NSRegularExpression(pattern: "&#([xX]?)([0-9a-fA-F]+);") else { return result }
-        let ns = result as NSString
-        var output = ""
-        var last = 0
-        for match in numeric.matches(in: result, range: NSRange(location: 0, length: ns.length)) {
-            output += ns.substring(with: NSRange(location: last, length: match.range.location - last))
-            let hex = !ns.substring(with: match.range(at: 1)).isEmpty
-            if let value = UInt32(ns.substring(with: match.range(at: 2)), radix: hex ? 16 : 10), let scalar = Unicode.Scalar(value) {
-                output.unicodeScalars.append(scalar)
+        if result.contains("&#"), let numeric = try? NSRegularExpression(pattern: "&#([xX]?)([0-9a-fA-F]+);") {
+            let ns = result as NSString
+            var output = ""
+            var last = 0
+            for match in numeric.matches(in: result, range: NSRange(location: 0, length: ns.length)) {
+                output += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+                let hex = !ns.substring(with: match.range(at: 1)).isEmpty
+                if let value = UInt32(ns.substring(with: match.range(at: 2)), radix: hex ? 16 : 10), let scalar = Unicode.Scalar(value) {
+                    output.unicodeScalars.append(scalar)
+                }
+                last = match.range.location + match.range.length
             }
-            last = match.range.location + match.range.length
+            result = output + ns.substring(from: last)
         }
-        output += ns.substring(from: last)
-        return output
+        // 最後解 &amp;，避免 &amp;lt; 被解兩次做 <。
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 
     /// `9:30 am`、`09:30`、`下午2:30`、`10時15分` → 當日分鐘數。
@@ -550,15 +704,11 @@ enum CourtList {
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
     private static func fetch(_ url: URL) async throws -> String {
-        var request = URLRequest(url: url, timeoutInterval: 12)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://e-services.judiciary.hk/dcl/index.jsp?lang=tc", forHTTPHeaderField: "Referer")
-        request.setValue("zh-HK,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count < 4_000_000 else {
-            throw URLError(.badServerResponse)
-        }
+        let data = try await Fetcher.data(from: url, timeout: 12, maxBytes: 4_000_000, headers: [
+            "User-Agent": userAgent,
+            "Referer": "https://e-services.judiciary.hk/dcl/index.jsp?lang=tc",
+            "Accept-Language": "zh-HK,zh;q=0.9",
+        ])
         return decode(data)
     }
 
@@ -571,18 +721,37 @@ enum CourtList {
 
     private static func cacheKey(_ code: String, _ dateCode: String) -> String { "court.\(code).\(dateCode)" }
 
-    /// 10 分鐘內嘅快取直接用；讀取失敗就用舊快取，冇快取先標記 error。
-    static func load(code: String, day: Date, now: Date) async -> CourtDay {
+    /// 非空案件表沿用到下一個發布點；發布窗口內空結果每 15 分鐘再試，失敗 30 分鐘 backoff。
+    /// `force` 只由手動刷新傳入，繞過快取但仍保留舊資料作 fallback。
+    static func load(
+        code: String, day: Date, now: Date,
+        holidays: Set<String> = PublicHolidays.cached(), force: Bool = false
+    ) async -> CourtDay {
         let dateCode = dateCode(day)
         let key = cacheKey(code, dateCode)
+        let attemptKey = "courtAttempt.\(key)"
         let cached = DataCache.load(CourtDay.self, key: key)
-        // 空結果（未公布或解析唔到）只信 3 分鐘，之後會再試
-        let maxAge: TimeInterval = (cached?.total ?? 0) == 0 ? 3 * 60 : 10 * 60
-        if let fresh = DataCache.fresh(CourtDay.self, key: key, maxAge: maxAge, now: now) { return fresh }
+        let choice = CourtPublication.decision(
+            cached: cached, savedAt: DataCache.savedAt(key), lastAttemptAt: DataCache.savedAt(attemptKey),
+            now: now, holidays: holidays, force: force
+        )
+        if case .reuse = choice {
+            return cached ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+        }
+
+        func failure() -> CourtDay {
+            // 嘗試時間同成功時間分開記：失敗唔可以令舊案件表冒充啱啱更新。
+            DataCache.save(now, key: attemptKey, stamped: now)
+            return cached ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+        }
         if let url = url(code: code, dateCode: dateCode), let html = try? await fetch(url) {
             let cases = parse(html)
-            // 今次空但之前有資料：連舊案件表同舊成功時間一齊保留，唔好蓋走（唔係啱啱更新）
-            if cases.isEmpty, let cached, cached.total > 0 { return cached }
+            if cases.isEmpty {
+                // 維護頁／錯誤頁多數都係 2xx + 空 parse；只有真案件表結構先當有效空結果。
+                guard hasCourtTable(html) else { return failure() }
+                // 今次空但之前有資料：連舊案件表同舊成功時間一齊保留，唔好蓋走。
+                if let cached, cached.total > 0 { return failure() }
+            }
             let result = CourtDay(
                 code: code, dateCode: dateCode, total: cases.count,
                 cases: Array(cases.prefix(300)), fetchedAt: now
@@ -590,7 +759,7 @@ enum CourtList {
             DataCache.save(result, key: key, stamped: now)
             return result
         }
-        return cached ?? CourtDay(code: code, dateCode: dateCode, total: 0, cases: [], error: true)
+        return failure()
     }
 
     /// 幾個法院「最後任一成功取得案件表」嘅時間，取最新一個；全部冇成功記錄就 nil（顯示「未有資料」）。
@@ -609,7 +778,10 @@ enum CourtList {
     }
 
     /// 同時最多 `limit` 個請求，對網站同電量都友善啲。
-    static func loadAll(codes: [String], day: Date, now: Date, limit: Int = 3) async -> [CourtDay] {
+    static func loadAll(
+        codes: [String], day: Date, now: Date,
+        holidays: Set<String> = PublicHolidays.cached(), force: Bool = false, limit: Int = 3
+    ) async -> [CourtDay] {
         await withTaskGroup(of: (Int, CourtDay).self) { group in
             var results: [(Int, CourtDay)] = []
             var next = 0
@@ -617,7 +789,7 @@ enum CourtList {
                 guard next < codes.count else { return }
                 let (index, code) = (next, codes[next])
                 next += 1
-                group.addTask { (index, await load(code: code, day: day, now: now)) }
+                group.addTask { (index, await load(code: code, day: day, now: now, holidays: holidays, force: force)) }
             }
             for _ in 0..<min(limit, codes.count) { addNext() }
             for await item in group {

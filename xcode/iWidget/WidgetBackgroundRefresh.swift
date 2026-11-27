@@ -11,10 +11,13 @@ enum WidgetBackgroundRefresh {
         }
     }
 
-    static func scheduleNext() {
+    static func scheduleNext(hasCourtData: Bool = true) {
         guard (try? ScriptableFolderStore().loadBookmark()) != nil else { return }
         let request = BGAppRefreshTaskRequest(identifier: identifier)
-        request.earliestBeginDate = Date().addingTimeInterval(RefreshQueue.routineRefreshInterval)
+        let now = Date()
+        request.earliestBeginDate = CourtPublication.nextReload(
+            now: now, holidays: PublicHolidays.cached(), hasCourtData: hasCourtData
+        )
         try? BGTaskScheduler.shared.submit(request)
     }
 
@@ -31,7 +34,7 @@ enum WidgetBackgroundRefresh {
         }
         Task { @MainActor in
             await bridge.flush()
-            scheduleNext()
+            scheduleNext(hasCourtData: bridge.hasCourtData)
             state.end()
         }
     }
@@ -44,15 +47,35 @@ enum WidgetBackgroundRefresh {
         let work = Task {
             let snapshot = await WidgetSnapshotService.export()
             let status = await ScriptableBridgeWriter.shared.write(snapshot)
-            return status.state == .writtenAwaitingCloud
+            return (success: status.state == .writtenAwaitingCloud,
+                    hasCourtData: snapshot.courts.items.contains { !$0.error && $0.total > 0 })
         }
+        let completion = BackgroundCompletion(task)
+        // 到期同工作完成可能同時發生；只准第一次通知系統。
         task.expirationHandler = {
             work.cancel()
+            completion.complete(success: false)
         }
-        let success = await work.value
+        let result = await work.value
+        completion.complete(success: result.success)
         RefreshQueue.recordRefreshAttempt(at: Date())
-        scheduleNext()
-        task.setTaskCompleted(success: success)
+        scheduleNext(hasCourtData: result.hasCourtData)
+    }
+
+    private final class BackgroundCompletion: @unchecked Sendable {
+        private let lock = NSLock()
+        private let task: BGTask
+        private var completed = false
+
+        init(_ task: BGTask) { self.task = task }
+
+        func complete(success: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !completed else { return }
+            completed = true
+            task.setTaskCompleted(success: success)
+        }
     }
 
     private final class EndState: @unchecked Sendable {
