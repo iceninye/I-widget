@@ -7,18 +7,18 @@ enum Formatting {
     /// `Calendar.weekday`：1 = 星期日。
     static let weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
 
-    static func weekday(_ date: Date, calendar: Calendar = .current) -> String {
+    static func weekday(_ date: Date, calendar: Calendar = ICalendar.hongKong) -> String {
         let index = calendar.component(.weekday, from: date) - 1
         return weekdays[min(max(index, 0), weekdays.count - 1)]
     }
 
-    static func monthDay(_ date: Date, calendar: Calendar = .current) -> String {
+    static func monthDay(_ date: Date, calendar: Calendar = ICalendar.hongKong) -> String {
         let parts = calendar.dateComponents([.month, .day], from: date)
         return "\(parts.month ?? 0)月\(parts.day ?? 0)日"
     }
 
     /// 24 小時制 `HH:mm`。唔用系統 locale，避免 12 小時制顯示成 `1:30 AM`。
-    static func clock(_ date: Date, calendar: Calendar = .current) -> String {
+    static func clock(_ date: Date, calendar: Calendar = ICalendar.hongKong) -> String {
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return String(format: "%02ld:%02ld", parts.hour ?? 0, parts.minute ?? 0)
     }

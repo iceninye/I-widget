@@ -21,6 +21,27 @@ final class HandoverAlertsTests: XCTestCase {
         try XCTUnwrap(DutyData.parseCards(Data(json.utf8), ids: ["8027111"])["8027111"])
     }
 
+    func testNotificationTimingUsesSchedulingInstantAndSkipsExpiredAlerts() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let alert = HandoverAlert(
+            id: "test", kind: .pickUp, fireAt: now.addingTimeInterval(120), eventAt: now.addingTimeInterval(120),
+            title: "接車", body: "接車"
+        )
+        let late = try XCTUnwrap(HandoverAlerts.notificationTiming(for: alert, now: now.addingTimeInterval(30)))
+        XCTAssertEqual(late.interval, 90, accuracy: 0.001)
+        XCTAssertEqual(late.scheduledAt, alert.fireAt)
+        XCTAssertNil(HandoverAlerts.notificationTiming(for: alert, now: alert.fireAt))
+        XCTAssertNil(HandoverAlerts.notificationTiming(for: alert, now: alert.fireAt.addingTimeInterval(1)))
+
+        let imminent = HandoverAlert(
+            id: "imminent", kind: .dropOff, fireAt: now.addingTimeInterval(0.5), eventAt: now,
+            title: "落地", body: "落地"
+        )
+        let clamped = try XCTUnwrap(HandoverAlerts.notificationTiming(for: imminent, now: now))
+        XCTAssertEqual(clamped.interval, 1)
+        XCTAssertEqual(clamped.scheduledAt, now.addingTimeInterval(1))
+    }
+
     func testStationGroupsPlatforms() {
         XCTAssertEqual(Relief.station("KSR1"), "KSR")
         XCTAssertEqual(Relief.station("KSR2"), "KSR")
@@ -140,6 +161,13 @@ final class HandoverAlertsTests: XCTestCase {
     func testShortId() {
         XCTAssertEqual(HandoverAlerts.short("8027118"), "118")
         XCTAssertEqual(HandoverAlerts.short("SLP"), "SLP")
+    }
+
+    func testScheduleSummaryDoesNotCallFailedRosterRest() {
+        XCTAssertEqual(HandoverScheduleSummary.text(rosterFailed: true, scheduled: 0), "讀唔到更表，未能確認今日同明日有冇提示。")
+        XCTAssertEqual(HandoverScheduleSummary.text(rosterFailed: true, scheduled: 3), "更表讀取失敗，已沿用快取排好 3 個交接提示。")
+        XCTAssertEqual(HandoverScheduleSummary.text(rosterFailed: false, scheduled: 0), "今日同明日冇提示（休息，或者已經放工）。")
+        XCTAssertEqual(HandoverScheduleSummary.text(rosterFailed: false, scheduled: 2), "已排好 2 個交接提示。")
     }
 
     /// Live Activity 分行渲染（動作 / 時間 · 地點 / 補充）：`place`、`note` 要啱，

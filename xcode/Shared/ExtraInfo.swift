@@ -1,6 +1,16 @@
 import CoreLocation
 import Foundation
 
+/// 各網絡來源嘅成功快取 TTL；同 Widget timeline 嘅 60 分鐘分開，避免冷啟重複抓同一份資料。
+enum InfoRefreshPolicy {
+    static let weatherReuse: TimeInterval = 10 * 60       // 今日卡同資訊卡去重，維持不變
+    static let live: TimeInterval = 30 * 60               // 警告／港鐵去重；超過 30 分鐘仍標過期
+    static let gold: TimeInterval = 60 * 60
+    static let air: TimeInterval = 2 * 3_600
+    static let fx: TimeInterval = 12 * 3_600
+    static let latestOS: TimeInterval = 24 * 3_600
+}
+
 /// 要靠網絡或者定位先有嘅資料：天氣、黃金、最新 iOS 版本。每項各自失敗各自用快取。
 struct ExtraInfo {
     var weather: WeatherSnapshot?
@@ -118,18 +128,20 @@ struct ExtraInfo {
     var infoUpdatedAt: Date? { freshnessSources().infoStamp }
 
     /// 警告同列車狀況係「而家」資料：超過呢段時間冇更新就唔再顯示，免得見到舊警告。
-    static let liveMaxAge: TimeInterval = 30 * 60
+    static let liveMaxAge: TimeInterval = InfoRefreshPolicy.live
 
-    /// 天氣同黃金每次 reload 都重讀（「即時更新」先有用）；最新 iOS 版本 6 小時一次。
+    /// 各來源沿用自己的 TTL；`force` 只由手動刷新傳入，繞過成功快取但仍保留舊資料作 fallback。
     /// 警告一般記入「各項資訊」範圍；app 匯出同時畀今日咭用，先將同一份成功資料記入兩個範圍。
-    static func load(now: Date = Date(), warningScopes: [Freshness.Scope] = [.info]) async -> ExtraInfo {
-        async let weather = loadWeather(now: now)
-        async let gold = loadGold(now: now)
-        async let latestOS = loadLatestOS(now: now)
-        async let warnings = loadWarnings(scopes: warningScopes, now: now)
-        async let train = loadTrain(now: now)
-        async let air = loadAir(now: now)
-        async let fx = loadFX(now: now)
+    static func load(
+        now: Date = Date(), warningScopes: [Freshness.Scope] = [.info], force: Bool = false
+    ) async -> ExtraInfo {
+        async let weather = loadWeather(now: now, force: force)
+        async let gold = loadGold(now: now, force: force)
+        async let latestOS = loadLatestOS(now: now, force: force)
+        async let warnings = loadWarnings(scopes: warningScopes, now: now, force: force)
+        async let train = loadTrain(now: now, force: force)
+        async let air = loadAir(now: now, force: force)
+        async let fx = loadFX(now: now, force: force)
         var info = ExtraInfo(
             weather: await weather, gold: await gold, latestOS: await latestOS, updatedAt: nil,
             warnings: await warnings, train: await train, air: await air, fx: await fx
@@ -142,10 +154,10 @@ struct ExtraInfo {
 
     /// 今日咭：天氣（10 分鐘內讀過就用返）、天氣警告、屯馬綫；其餘（黃金、匯率等）用快取。
     /// 警告記入 **today 範圍**，所以資訊 widget 啱啱成功讀過警告唔會令今日咭嘅「更新於」變啱啱。
-    static func loadToday(now: Date = Date()) async -> ExtraInfo {
-        async let weather = loadWeather(now: now, reuseWithin: 10 * 60)
-        async let warnings = loadWarnings(scopes: [.today], now: now)
-        async let train = loadTrain(now: now)
+    static func loadToday(now: Date = Date(), force: Bool = false) async -> ExtraInfo {
+        async let weather = loadWeather(now: now, reuseWithin: force ? nil : InfoRefreshPolicy.weatherReuse)
+        async let warnings = loadWarnings(scopes: [.today], now: now, force: force)
+        async let train = loadTrain(now: now, force: force)
         var info = cached(now: now, part: .today)
         info.weather = await weather
         info.warnings = await warnings
@@ -156,8 +168,8 @@ struct ExtraInfo {
     }
 
     /// `reuseWithin`：今日咭同資訊 widget 差唔多時間 reload，避免重複讀。
-    private static func loadWeather(now: Date, reuseWithin maxAge: TimeInterval? = nil) async -> WeatherSnapshot? {
-        if let maxAge, let fresh = DataCache.fresh(WeatherSnapshot.self, key: "weather", maxAge: maxAge, now: now) {
+    private static func loadWeather(now: Date, reuseWithin maxAge: TimeInterval? = nil, force: Bool = false) async -> WeatherSnapshot? {
+        if !force, let maxAge, let fresh = DataCache.fresh(WeatherSnapshot.self, key: "weather", maxAge: maxAge, now: now) {
             return fresh
         }
         let coordinate = await WidgetLocation.coordinate()
@@ -173,10 +185,13 @@ struct ExtraInfo {
         }
     }
 
-    private static func loadGold(now: Date) async -> GoldQuote? {
+    private static func loadGold(now: Date, force: Bool) async -> GoldQuote? {
+        if !force, let fresh = DataCache.fresh(GoldQuote.self, key: "gold", maxAge: InfoRefreshPolicy.gold, now: now) {
+            return fresh
+        }
         do {
             let quote = try GoldAPI.parse(try await Fetcher.data(from: GoldAPI.url), now: now)
-            DataCache.save(quote, key: "gold")
+            DataCache.save(quote, key: "gold", stamped: now)
             return quote
         } catch {
             return DataCache.load(GoldQuote.self, key: "gold")
@@ -185,8 +200,13 @@ struct ExtraInfo {
 
     /// 讀天氣警告：成功就喺要求嘅每個範圍記低同一時間；失敗就逐範圍沿用快取，
     /// 時間照用快取原本嗰個（`Freshness.stamp`／`warningsStamp`），唔會因為又試咗一次就翻新。
-    private static func loadWarnings(scopes: [Freshness.Scope], now: Date) async -> [WeatherWarning]? {
+    private static func loadWarnings(scopes: [Freshness.Scope], now: Date, force: Bool) async -> [WeatherWarning]? {
         guard !scopes.isEmpty else { return nil }
+        if !force, scopes.allSatisfy({
+            DataCache.fresh([WeatherWarning].self, key: Freshness.warningsKey($0), maxAge: InfoRefreshPolicy.live, now: now) != nil
+        }) {
+            return cachedWarnings(scopes: scopes, now: now)
+        }
         do {
             let warnings = try HKOWarnings.parse(try await Fetcher.data(from: HKOWarnings.url))
             for scope in scopes {
@@ -201,7 +221,10 @@ struct ExtraInfo {
         }
     }
 
-    private static func loadTrain(now: Date) async -> TrainStatus? {
+    private static func loadTrain(now: Date, force: Bool) async -> TrainStatus? {
+        if !force, let fresh = DataCache.fresh(TrainStatus.self, key: "train", maxAge: InfoRefreshPolicy.live, now: now) {
+            return fresh
+        }
         do {
             let status = try MTRStatus.parse(try await Fetcher.data(from: MTRStatus.url), now: now)
             DataCache.save(status, key: "train", stamped: now)
@@ -211,9 +234,9 @@ struct ExtraInfo {
         }
     }
 
-    /// 空氣質素 30 分鐘一次。
-    private static func loadAir(now: Date) async -> AirQuality? {
-        if let fresh = DataCache.fresh(AirQuality.self, key: "air", maxAge: 30 * 60, now: now) { return fresh }
+    /// 空氣質素 2 小時一次（上游全球模型約 12 小時更新）。
+    private static func loadAir(now: Date, force: Bool) async -> AirQuality? {
+        if !force, let fresh = DataCache.fresh(AirQuality.self, key: "air", maxAge: InfoRefreshPolicy.air, now: now) { return fresh }
         let coordinate = await WidgetLocation.coordinate()
         do {
             guard let url = OpenMeteoAir.url(latitude: coordinate.latitude, longitude: coordinate.longitude) else {
@@ -227,9 +250,9 @@ struct ExtraInfo {
         }
     }
 
-    /// 匯率每日更新一次，6 小時讀一次已經夠。
-    private static func loadFX(now: Date) async -> ExchangeRates? {
-        if let fresh = DataCache.fresh(ExchangeRates.self, key: "fx", maxAge: 6 * 3_600, now: now) { return fresh }
+    /// 匯率每日更新一次，12 小時讀一次已經夠。
+    private static func loadFX(now: Date, force: Bool) async -> ExchangeRates? {
+        if !force, let fresh = DataCache.fresh(ExchangeRates.self, key: "fx", maxAge: InfoRefreshPolicy.fx, now: now) { return fresh }
         do {
             let rates = try FXAPI.parse(try await Fetcher.data(from: FXAPI.url), now: now)
             DataCache.save(rates, key: "fx", stamped: now)
@@ -239,8 +262,8 @@ struct ExtraInfo {
         }
     }
 
-    private static func loadLatestOS(now: Date) async -> String? {
-        if let fresh = DataCache.fresh(String.self, key: "latestOS", maxAge: 6 * 3_600, now: now) { return fresh }
+    private static func loadLatestOS(now: Date, force: Bool) async -> String? {
+        if !force, let fresh = DataCache.fresh(String.self, key: "latestOS", maxAge: InfoRefreshPolicy.latestOS, now: now) { return fresh }
         do {
             let latest = try OSVersion.parseLatest(try await Fetcher.data(from: OSVersion.latestURL))
             DataCache.save(latest, key: "latestOS", stamped: now)

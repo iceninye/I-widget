@@ -87,6 +87,9 @@ final class ICalendarTests: XCTestCase {
         let christmas = ICalendar.nextHoliday(of: [list[2]], after: today)
         XCTAssertEqual(christmas?.rangeText, "12/25–12/27")
         XCTAssertNil(ICalendar.nextHoliday(of: [], after: today))
+        XCTAssertNil(ICalendar.nextHoliday(of: list, after: today, within: 2))
+        XCTAssertNil(ICalendar.nextHoliday(of: list, after: today, within: 1))
+        XCTAssertNil(ICalendar.nextHoliday(of: list, after: today, within: 0))
     }
 
     func testSchoolCalendarURLEncodesAt() throws {

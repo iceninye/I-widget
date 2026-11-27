@@ -15,12 +15,20 @@ enum DataCache {
 }
 
 enum Fetcher {
-    static func data(from url: URL, timeout: TimeInterval = 8) async throws -> Data {
+    static let defaultMaxBytes = 16 * 1024 * 1024
+
+    static func data(from url: URL, timeout: TimeInterval = 8, maxBytes: Int = defaultMaxBytes, headers: [String: String] = [:], session: URLSession = .shared) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, response) = try await URLSession.shared.data(for: request)
+        for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
+        }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < maxBytes else { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
         }
         return data
     }
@@ -46,11 +54,11 @@ extension DataCache {
 
 extension Fetcher {
     /// 逐個來源試，第一個成功就用。
-    static func firstData(from urls: [URL], timeout: TimeInterval = 8) async throws -> Data {
+    static func firstData(from urls: [URL], timeout: TimeInterval = 8, maxBytes: Int = defaultMaxBytes) async throws -> Data {
         var lastError: Error = URLError(.badURL)
         for url in urls {
             do {
-                return try await data(from: url, timeout: timeout)
+                return try await data(from: url, timeout: timeout, maxBytes: maxBytes)
             } catch {
                 lastError = error
             }

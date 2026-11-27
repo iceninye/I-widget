@@ -69,6 +69,46 @@ final class WidgetExportTests: XCTestCase {
         XCTAssertGreaterThan(status.lastSuccessAt ?? .distantPast, previous)
     }
 
+    func testExportNeverCopiesCredentialsOrFolderAuthorization() throws {
+        let canaries = [
+            "settings.rosterToken": "CANARY_ROSTER_TOKEN_1234567890",
+            "settings.vpsToken": "CANARY_VPS_TOKEN_1234567890",
+            "settings.statusURL": "https://CANARY_PRIVATE_VPS.example/status",
+        ]
+        let previous = canaries.mapValues { UserDefaults.standard.object(forKey: $0) }
+        defer { for (key, value) in previous { UserDefaults.standard.set(value, forKey: key) } }
+        for (key, value) in canaries { UserDefaults.standard.set(value, forKey: key) }
+
+        let info = ExtraInfo(
+            weather: nil, gold: nil, latestOS: nil, updatedAt: nil,
+            warnings: nil, train: nil, air: nil, fx: nil
+        )
+        let entry = OverviewEntry(
+            date: generatedAt, stats: .sample, battery: .unknown, info: info,
+            schedule: .empty, vps: .sample, updatedAt: nil
+        )
+        // 行真正 builder，唔只序列化手寫 fixture；VPS 亦要降解成 display lines。
+        let data = try WidgetSnapshotBuilder.build(entry: entry, now: generatedAt).jsonData()
+        let raw = String(decoding: data, as: UTF8.self)
+        for canary in canaries.values { XCTAssertFalse(raw.contains(canary)) }
+        XCTAssertFalse(raw.localizedCaseInsensitiveContains("authorization"))
+        XCTAssertFalse(raw.localizedCaseInsensitiveContains("bookmark"))
+
+        let forbiddenKeys: Set<String> = ["token", "authorization", "bookmark", "statusurl", "privateurl"]
+        func check(_ value: Any, path: String = "$") throws {
+            if let object = value as? [String: Any] {
+                for (key, child) in object {
+                    let normalized = key.lowercased()
+                    XCTAssertFalse(forbiddenKeys.contains(normalized) || normalized.hasSuffix("token"), "\(path).\(key)")
+                    try check(child, path: "\(path).\(key)")
+                }
+            } else if let array = value as? [Any] {
+                for (index, child) in array.enumerated() { try check(child, path: "\(path)[\(index)]") }
+            }
+        }
+        try check(try XCTUnwrap(JSONSerialization.jsonObject(with: data)))
+    }
+
     private func snapshot(environmentLines: [WidgetLine] = []) -> WidgetExport {
         WidgetExport(
             schemaVersion: 1,

@@ -26,6 +26,8 @@ struct ContentView: View {
     /// 呢個先係「deep link 嗰次更新一定做到」嘅保證——如果淨係靠 `AppModel` 嘅 loading guard，
     /// 由 Live Activity 撳入嚟嗰次會俾前一輪默默吞咗，鎖定畫面睇落仍然係舊內容。
     @State private var pendingRefresh = false
+    /// 手動刷新排咗喺後輪：只由用戶下拉觸發，繞過各來源 TTL，但唔影響冷啟／自動刷新。
+    @State private var pendingForceNetwork = false
     /// 離開「資料頁 + 前景」期間清咗名單、但其實已經跨過咗邊界：記低佢，返嚟補跑一次。
     /// 冇呢個 latch 嘅話，返嚟重新排只收未來事件，嗰次跨過就永久冇人補（倒數留低舊內容）。
     @State private var missedCross = false
@@ -103,8 +105,9 @@ struct ContentView: View {
     /// 所有觸發位嘅統一入口：本身唔做嘢，只係將請求排返去 main actor（`onOpenURL`、Button、
     /// `onReceive` 呢啲 closure 係 nonisolated，唔可以直接調用 `@MainActor` 隔離嘅實作）。
     /// - Parameter mustRefresh: `true` = 呢次一定要做到（排隊補跑）；`false` = 得喺冇人跑嗰時先跑。
-    private func requestRefresh(mustRefresh: Bool = false) {
-        Task { @MainActor in await self.refreshQueued(mustRefresh: mustRefresh) }
+    /// - Parameter forceNetwork: 只由手動刷新傳入，繞過成功快取 TTL。
+    private func requestRefresh(mustRefresh: Bool = false, forceNetwork: Bool = false) {
+        Task { @MainActor in await self.refreshQueued(mustRefresh: mustRefresh, forceNetwork: forceNetwork) }
     }
 
     /// 串行化刷新：已經有一輪跑緊就只記低「又要跑一次」，等佢完咗補跑；冇人跑就即刻開一輪。
@@ -113,12 +116,13 @@ struct ContentView: View {
     ///   要排隊補跑，即每次呢類觸發最終都做得到一次。
     /// - `mustRefresh: false`（冷啟、低耗電模式改變）：有輪跑緊就當佢已經包底，唔使重複打網。
     @MainActor
-    private func refreshQueued(mustRefresh: Bool = false) async {
-        switch RefreshQueue.accept(refreshing: refreshing, mustRefresh: mustRefresh) {
+    private func refreshQueued(mustRefresh: Bool = false, forceNetwork: Bool = false) async {
+        switch RefreshQueue.accept(refreshing: refreshing, mustRefresh: mustRefresh || forceNetwork) {
         case .merge:
             return
         case .enqueue:
             pendingRefresh = true
+            pendingForceNetwork = pendingForceNetwork || forceNetwork
             return
         case .start:
             break
@@ -126,12 +130,15 @@ struct ContentView: View {
         refreshing = true
         // 本輪期間有冇跨過邊界（見下面嘅 latch）
         var overshot = false
+        var forceNextRound = forceNetwork
         repeat {
             pendingRefresh = false
             overshot = false
+            let forceThisRound = forceNextRound
+            forceNextRound = false
             // 輪開始時嘅名單快照：跑完重排之前先 latch，先至知有冇邊界喺呢期間跨過咗
             let armed = boundaries
-            if await model.refresh() {
+            if await model.refresh(forceNetwork: forceThisRound) {
                 let now = Date()
                 RefreshQueue.recordRefreshAttempt(at: now)
                 reloadWidgets()
@@ -141,7 +148,9 @@ struct ContentView: View {
                 overshot = RefreshQueue.crossed(armed, now: now)
                 boundaries = Self.eventBoundaries(from: model.entry, now: now)
             }
+            forceNextRound = pendingForceNetwork
         } while RefreshQueue.followUp(pending: pendingRefresh, overshot: overshot)
+        pendingForceNetwork = false
         refreshing = false
     }
 
@@ -151,7 +160,7 @@ struct ContentView: View {
     /// 冇呢個檢查就會變成人手急拉幾次之後嘅 main actor hot loop。
     @MainActor
     private func refreshAndWait() async {
-        await refreshQueued(mustRefresh: true)
+        await refreshQueued(mustRefresh: true, forceNetwork: true)
         // 嗰輪係自己開嘅話，上面已經等完；排隊等其他入口嗰輪跑完時先會落到呢個循環。
         while refreshing {
             if Task.isCancelled { break }
@@ -162,7 +171,7 @@ struct ContentView: View {
     /// 只重讀受影響嘅 kind（今日咭同資訊），唔令無關嘅法院 widget 一齊重讀。
     @MainActor
     private func reloadWidgets() {
-        for kind in ["IWidgetOverview", "IWidgetInfo"] {
+        for kind in WidgetReloadKinds.data {
             WidgetCenter.shared.reloadTimelines(ofKind: kind)
         }
     }

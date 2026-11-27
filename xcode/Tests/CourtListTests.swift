@@ -1,6 +1,10 @@
 import XCTest
 
 final class CourtListTests: XCTestCase {
+    private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {
+        ICalendar.hongKong.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
+    }
+
     private let fixture = """
     <html><body><table>
     <tr><td><p>法庭</p></td><td><p>法官</p></td><td><p>時間</p></td><td><p>案件編號</p></td><td><p>訴訟各方</p></td><td><p>性質</p></td></tr>
@@ -76,6 +80,12 @@ final class CourtListTests: XCTestCase {
         XCTAssertEqual(CourtList.parse("<html>找不到案件表</html>"), [])
     }
 
+    func testEmptyResultRequiresCourtTableStructure() {
+        XCTAssertTrue(CourtList.hasCourtTable(fixture))
+        XCTAssertTrue(CourtList.hasCourtTable("<table><tr><td>法庭</td><td>時間</td><td>案件編號</td></tr></table>"))
+        XCTAssertFalse(CourtList.hasCourtTable("<html>網站維護中，請稍後再試</html>"))
+    }
+
     func testTimeParsing() {
         XCTAssertEqual(CourtList.parseTime("9:30 am"), 570)
         XCTAssertEqual(CourtList.parseTime("12:05 PM"), 12 * 60 + 5)
@@ -89,6 +99,18 @@ final class CourtListTests: XCTestCase {
 
     func testEntityDecoding() {
         XCTAssertEqual(CourtList.cleanText("<p>A&amp;B&nbsp;&#x7532;&#20057;</p>"), "A&B 甲乙")
+        XCTAssertEqual(CourtList.cleanText("&amp;nbsp;"), "&nbsp;")
+        XCTAssertEqual(CourtList.cleanText("&amp;lt;"), "&lt;")
+        XCTAssertEqual(CourtList.cleanText("&lt;tag&gt;"), "<tag>")
+    }
+
+    func testCourtSelectionFiltersCatalogDeduplicatesAndLimits() {
+        XCTAssertEqual(CourtCatalog.selected(nil), [])
+        XCTAssertEqual(CourtCatalog.selected(" dc ,ALLMAG,dc,unknown,CFA,FMC ", limit: 4),
+                       ["DC", "ALLMAG", "CFA", "FMC"])
+        XCTAssertEqual(CourtCatalog.selected("DC,ALLMAG,CFA,FMC,LT", limit: 3), ["DC", "ALLMAG", "CFA"])
+        XCTAssertEqual(CourtCatalog.selected("DC,CFA", limit: 0), [])
+        XCTAssertEqual(CourtCatalog.selected("not-a-court"), [])
     }
 
     func testListDateSkipsWeekendAndEvening() {
@@ -102,6 +124,121 @@ final class CourtListTests: XCTestCase {
         // 星期五夜晚同週末都睇星期一
         XCTAssertEqual(CourtList.dateCode(CourtList.listDate(now: date(2026, 10, 30, 19, 0))), "02112026")
         XCTAssertEqual(CourtList.dateCode(CourtList.listDate(now: date(2026, 10, 31, 10, 0))), "02112026")
+    }
+
+    func testNonEmptyCourtCacheLastsUntilNextPublication() {
+        let filled = CourtDay(code: "DC", dateCode: "26102026", total: 1, cases: [
+            CourtCase(room: "", judge: "", minutes: nil, caseNo: "DCCJ 1/2026")
+        ])
+        let savedAt = date(2026, 10, 26, 9, 0)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: filled, savedAt: savedAt, lastAttemptAt: nil,
+            now: date(2026, 10, 26, 17, 59), holidays: []
+        ), .reuse)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: filled, savedAt: savedAt, lastAttemptAt: nil,
+            now: date(2026, 10, 26, 18, 30), holidays: []
+        ), .fetch)
+    }
+
+    func testEmptyCourtCacheRetriesOnlyInsidePublicationWindow() {
+        let empty = CourtDay(code: "DC", dateCode: "26102026", total: 0, cases: [])
+        let savedAt = date(2026, 10, 26, 18, 31)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: savedAt, lastAttemptAt: savedAt,
+            now: date(2026, 10, 26, 18, 40), holidays: []
+        ), .reuse)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: savedAt, lastAttemptAt: savedAt,
+            now: date(2026, 10, 26, 18, 46), holidays: []
+        ), .fetch)
+
+        let morning = date(2026, 10, 26, 9, 0)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: morning, lastAttemptAt: nil,
+            now: date(2026, 10, 26, 12, 0), holidays: []
+        ), .reuse)
+        // 18:45 成功空表都要喺 19:00 再確認一次；19:00–20:00 用 30 分鐘重試。
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: date(2026, 10, 26, 18, 45), lastAttemptAt: nil,
+            now: date(2026, 10, 26, 19, 0), holidays: []
+        ), .fetch)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: savedAt, lastAttemptAt: nil,
+            now: date(2026, 10, 26, 19, 1), holidays: []
+        ), .fetch)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: date(2026, 10, 26, 19, 1), lastAttemptAt: nil,
+            now: date(2026, 10, 26, 19, 20), holidays: []
+        ), .reuse)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: empty, savedAt: date(2026, 10, 26, 19, 31), lastAttemptAt: nil,
+            now: date(2026, 10, 26, 20, 0), holidays: []
+        ), .reuse)
+    }
+
+    func testCourtFailureBackoffAndManualForce() {
+        let attempt = date(2026, 10, 26, 18, 31)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: attempt,
+            now: date(2026, 10, 26, 18, 45), holidays: []
+        ), .reuse)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: attempt,
+            now: date(2026, 10, 26, 19, 1), holidays: []
+        ), .fetch)
+        XCTAssertEqual(CourtPublication.decision(
+            cached: nil, savedAt: nil, lastAttemptAt: attempt,
+            now: date(2026, 10, 26, 18, 40), holidays: [], force: true
+        ), .fetch)
+    }
+
+    func testCourtPublicationSkipsWeekendAndHoliday() {
+        let holidays: Set<String> = ["20261027"]
+        XCTAssertEqual(CourtList.dateCode(CourtPublication.nextPublication(
+            after: date(2026, 10, 26, 19, 0), holidays: holidays
+        )), "28102026")
+        XCTAssertEqual(CourtList.dateCode(CourtPublication.nextPublication(
+            after: date(2026, 10, 31, 10, 0), holidays: []
+        )), "02112026")
+    }
+
+    func testCourtEntrySwitchesToPendingNextWorkdayAt1830() {
+        let loaded = date(2026, 10, 26, 0, 0)
+        let before = CourtPublication.displayDay(now: date(2026, 10, 26, 18, 20), loadedDay: loaded, holidays: [])
+        XCTAssertTrue(before.matchesLoadedDay)
+        XCTAssertEqual(CourtList.dateCode(before.day), "26102026")
+
+        let after = CourtPublication.displayDay(now: date(2026, 10, 26, 18, 30), loadedDay: loaded, holidays: [])
+        XCTAssertFalse(after.matchesLoadedDay)
+        XCTAssertEqual(CourtList.dateCode(after.day), "27102026")
+    }
+
+    func testCourtProviderMarksUnpublishedNextDayAsPending() {
+        XCTAssertTrue(CourtPublication.awaitingPublication(
+            now: date(2026, 10, 26, 18, 35), hasCourtData: false, holidays: []
+        ))
+        XCTAssertFalse(CourtPublication.awaitingPublication(
+            now: date(2026, 10, 26, 18, 35), hasCourtData: true, holidays: []
+        ))
+        XCTAssertFalse(CourtPublication.awaitingPublication(
+            now: date(2026, 10, 26, 19, 1), hasCourtData: false, holidays: []
+        ))
+    }
+
+    func testCourtReloadUsesPublicationProbeAndEmptyRetries() {
+        XCTAssertEqual(CourtPublication.nextReload(
+            now: date(2026, 10, 26, 18, 20), holidays: [], hasCourtData: true
+        ), date(2026, 10, 26, 18, 45))
+        XCTAssertEqual(CourtPublication.nextReload(
+            now: date(2026, 10, 26, 18, 45), holidays: [], hasCourtData: false
+        ), date(2026, 10, 26, 19, 0))
+        XCTAssertEqual(CourtPublication.nextReload(
+            now: date(2026, 10, 26, 19, 0), holidays: [], hasCourtData: false
+        ), date(2026, 10, 26, 19, 30))
+        XCTAssertEqual(CourtPublication.nextReload(
+            now: date(2026, 10, 26, 9, 0), holidays: [], hasCourtData: true
+        ), date(2026, 10, 26, 10, 0))
     }
 
     func testUpcomingSortsAndFiltersPast() {

@@ -52,19 +52,26 @@ enum HandoverNotifier {
     static func schedule(_ alerts: [HandoverAlert], settings: HandoverSettings = .load(), now: Date = Date()) async -> Int {
         await removeAll()
         let center = UNUserNotificationCenter.current()
-        let upcoming = Array(alerts.filter { $0.fireAt > now }.prefix(limit))
+        let upcoming = alerts.filter { $0.fireAt > now }
         // 舊語音檔（已經響完或者內容改咗）先刪，只留今次用得着嘅
         let keep = settings.speak ? Set(upcoming.map { SpokenSound.fileName(id: $0.id, text: $0.body, settings: settings) }) : []
         SpokenSound.removeAll(except: keep)
         var count = 0
         var spoken = 0
         for alert in upcoming {
+            guard count < limit else { break }
             let (content, hasVoice) = await makeContent(alert, settings: settings)
-            let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: alert.fireAt)
+            // TTS 都可能耗時；錄完先取當下時間，已經過咗嘅提示唔好遲響。
+            guard let timing = HandoverAlerts.notificationTiming(for: alert, now: Date()) else { continue }
+            // time-interval trigger 只提供原間隔，唔提供 nextTriggerDate；留存實際安排時間畀設定頁。
+            content.userInfo = ["fireAt": timing.scheduledAt.timeIntervalSince1970]
             let request = UNNotificationRequest(
                 identifier: alert.id,
                 content: content,
-                trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
+                trigger: UNTimeIntervalNotificationTrigger(
+                    timeInterval: timing.interval,
+                    repeats: false
+                )
             )
             if (try? await center.add(request)) != nil {
                 count += 1
@@ -96,7 +103,9 @@ enum HandoverNotifier {
         return pending
             .filter { $0.identifier.hasPrefix(HandoverAlerts.idPrefix) }
             .compactMap { request -> (Date, String)? in
-                guard let date = (request.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() else { return nil }
+                let date = (request.content.userInfo["fireAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+                    ?? (request.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate()
+                guard let date, date > Date() else { return nil }
                 return (date, request.content.body)
             }
             .min { $0.0 < $1.0 }

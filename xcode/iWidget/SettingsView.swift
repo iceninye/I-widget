@@ -1,12 +1,13 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage(AppSettings.rosterToken) private var rosterToken = ""
-    @AppStorage(AppSettings.vpsToken) private var vpsToken = ""
-    @AppStorage(AppSettings.statusURL) private var statusURL = ""
+    @State private var rosterToken = AppSettings.string(AppSettings.rosterToken) ?? ""
+    @State private var vpsToken = AppSettings.string(AppSettings.vpsToken) ?? ""
+    @State private var statusURL = AppSettings.string(AppSettings.statusURL) ?? ""
     @AppStorage(AppSettings.scriptableTheme) private var scriptableTheme = WidgetTheme.classic.rawValue
     @AppStorage(HandoverNotifier.enabledKey) private var handoverAlerts = false
     @State private var handoverStatus = ""
+    @State private var secretSaveError = ""
     /// 已經觸發過刷新嘅 token 組合：用嚟分辨「用家真係改過嘢」同「啱啱入頁」，
     /// 並喺 debounce 完成之後先更新（取消咗就留舊值，等最新嗰次輸入先發）。
     @State private var firedKey: String?
@@ -27,6 +28,12 @@ struct SettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                if !secretSaveError.isEmpty {
+                    Text(secretSaveError).font(.footnote).foregroundStyle(.red)
+                    Button("重試儲存私密資料") {
+                        if persistSecrets() { onChange() }
+                    }
+                }
             } header: {
                 Text("私密資料")
             } footer: {
@@ -105,6 +112,9 @@ struct SettingsView: View {
         }
         .task { await refreshHandoverStatus() }
         .onChange(of: scriptableTheme) { _, _ in onChange() }
+        .onChange(of: tokenKey) { _, _ in
+            _ = persistSecrets()
+        }
         .onChange(of: handoverAlerts) { _, enabled in
             Task {
                 if enabled {
@@ -135,6 +145,7 @@ struct SettingsView: View {
             case .unchanged:
                 break
             case .fire:
+                guard secretSaveError.isEmpty else { return }
                 try? await Task.sleep(nanoseconds: RefreshQueue.settingsDebounceNanos)
                 // 期間又改咗字：呢個 task 已被取消，交俾最新嗰次輸入去發
                 guard !Task.isCancelled else { return }
@@ -142,6 +153,13 @@ struct SettingsView: View {
                 onChange()
             }
         }
+    }
+
+    @MainActor
+    private func persistSecrets() -> Bool {
+        let saved = AppSettings.saveSecrets(rosterToken: rosterToken, vpsToken: vpsToken, statusURL: statusURL)
+        secretSaveError = saved ? "" : "私密資料儲存失敗，可能仍在使用舊 token。請重試。"
+        return saved
     }
 
     /// 三個輸入框合成一個 id：任何一格改過都算「改過」，唔使寫三次 debounce。

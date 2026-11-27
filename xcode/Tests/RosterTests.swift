@@ -147,6 +147,19 @@ final class RosterTests: XCTestCase {
         XCTAssertNil(DutyDay.make(roster: roster, date: "garbage", basic: [:], cards: [:], sheets: [], places: .empty))
     }
 
+    func testDutyCardsKeepRowIdentityWhenAnotherRowLacksId() throws {
+        let json = #"{"duties":[{"group":"BAD","on":[1,"錯"],"off":[2,"錯"]},{"id":"8027111","group":"KSR","on":[19200,"PHD"],"off":[49800,"KSR"],"work":480,"legs":[["drive",13,"KSR1",22185,"TUM",23160]]},{"id":7,"on":[3,"錯"],"off":[4,"錯"]},{"id":"8027118","on":[30000,"KSR"],"off":[60000,"KSR"]}]}"#
+        let cards = try DutyData.parseCards(Data(json.utf8), ids: ["8027111", "8027118"])
+        XCTAssertEqual(Set(cards.keys), ["8027111", "8027118"])
+        XCTAssertEqual(cards["8027111"]?.group, "KSR")
+        XCTAssertEqual(cards["8027111"]?.on, 19200)
+        XCTAssertEqual(cards["8027111"]?.off, 49800)
+        XCTAssertEqual(cards["8027111"]?.onPlace, "PHD")
+        XCTAssertEqual(cards["8027111"]?.legs?.first?.run, 13)
+        XCTAssertEqual(cards["8027118"]?.on, 30000)
+        XCTAssertEqual(cards["8027118"]?.off, 60000)
+    }
+
     func testDutyDayFromCardUsesDatedSheetAndMeal() throws {
         var plain = roster
         plain.overrides["2026-11-01"] = "7091101"
@@ -232,6 +245,35 @@ final class RosterTests: XCTestCase {
         let day = DutyDay(date: "2026-10-23", code: "X", kind: .duty, title: "X")
         XCTAssertEqual(day.moment(atServiceSecond: 0), date("2026-10-22T16:00:00Z"))
         XCTAssertEqual(day.moment(atServiceSecond: 90_000), date("2026-10-23T17:00:00Z"))
+    }
+
+    func testCardFreshnessRequiresEverySheetAndLegs() {
+        let now = date("2026-10-23T06:00:00Z")
+        let wanted: [String: Set<String>] = ["7091": ["7091111"], "7092": ["7092111"]]
+        func card(_ id: String, hasLegs: Bool = true) -> DutyCard {
+            DutyCard(
+                id: id, group: nil, on: 100, onPlace: "KSR", off: 500, offPlace: "KSR",
+                work: nil, meal: nil,
+                legs: hasLegs ? [DutyLeg(kind: "drive", run: 1, from: "KSR", at: 100, to: "TUM", until: 200)] : nil,
+                reliefs: nil
+            )
+        }
+        let cached = [
+            DutyDay.cardKey(sheet: "7091", id: "7091111"): card("7091111"),
+            DutyDay.cardKey(sheet: "7092", id: "7092111"): card("7092111"),
+        ]
+        var stamps = ["7091": now.addingTimeInterval(-60), "7092": now.addingTimeInterval(-120)]
+        XCTAssertTrue(ScheduleData.cardsAreRecent(wanted: wanted, cached: cached, now: now, savedAt: { stamps[$0] }))
+        XCTAssertTrue(ScheduleData.cardsAreRecent(wanted: [:], cached: cached, now: now, savedAt: { stamps[$0] }))
+
+        stamps["7092"] = now.addingTimeInterval(-13 * 3_600)
+        XCTAssertFalse(ScheduleData.cardsAreRecent(wanted: wanted, cached: cached, now: now, savedAt: { stamps[$0] }), "一張 sheet 過期就要重試")
+        stamps["7092"] = now.addingTimeInterval(60)
+        XCTAssertFalse(ScheduleData.cardsAreRecent(wanted: wanted, cached: cached, now: now, savedAt: { stamps[$0] }), "未來時間唔算新鮮")
+
+        stamps["7092"] = now.addingTimeInterval(-60)
+        let noLegs = cached.merging([DutyDay.cardKey(sheet: "7092", id: "7092111"): card("7092111", hasLegs: false)]) { _, new in new }
+        XCTAssertFalse(ScheduleData.cardsAreRecent(wanted: wanted, cached: noLegs, now: now, savedAt: { stamps[$0] }))
     }
 
     func testIndexAndPlaceNames() throws {

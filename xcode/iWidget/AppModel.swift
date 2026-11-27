@@ -10,8 +10,19 @@ enum AppSettings {
     static let scriptableTheme = "settings.scriptableTheme"
 
     static func string(_ key: String) -> String? {
-        let value = UserDefaults.standard.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = [rosterToken, vpsToken, statusURL].contains(key)
+            ? SecretStore.load(account: key)
+            : UserDefaults.standard.string(forKey: key)
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (value ?? "").isEmpty ? nil : value
+    }
+
+    @discardableResult
+    static func saveSecrets(rosterToken: String, vpsToken: String, statusURL: String) -> Bool {
+        let rosterSaved = SecretStore.save(rosterToken, account: Self.rosterToken)
+        let vpsSaved = SecretStore.save(vpsToken, account: Self.vpsToken)
+        let urlSaved = SecretStore.save(statusURL, account: statusURL)
+        return rosterSaved && vpsSaved && urlSaved
     }
 
     static func loadScriptableTheme() -> WidgetTheme {
@@ -43,20 +54,20 @@ final class AppModel: ObservableObject {
     /// `false` = 已經有一個喺度跑，呢次俾 `loading` guard 阻住（唔係失敗，呼叫方唔使再 reload，
     /// 等完成嗰次 reload 就得）。`ContentView` 靠呢個返回值去串行化冷啟／deep link／返前景嘅刷新。
     @discardableResult
-    func refresh() async -> Bool {
+    func refresh(forceNetwork: Bool = false) async -> Bool {
         guard !loading else { return false }
         loading = true
         defer { loading = false }
         let now = Date()
-        let loaded = await WidgetSnapshotService.load(now: now)
+        let loaded = await WidgetSnapshotService.load(now: now, force: forceNetwork)
         entry = loaded
         bridge.setEntry(loaded)
         // 先排通知同 Live Activity，唔使等法院／Scriptable 同步。
         await rescheduleHandover()
         if bridge.hasAuthorization {
-            let courts = await WidgetSnapshotService.loadCourts(now: now)
+            let courts = await WidgetSnapshotService.loadCourts(now: now, force: forceNetwork)
             bridge.setCourts(courts.days, listDate: courts.listDate)
-            WidgetBackgroundRefresh.scheduleNext()
+            WidgetBackgroundRefresh.scheduleNext(hasCourtData: courts.days.contains { $0.total > 0 })
         }
         return true
     }

@@ -11,7 +11,7 @@ extension OverviewEntry {
     private func clock(_ date: Date?) -> String { date.map { Formatting.clock($0) } ?? Formatting.missing }
 
     private func monthDayClock(_ date: Date) -> String {
-        let parts = Calendar.current.dateComponents([.month, .day], from: date)
+        let parts = ICalendar.hongKong.dateComponents([.month, .day], from: date)
         return "\(parts.month ?? 0)/\(parts.day ?? 0) \(Formatting.clock(date))"
     }
 

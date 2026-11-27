@@ -1,6 +1,8 @@
 import Foundation
 
 struct VPSState {
+    static let cacheTTL: TimeInterval = 60 * 60
+
     var status: VPSStatus?
     var configured: Bool
     var failed: Bool
@@ -15,26 +17,23 @@ struct VPSState {
         VPSState(status: DataCache.load(VPSStatus.self, key: "vps"), configured: isConfigured(url: url, token: token), failed: false)
     }
 
-    /// VPS 腳本每小時更新一次，所以 25 分鐘內讀過就用快取。
-    static func load(url text: String?, token: String?, now: Date) async -> VPSState {
+    /// VPS 腳本每小時更新一次，所以成功快取 60 分鐘；手動刷新可繞過。
+    static func load(url text: String?, token: String?, now: Date, force: Bool = false) async -> VPSState {
         guard isConfigured(url: text, token: token), let url = VPSAPI.statusURL(text) else {
             return VPSState(status: nil, configured: false, failed: false)
         }
         let cached = DataCache.load(VPSStatus.self, key: "vps")
-        if let fresh = DataCache.fresh(VPSStatus.self, key: "vps", maxAge: 25 * 60, now: now) {
+        if !force, let fresh = DataCache.fresh(VPSStatus.self, key: "vps", maxAge: cacheTTL, now: now) {
             return VPSState(status: fresh, configured: true, failed: false)
         }
         let bearer = (token ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let failed = VPSState(status: cached, configured: true, failed: true)
         return await withDeadline(12, fallback: failed) {
             do {
-                var request = URLRequest(url: url, timeoutInterval: 10)
-                request.cachePolicy = .reloadIgnoringLocalCacheData
-                request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
+                let data = try await Fetcher.data(
+                    from: url, timeout: 10, maxBytes: 1024 * 1024,
+                    headers: ["Authorization": "Bearer \(bearer)"]
+                )
                 let status = try VPSAPI.parse(data)
                 DataCache.save(status, key: "vps", stamped: now)
                 return VPSState(status: status, configured: true, failed: false)

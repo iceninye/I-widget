@@ -9,3 +9,5 @@ xcode/**/Info.plist
 *.xcuserstate
 xcuserdata/
 DerivedData/
+# 本機 Release／simulator build 產物；PR 只納入來源同測試。
+xcode/build/

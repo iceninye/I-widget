@@ -11,17 +11,28 @@ final class CourtModel: ObservableObject {
     @Published var pending: CourtLink?
     @Published var selected: CourtSelection?
     @Published var scrollTo: String?
+    private var pendingForce = false
 
-    func refresh(codes: [String]) async {
-        guard !loading else { return }
+    func refresh(codes: [String], force: Bool = false) async {
+        if loading {
+            if force { pendingForce = true }
+            return
+        }
         loading = true
         defer { loading = false }
-        let now = Date()
-        let holidays = await withDeadline(12, fallback: PublicHolidays.cached()) { await PublicHolidays.load(now: now) }
-        let day = CourtList.listDate(now: now, holidays: holidays)
-        listDate = day
-        days = await CourtList.loadAll(codes: codes, day: day, now: now)
-        resolvePending()
+        var forceNextRound = force
+        repeat {
+            let forceThisRound = forceNextRound
+            forceNextRound = false
+            let now = Date()
+            let holidays = await withDeadline(12, fallback: PublicHolidays.cached()) { await PublicHolidays.load(now: now) }
+            let day = CourtList.listDate(now: now, holidays: holidays)
+            listDate = day
+            days = await CourtList.loadAll(codes: codes, day: day, now: now, holidays: holidays, force: forceThisRound)
+            resolvePending()
+            forceNextRound = pendingForce
+            pendingForce = false
+        } while forceNextRound
     }
 
     func open(_ link: CourtLink) {
@@ -55,7 +66,7 @@ struct CourtView: View {
     /// nil = 全部類別
     @State private var category: CourtCategory?
 
-    private var codes: [String] { storedCodes.split(separator: ",").map(String.init) }
+    private var codes: [String] { CourtCatalog.selected(storedCodes, limit: WidgetSchema.maxCourts) }
 
     var body: some View {
         let minute = CourtList.minuteOfDay(now: Date(), listDate: model.listDate)
@@ -91,7 +102,7 @@ struct CourtView: View {
         }
         .navigationTitle("法院 \(CourtList.dayText(model.listDate, now: Date()))")
         .searchable(text: $query, prompt: "案號、法庭、法官、類型")
-        .refreshable { await model.refresh(codes: codes) }
+        .refreshable { await model.refresh(codes: codes, force: true) }
         .overlay { if model.loading && model.days.isEmpty { ProgressView() } }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { picker }

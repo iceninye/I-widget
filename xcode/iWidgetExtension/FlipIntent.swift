@@ -30,7 +30,9 @@ struct FlipIntent: AppIntent {
         state.toggle(tile, now: Date())
         state.save()
         DataCache.save(Date(), key: "flipAt")
-        WidgetCenter.shared.reloadAllTimelines()
+        for kind in WidgetReloadKinds.data {
+            WidgetCenter.shared.reloadTimelines(ofKind: kind)
+        }
         return .result()
     }
 }

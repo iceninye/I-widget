@@ -1,8 +1,9 @@
 name: Build ipa
 
 # 出一個未簽名嘅 iWidget.ipa（app + widget extension），俾 AltStore 用你自己嘅 Apple ID 重新簽名安裝。
-# - PR：只編譯同打包，ipa 放喺 workflow artifact（驗證 workflow 本身冇壞，唔會發佈）。
-# - main（xcode/ 有改動）或者手動執行：另外更新固定嘅 Release `ipa-latest`，
+# ipa 路線暫時擱置；今次只移除未審 PR 上 self-hosted runner 嘅入口，冇改打包功能。
+# - main（xcode/ 有改動）：編譯打包，同時更新固定嘅 Release `ipa-latest`。
+# - 手動執行其他分支：只編譯打包；只有 main 先會更新 Release。
 #   下載連結永遠係 https://github.com/iceninye/I-widget/releases/download/ipa-latest/iWidget.ipa
 
 on:
@@ -10,9 +11,6 @@ on:
     branches: [main]
     paths:
       - "xcode/**"
-      - ".github/workflows/ipa.yml"
-  pull_request:
-    paths:
       - ".github/workflows/ipa.yml"
   workflow_dispatch:
 
@@ -92,7 +90,7 @@ jobs:
           retention-days: 14
 
       - name: 更新 Release ipa-latest
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

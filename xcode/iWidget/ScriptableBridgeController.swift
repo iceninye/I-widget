@@ -24,6 +24,8 @@ final class ScriptableBridgeController: ObservableObject {
         (try? store.loadBookmark()) != nil
     }
 
+    var hasCourtData: Bool { courts.contains { $0.total > 0 } }
+
     func setEntry(_ entry: OverviewEntry) {
         self.entry = entry
         scheduleExport()

@@ -127,6 +127,12 @@ async function safeAsync(fn, fallback) {
   }
 }
 
+function appDeepLink(value, expectedHost) {
+  const link = typeof value === "string" ? value.trim() : "";
+  const match = link.match(/^iwidget:\/\/(duty|info|court)(?:[?#].*)?$/);
+  return match && (!expectedHost || match[1] === expectedHost) ? link : "";
+}
+
 function readDevice() {
   const level = safe(() => Device.batteryLevel(), null);
   return {
@@ -456,7 +462,8 @@ function validatePayload(raw, now) {
       string(required(entry.categoryTitle, `${categoryPath}.categoryTitle`), `${categoryPath}.categoryTitle`, 200);
       number(required(entry.count, `${categoryPath}.count`), `${categoryPath}.count`, 0, 10000, true);
     });
-    string(required(day.deepLink, `${path}.deepLink`), `${path}.deepLink`, 2048);
+    const dayLink = appDeepLink(required(day.deepLink, `${path}.deepLink`), "court");
+    if (!dayLink) fail(`${path}.deepLink`, "只接受 iwidget://duty、info 或 court 連結");
     array(required(day.cases, `${path}.cases`), `${path}.cases`, 80).forEach((caseItem, caseIndex) => {
       const entry = object(caseItem, `${path}.cases[${caseIndex}]`);
       const casePath = `${path}.cases[${caseIndex}]`;
@@ -470,7 +477,8 @@ function validatePayload(raw, now) {
       string(required(entry.category, `${casePath}.category`), `${casePath}.category`, 80);
       string(required(entry.categoryTitle, `${casePath}.categoryTitle`), `${casePath}.categoryTitle`, 200);
       string(required(entry.detailText, `${casePath}.detailText`), `${casePath}.detailText`, 1000);
-      string(required(entry.deepLink, `${casePath}.deepLink`), `${casePath}.deepLink`, 2048);
+      const caseLink = appDeepLink(required(entry.deepLink, `${casePath}.deepLink`), "court");
+      if (!caseLink) fail(`${casePath}.deepLink`, "只接受 iwidget://court 連結");
     });
   });
 
@@ -478,6 +486,7 @@ function validatePayload(raw, now) {
   return {
     data: root,
     generatedAt,
+    serviceDate,
     parsedFreshness,
     system: { capturedAt, battery: parsedBattery, storage: parsedStorage, uptimeSeconds, bootAt },
   };
@@ -537,7 +546,7 @@ async function loadSnapshot() {
         const localDirectory = safe(() => local && local.documentsDirectory(), null);
         if (local && localDirectory) {
           const localPath = `${localDirectory.replace(/\/$/, "")}/${CONFIG.cacheName}`;
-          await safeAsync(() => local.writeString(raw, localPath), null);
+          await safeAsync(() => local.writeString(localPath, raw), null);
         }
         return { ...validated, raw, source: "iCloud" };
       }
@@ -576,12 +585,35 @@ function dayProgress(now) {
 }
 
 function pct(fraction) {
-  return fraction === null || fraction === undefined ? "—" : `${Math.round(fraction * 100)}%`;
+  return typeof fraction !== "number" || !Number.isFinite(fraction) || fraction < 0 || fraction > 1
+    ? "—" : `${Math.round(fraction * 100)}%`;
 }
 
 function pad(value) { return String(value).padStart(2, "0"); }
 function hhmm(date) { return `${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 function dateCode(now) { return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`; }
+function hongKongDate(now) { return new Date(now.getTime() + 8 * 60 * 60 * 1000); }
+function courtDateCode(now) {
+  const date = hongKongDate(now);
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`;
+}
+function courtMinute(now) {
+  const date = hongKongDate(now);
+  return date.getUTCHours() * 60 + date.getUTCMinutes();
+}
+function serviceDateCode(now) {
+  // 香港固定 UTC+8；唔好用裝置時區，外遊／UTC 裝置都要跟 app 服務日。
+  const date = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  if (date.getUTCHours() < 4) date.setUTCDate(date.getUTCDate() - 1);
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`;
+}
+function serviceDateLabel(value) {
+  return `${value.slice(4, 6)}月${value.slice(6, 8)}日`;
+}
+function serviceDateWarning(snapshot) {
+  if (!snapshot || snapshot.serviceDate === serviceDateCode(NOW)) return "";
+  return `更份日期已過 · JSON 為 ${serviceDateLabel(snapshot.serviceDate)}`;
+}
 
 function formatBytes(value) {
   if (value === null || value === undefined) return MISSING;
@@ -657,13 +689,40 @@ function addClock(parent, size, align) {
   return date;
 }
 
-function nextReload(now) {
+function nextReload(now, view, snapshot) {
   // 00:xx 靜態時鐘要喺 01:00 前 reload；跨日亦要喺 00:00 前 reload。
   const limit = CONFIG.reloadMinutes * 60000;
   const edges = [0, 1].map((hour) => {
     const edge = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 20);
     return edge <= now ? new Date(edge.getTime() + 86400000) : edge;
   });
+  if (view === "court") {
+    // 法院發布時間跟香港時間，唔跟裝置時區；18:45 重讀 app 寫落 iCloud 嘅 JSON。
+    // 呢度只令 Scriptable 早啲 reload，唔會令 app 上網；週末唔設 18:45 邊界。
+    const shift = 8 * 60 * 60 * 1000;
+    const hkNow = new Date(now.getTime() + shift);
+    const hkEdge = (dayOffset, hour, minute, second = 20) => {
+      const day = new Date(Date.UTC(
+        hkNow.getUTCFullYear(), hkNow.getUTCMonth(), hkNow.getUTCDate() + dayOffset, hour, minute, second
+      ));
+      return new Date(day.getTime() - shift);
+    };
+    let probe = hkEdge(0, 18, 45);
+    if (probe <= now) probe = hkEdge(1, 18, 45);
+    const hkProbe = new Date(probe.getTime() + shift);
+    if (![0, 6].includes(hkProbe.getUTCDay())) edges.push(probe);
+
+    const data = snapshot && snapshot.data;
+    const items = data && data.courts && Array.isArray(data.courts.items) ? data.courts.items : [];
+    const hasCourtData = items.some((item) => !item.error && item.total > 0);
+    if (!hasCourtData) {
+      const minute = hkNow.getUTCHours() * 60 + hkNow.getUTCMinutes();
+      let retry = null;
+      if (minute >= 18 * 60 + 45 && minute < 19 * 60) retry = hkEdge(0, 19, 0);
+      else if (minute >= 19 * 60 && minute < 20 * 60) retry = new Date(now.getTime() + 30 * 60000);
+      if (retry && retry > now) edges.push(retry);
+    }
+  }
   const untilEdge = Math.min(...edges.map((edge) => edge - now));
   return new Date(now.getTime() + Math.min(limit, untilEdge));
 }
@@ -737,7 +796,28 @@ function systemVersionAtLeast(major, minor = 0) {
 }
 
 function widgetParameters() {
-  return safe(() => config.parameterValues, null) || safe(() => args && args.parameterValues, null) || {};
+  const raw = safe(() => args && args.widgetParameter, null);
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  if (!value) return {};
+  if (value.startsWith("{")) {
+    const parsed = safe(() => JSON.parse(value), null);
+    if (parsed && typeof parsed === "object") return parsed;
+  }
+  const parameters = {};
+  for (const part of value.split(/[&,;]/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const separator = token.indexOf("=");
+    if (separator < 0) {
+      if (!parameters.view) parameters.view = token;
+      continue;
+    }
+    const key = token.slice(0, separator).trim();
+    if (key) parameters[key] = token.slice(separator + 1).trim();
+  }
+  return parameters;
 }
 
 function supportsRefreshButton(family) {
@@ -1102,7 +1182,7 @@ function todayDutyCard(w, data, family, snapshot) {
   weatherRow.centerAlignContent();
   if (weather) {
     if (symbol(weatherRow, weather.symbol, C.blue, 14)) weatherRow.addSpacer(4);
-    text(weatherRow, data.weather.currentTemp === null ? "—" : `${Math.round(data.weather.currentTemp)}°`, 14, C.label, true);
+    text(weatherRow, Number.isFinite(data.weather.currentTemp) ? `${Math.round(data.weather.currentTemp)}°` : MISSING, 14, C.label, true);
     weatherRow.addSpacer(5);
     text(weatherRow, weather.codeText, 12, C.secondary, false);
     weatherRow.addSpacer(5);
@@ -1155,7 +1235,7 @@ function todayAlerts(w, data) {
     text(row, "天氣警告：未有資料", 11, C.secondary, false);
   } else if (warnings.items.length) {
     if (symbol(row, "exclamationmark.triangle.fill", warnings.items[0].severe ? C.red : C.orange, 12)) row.addSpacer(4);
-    text(row, warnings.items[0].text, 11, warnings.items[0].severe ? C.red : C.orange, true);
+    multilineText(row, warnings.items[0].text, 11, warnings.items[0].severe ? C.red : C.orange, true, 2);
     if (warnings.items.length > 1) { row.addSpacer(4); text(row, `+${warnings.items.length - 1} 項`, 10, C.orange, false); }
   }
   if (trainIssue || trainMissing) {
@@ -1214,7 +1294,6 @@ function todayNextEvent(w, data, family) {
   row.centerAlignContent();
   if (symbol(row, "clock", C.accent, 12)) row.addSpacer(4);
   text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
-  addRefreshControl(row, family);
   const detail = [event.place, event.detail].filter(Boolean).join(" · ");
   if (detail) text(w, detail, 11, C.secondary, false);
   return true;
@@ -1291,6 +1370,8 @@ function todaySchool(w, data, family) {
 function buildToday(w, family, snapshot) {
   const data = snapshot && snapshot.data;
   if (!data) { setupNotice(w); return; }
+  const staleServiceDate = serviceDateWarning(snapshot);
+  if (staleServiceDate) text(w, staleServiceDate, 9, C.orange, true);
   if (family === "small") {
     const status = dutyStatus(data.duty);
     viewHeading(w, "today", snapshot, family);
@@ -1319,6 +1400,7 @@ function buildToday(w, family, snapshot) {
   todayDutyCard(w, data, family, snapshot);
   w.addSpacer(6);
   todayAlerts(w, data);
+  addRefreshControl(w, family);
   if (family === "medium") return;
 
   w.addSpacer(6);
@@ -1424,7 +1506,7 @@ function buildInfo(w, family, snapshot) {
     else {
       if (data.weather.today) {
         const weather = data.weather.today;
-        lineRow(w, weather.codeText, `${data.weather.currentTemp === null ? MISSING : `${Math.round(data.weather.currentTemp)}°`} · ${weather.tempText}`, C.blue);
+        lineRow(w, weather.codeText, `${Number.isFinite(data.weather.currentTemp) ? `${Math.round(data.weather.currentTemp)}°` : MISSING} · ${weather.tempText}`, C.blue);
       }
       lineRow(w, "今日降雨", rainChance(data.weather.today));
       lineRow(w, "明日降雨", rainChance(data.weather.tomorrow));
@@ -1438,7 +1520,7 @@ function buildInfo(w, family, snapshot) {
 
 function relevantCases(day, now, includeAll = false) {
   if (!day) return [];
-  const minute = now.getHours() * 60 + now.getMinutes();
+  const minute = courtMinute(now);
   return day.cases
     .filter((entry) => entry.minutes !== null && entry.minutes !== undefined && (includeAll || entry.minutes >= minute - 20))
     .map((entry, index) => ({ entry, index }))
@@ -1449,8 +1531,8 @@ function relevantCases(day, now, includeAll = false) {
 function selectedCourtDays(data, now) {
   const stamp = data.courts.listDate === null || data.courts.listDate === undefined ? null : Date.parse(data.courts.listDate);
   const listDate = stamp === null ? null : new Date(stamp);
-  const today = dateCode(now);
-  const listCode = listDate ? dateCode(listDate) : null;
+  const today = courtDateCode(now);
+  const listCode = listDate ? courtDateCode(listDate) : null;
   // 過去日期匯出不可當成今日／未來案件；同日匯出仍保留今日 20 分鐘視窗。
   if (listCode && listCode < today) return [];
   const futureCode = listCode && listCode > today ? listCode : null;
@@ -1467,13 +1549,14 @@ function buildCourt(w, family, snapshot) {
   const selected = selectedCourtDays(data, NOW);
   if (!selected.length) {
     const stamp = data.courts.listDate === null || data.courts.listDate === undefined ? null : Date.parse(data.courts.listDate);
-    const listCode = stamp === null ? null : dateCode(new Date(stamp));
-    const message = !data.courts.items.length ? MISSING : listCode && listCode < dateCode(NOW) ? "沒有相關案件" : listCode && listCode > dateCode(NOW) ? "JSON 未有相關案件表" : "JSON 未有今日案件表";
+    const listCode = stamp === null ? null : courtDateCode(new Date(stamp));
+    const todayCode = courtDateCode(NOW);
+    const message = !data.courts.items.length ? MISSING : listCode && listCode < todayCode ? "沒有相關案件" : listCode && listCode > todayCode ? "JSON 未有相關案件表" : "JSON 未有今日案件表";
     text(w, message, 14, C.secondary, false);
     if (!data.courts.items.length) setupNotice(w, "請由 iWidget app 匯出法院案件");
     return;
   }
-  const minute = NOW.getHours() * 60 + NOW.getMinutes();
+  const minute = courtMinute(NOW);
   const maxCases = family === "small" ? 2 : family === "medium" ? 3 : isExtraLargeFamily(family) ? 8 : 5;
   let shown = 0;
   for (const { day, future } of selected) {
@@ -1488,13 +1571,13 @@ function buildCourt(w, family, snapshot) {
       const status = ongoing ? "進行中" : entry.minutes > minute || future ? "未開始" : "已過時間";
       const row = w.addStack();
       row.layoutVertically();
-      safe(() => { row.url = entry.deepLink; }, null);
+      safe(() => { row.url = appDeepLink(entry.deepLink) || null; }, null);
       const heading = text(row, `${time} · ${entry.caseNo} · ${status}`, family === "small" ? 11 : 13, ongoing ? C.green : C.label, true);
-      safe(() => { heading.url = entry.deepLink; }, null);
+      safe(() => { heading.url = appDeepLink(entry.deepLink) || null; }, null);
       const detail = [entry.room, entry.judge, entry.nature || entry.offence].filter(Boolean).join(" · ");
       if (detail && family !== "small") {
         const detailText = text(row, detail, 10, C.secondary, false);
-        safe(() => { detailText.url = entry.deepLink; }, null);
+        safe(() => { detailText.url = appDeepLink(entry.deepLink) || null; }, null);
       }
       shown++;
     }
@@ -1516,6 +1599,7 @@ function accessorySummary(view, snapshot) {
     return free === null ? MISSING : `${formatBytes(free)} 可用`;
   }
   if (view === "today") {
+    if (serviceDateWarning(snapshot)) return "更份日期已過";
     if (data.duty.failed) return data.duty.today ? "更份讀取失敗 · 沿用快取" : "更份讀取失敗";
     if (data.duty.today) return data.duty.today.times || data.duty.today.title;
     if (data.school.today.items.length) return data.school.today.items[0].title;
@@ -1593,7 +1677,7 @@ function widgetURL(view, snapshot) {
   if (view === "info") return "iwidget://info";
   if (view === "court") {
     const day = snapshot && snapshot.data.courts.items[0];
-    return day && day.deepLink ? day.deepLink : "iwidget://court";
+    return appDeepLink(day && day.deepLink) || "iwidget://court";
   }
   // clock／accessory 冇獨立 JSON 頁；開 app 今日更份，冇資料時亦適用。
   return "iwidget://duty";
@@ -1614,7 +1698,7 @@ function build(family, view, snapshot) {
   w.url = widgetURL(view, snapshot);
   w.spacing = 0;
   // 只代表 iOS 最早可 reload；實際時間由系統預算／低耗電決定。
-  w.refreshAfterDate = nextReload(NOW);
+  w.refreshAfterDate = nextReload(NOW, view, snapshot);
   if (view === "clock" && !family.startsWith("accessory")) {
     if (family === "small") buildSmall(w, device);
     else if (family === "medium") buildMedium(w, device);
@@ -1662,6 +1746,6 @@ if (config.runsInWidget) {
     accessoryInline: "presentAccessoryInline", accessoryCircular: "presentAccessoryCircular", accessoryRectangular: "presentAccessoryRectangular",
   }[family] || "presentLarge";
   if (family === "extraLargePortrait" && typeof widget.presentExtraLargePortrait !== "function") present = "presentExtraLarge";
-  await widget[present]();
+  await safeAsync(() => widget[present](), null);
 }
 Script.complete();

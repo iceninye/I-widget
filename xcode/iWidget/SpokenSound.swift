@@ -68,16 +68,36 @@ enum SpokenSound {
     }
 
     @MainActor private static var player: AVAudioPlayer?
+    @MainActor private static var previewGeneration = 0
 
     /// 試聽：錄一次再即刻播（用「播放」類別，靜音掣開咗都聽到，方便分辨係錄音定係靜音嘅問題）。
     @MainActor
     static func preview(_ text: String, settings: HandoverSettings) async -> Bool {
         guard let name = await make(id: "preview", text: text, settings: settings),
               let url = directory?.appendingPathComponent(name) else { return false }
+        previewGeneration += 1
+        let generation = previewGeneration
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         player = try? AVAudioPlayer(contentsOf: url)
-        return player?.play() ?? false
+        guard let player, player.play() else { deactivatePreviewAudio(); return false }
+        let duration = max(0.1, player.duration)
+        do {
+            try await Task.sleep(for: .seconds(duration + 0.15))
+        } catch {
+            player.stop()
+        }
+        // 連撳兩次試聽時，舊嗰次唔可以停返新開嗰段。
+        guard generation == previewGeneration else { return true }
+        deactivatePreviewAudio()
+        return true
+    }
+
+    @MainActor
+    private static func deactivatePreviewAudio() {
+        player?.stop()
+        player = nil
+        try? AVAudioSession.sharedInstance().setActive(false)
     }
 
     /// 每次錄音一個 synthesizer，錄完先釋放。
