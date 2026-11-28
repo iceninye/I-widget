@@ -97,7 +97,7 @@ function dutyCardGradient(tone) {
   return safe(() => {
     const gradient = new LinearGradient();
     gradient.colors = [dutyColor(tone), dutyColor(tone), dutyCardColor(tone)];
-    gradient.locations = [0, 0.015, 0.07];
+    gradient.locations = [0, 0.006, 0.014];
     gradient.startPoint = new Point(0, 0);
     gradient.endPoint = new Point(1, 0);
     return gradient;
@@ -827,10 +827,23 @@ function supportsRefreshButton(family) {
 }
 
 function addRefreshControl(parent, family) {
-  if (supportsRefreshButton(family) && typeof parent.addRefreshButton === "function") {
-    parent.addSpacer(6);
+  if (!supportsRefreshButton(family)) return;
+  const customAction = typeof parent.setAction === "function" && typeof parent.addRefreshButton === "function";
+  if (!customAction && typeof parent.addRefreshButton !== "function") return;
+  parent.addSpacer(6);
+  if (!customAction) {
     parent.addRefreshButton("重讀");
+    return;
   }
+  const button = parent.addStack();
+  button.layoutHorizontally();
+  button.centerAlignContent();
+  button.setPadding(3, 6, 3, 6);
+  button.cornerRadius = 8;
+  button.backgroundColor = C.card;
+  if (symbol(button, "arrow.clockwise", C.accent, 12)) button.addSpacer(3);
+  text(button, "重讀", 12, C.secondary, false);
+  button.setAction("重新讀取", { id: "refresh" });
 }
 
 function card(parent, { icon, tint, title, value, valueColor, fraction, barColor }) {
@@ -1191,7 +1204,10 @@ function todayDutyCard(w, data, family, snapshot) {
   weatherRow.centerAlignContent();
   if (weather) {
     if (symbol(weatherRow, weather.symbol, C.blue, 14)) weatherRow.addSpacer(4);
-    text(weatherRow, Number.isFinite(data.weather.currentTemp) ? `${Math.round(data.weather.currentTemp)}°` : MISSING, 16, C.label, true);
+    const currentLabel = Number.isFinite(data.weather.currentTemp)
+      ? `${isExtraLargeFamily(family) ? "即時 " : ""}${Math.round(data.weather.currentTemp)}°`
+      : MISSING;
+    text(weatherRow, currentLabel, 16, C.label, true);
     weatherRow.addSpacer(5);
     text(weatherRow, weather.codeText, 13, C.secondary, false);
     weatherRow.addSpacer(5);
@@ -1270,7 +1286,7 @@ function todayWeekStrip(w, data, family) {
     cell.layoutVertically();
     cell.centerAlignContent();
     cell.size = new Size(cellWidth, 0);
-    text(cell, `${item.weekday}${item.dayNumber}`, 11, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
+    text(cell, `${item.weekday} ${Number(item.dayNumber)}`, 11, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
     const label = cell.addStack();
     label.layoutHorizontally();
     label.centerAlignContent();
@@ -1296,6 +1312,27 @@ function todayWeekStrip(w, data, family) {
   return true;
 }
 
+function uniqueParts(parts) {
+  const result = [];
+  for (const value of parts) {
+    const normalized = String(value || "").trim().replace(/\s+/g, " ");
+    if (normalized && !result.includes(normalized)) result.push(normalized);
+  }
+  return result;
+}
+
+function eventDayPrefix(at) {
+  const code = courtDateCode(new Date(at));
+  const today = courtDateCode(NOW);
+  if (code === today) return "";
+  if (code === courtDateCode(new Date(NOW.getTime() + 86400000))) return "明日 ";
+  return `${Number(code.slice(4, 6))}/${Number(code.slice(6, 8))} `;
+}
+
+function eventDetail(event) {
+  return uniqueParts([event.place, event.note]).join(" · ");
+}
+
 function todayNextEvent(w, data, family) {
   const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
@@ -1304,14 +1341,21 @@ function todayNextEvent(w, data, family) {
   row.layoutHorizontally();
   row.centerAlignContent();
   if (symbol(row, "clock", C.accent, 13)) row.addSpacer(4);
-  text(row, `接下來 ${event.displayAt} · ${event.action}`, 12, C.label, true);
+  const title = text(row, `接下來 ${eventDayPrefix(event.at)}${event.displayAt} · ${event.action}`, 12, C.label, true);
+  title.lineLimit = 1;
+  title.minimumScaleFactor = 0.85;
   row.addSpacer();
-  const detail = [event.title, event.place, event.detail].filter(Boolean).join(" · ");
+  // Widget 只顯示結構化欄位；title／detail 係通知完整句，唔可以再拼落副標。
+  const detail = eventDetail(event);
   if (detail) {
-    const detailText = multilineText(w, detail, 12, C.secondary, false, 2);
+    const detailText = multilineText(w, detail, 12, C.secondary, false, 1);
     detailText.minimumScaleFactor = 0.85;
   }
   return true;
+}
+
+function dutyLocationLabel(value) {
+  return value.includes("→") ? `路線 · ${value}` : `地點 · ${value}`;
 }
 
 function todayTomorrow(w, data, compact = false) {
@@ -1331,8 +1375,8 @@ function todayTomorrow(w, data, compact = false) {
   if (day.times && !compact) { row.addSpacer(6); text(row, day.times, 12, C.secondary, false); }
   row.addSpacer();
   const details = compact
-    ? [day.times, day.route && `路線 ${day.route}`].filter(Boolean).join(" · ")
-    : day.route && `路線 · ${day.route}`;
+    ? [day.times, day.route && dutyLocationLabel(day.route)].filter(Boolean).join(" · ")
+    : day.route && dutyLocationLabel(day.route);
   if (details) text(w, details, 11, C.secondary, false);
   return true;
 }
@@ -1361,14 +1405,16 @@ function todaySchool(w, data, family) {
       const row = w.addStack();
       row.layoutHorizontally();
       row.centerAlignContent();
+      if (symbol(row, prefix === "今" ? "pin.fill" : "calendar", prefix === "今" ? C.indigo : C.orange, 12)) row.addSpacer(4);
+      else row.addSpacer(16);
       text(row, prefix, 12, prefix === "今" ? C.indigo : C.secondary, true);
       row.addSpacer(5);
-      text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 12, C.secondary, false);
-      row.addSpacer(6);
       const title = text(row, item.title, 13, C.label, false);
       title.lineLimit = 1;
       title.minimumScaleFactor = 0.85;
       row.addSpacer();
+      const time = text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 11, C.secondary, false);
+      safe(() => time.rightAlignText());
     });
     if (rows.length > limit) text(w, `另有 ${rows.length - limit} 項`, 10, C.secondary, false);
   }
@@ -1407,7 +1453,7 @@ function buildToday(w, family, snapshot) {
       add(`${data.duty.today.title || "今日更份"}${data.duty.today.times ? ` · ${data.duty.today.times}` : ""}`, C.label, true);
     } else {
       const event = data.duty.events.filter((item) => Date.parse(item.at) >= NOW).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
-      if (event) add(`${event.displayAt} · ${event.action} ${event.title}`, C.label, true);
+      if (event) add(uniqueParts([`${eventDayPrefix(event.at)}${event.displayAt} · ${event.action}`, eventDetail(event)]).join(" · "), C.label, true);
     }
     const school = data.school.today;
     const failure = schoolFailureText(data.school.failed);
@@ -1428,7 +1474,11 @@ function buildToday(w, family, snapshot) {
 
   w.addSpacer(6);
   todayWeekStrip(w, data, family);
-  w.addSpacer(5);
+  if (data.duty.weekText) {
+    w.addSpacer(3);
+    text(w, `今週（一至日） ${data.duty.weekText}`, 11, C.secondary, false);
+  }
+  w.addSpacer(8);
   if (family === "extraLargePortrait") {
     // 直向特大卡下半部分兩欄，換取更大字級同長句換行空間。
     const screenWidth = safe(() => Device.screenSize().width, 402);
@@ -1441,25 +1491,31 @@ function buildToday(w, family, snapshot) {
     const left = columns.addStack();
     left.layoutVertically();
     left.size = new Size(leftWidth, 0);
+    left.setPadding(8, 8, 8, 8);
+    left.cornerRadius = 10;
+    left.backgroundColor = C.card;
     columns.addSpacer(12);
     const right = columns.addStack();
     right.layoutVertically();
     right.size = new Size(rightWidth, 0);
+    right.setPadding(8, 8, 8, 8);
+    right.cornerRadius = 10;
+    right.backgroundColor = C.card;
     columns.addSpacer();
+    sectionLabel(left, "更份動態");
+    left.addSpacer(3);
     todayNextEvent(left, data, family);
-    if (data.duty.weekText) text(left, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
-    left.addSpacer(5);
+    left.addSpacer(4);
     todayTomorrow(left, data, true);
     todaySchool(right, data, "large");
     return;
   }
+  sectionLabel(w, "更份動態");
+  w.addSpacer(3);
   todayNextEvent(w, data, family);
-  if (data.duty.weekText) {
-    text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
-  }
   w.addSpacer(5);
   todayTomorrow(w, data);
-  w.addSpacer(6);
+  w.addSpacer(10);
   todaySchool(w, data, family);
 }
 
