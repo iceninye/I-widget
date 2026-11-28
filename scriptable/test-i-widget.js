@@ -36,6 +36,7 @@ class Element {
   addStack() { return this.add("stack", {}); }
   addProgress(value, options) { return this.add("progress", { value, options }); }
   addRefreshButton(title) { return this.add("refreshButton", { title }); }
+  setAction(title, options) { this.action = { title, options }; }
   setPadding(...p) { this.padding = p; }
   layoutHorizontally() { this.layout = "h"; }
   layoutVertically() { this.layout = "v"; }
@@ -219,7 +220,7 @@ async function run({
   family = "large", view = "clock", now = view === "court" ? COURT_NOW : DEFAULT_NOW, device = {}, runsInWidget = true,
   noSymbols = false, iCloud, cache, iCloudOptions = {}, localOptions = {},
   widgetParameter = { view }, fileManager = true, args, alerts, opaqueDynamicColors = false,
-  nativeProgress = true, refreshControls = true, portraitPreview = true,
+  nativeProgress = true, refreshControls = true, widgetActions = true, portraitPreview = true,
 } = {}) {
   const state = { widget: null, completed: false, widgetObj: null, iCloud: null, local: null, alerts: [] };
   const dev = {
@@ -269,11 +270,14 @@ async function run({
       state.widgetObj = this;
       if (!nativeProgress) this.addProgress = undefined;
       if (!refreshControls) this.addRefreshButton = undefined;
+      if (!widgetActions) this.setAction = undefined;
       this.runtimeElementClass = class extends Element {
         constructor(kind) {
           super(kind);
+          this.runtimeElementClass = this.constructor;
           if (!nativeProgress) this.addProgress = undefined;
           if (!refreshControls) this.addRefreshButton = undefined;
+          if (!widgetActions) this.setAction = undefined;
         }
       };
       if (!portraitPreview) this.presentExtraLargePortrait = undefined;
@@ -295,6 +299,7 @@ async function test(name, fn) {
 function equal(actual, expected, message = "") { assert.deepStrictEqual(actual, expected, message); }
 function ok(value, message = "") { assert.ok(value, message); }
 function has(widget, value) { return texts(widget).includes(value); }
+function refreshControls(widget) { return all(widget, (e) => e.kind === "refreshButton" || e.action?.options?.id === "refresh"); }
 function cachePath(state) { return `${state.local.directory}i-widget-last-good.json`; }
 function cloudPath(state) { return `${state.iCloud.directory}i-widget.json`; }
 
@@ -383,7 +388,7 @@ if (require.main === module) (async () => {
     ok(has(state.widget, "00157 錦上路"));
     ok(has(state.widget, "15:05–23:15"));
     equal(state.local.files.get(cachePath(state)), raw);
-    ok(!texts(state.widget).some((value) => value === "五23"));
+    ok(!texts(state.widget).some((value) => value === "五 23"));
   });
   for (const [name, iCloud] of [
     ["corrupt", "{not json"],
@@ -789,17 +794,66 @@ if (require.main === module) (async () => {
   });
 
   console.log("\n【P】today 規劃與 info 內容");
-  await test("today events 只顯示未發生，並有 action/title/time/place/detail", async () => {
-    const output = texts((await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
-    for (const value of ["15:30", "落更", "錦上路交接", "錦上路站", "帶交接文件"]) ok(output.includes(value), value);
+  await test("today events 只顯示未發生，並以結構化地點／備註代替通知正文", async () => {
+    const data = planningFixture();
+    data.duty.events = [dutyEvent(hkIso(13, 0), { title: "已發生事件" }), dutyEvent(hkIso(15, 30), {
+      action: "返工", displayAt: "05:05", at: hkIso(5, 5, 24),
+      title: "返工 05:05 · 紅磡廠 HHS", detail: "返工，05:05 喺紅磡廠 HHS，506 更",
+      place: "紅磡廠 HHS", note: "506 更",
+    })];
+    const widget = (await run({ view: "today", family: "large", now: hkDate(20, 0, 23), iCloud: JSON.stringify(data) })).widget;
+    const output = texts(widget).join("\n");
+    ok(has(widget, "接下來 明日 05:05 · 返工"));
+    ok(has(widget, "紅磡廠 HHS · 506 更"));
+    ok(!output.includes("返工，05:05"));
     ok(!output.includes("已發生事件"));
+    const detail = all(widget, (e) => e.kind === "text" && e.text === "紅磡廠 HHS · 506 更")[0];
+    equal(detail.lineLimit, 1);
+    equal(detail.minimumScaleFactor, 0.85);
+  });
+  await test("結構化欄位空白時省略副標，唔退回通知 title", async () => {
+    const data = planningFixture();
+    data.duty.events = [dutyEvent(hkIso(15, 30), {
+      title: "完整通知標題唔應該出現", detail: "完整通知正文唔應該出現", place: "", note: "",
+    })];
+    for (const family of ["large", "small"]) {
+      if (family === "small") data.duty.today = null;
+      const widget = (await run({ view: "today", family, iCloud: JSON.stringify(data) })).widget;
+      const output = texts(widget).join("\n");
+      ok(!output.includes("完整通知標題"));
+      ok(!output.includes("完整通知正文"));
+      ok(!output.includes("undefined"));
+      ok(!texts(widget).some((value) => value.endsWith(" · ")));
+      ok(has(widget, family === "small" ? "15:30 · 落更" : "接下來 15:30 · 落更"));
+    }
+  });
+  await test("今日事件唔加明日，更遠日期用月／日標示", async () => {
+    const data = planningFixture();
+    data.duty.events = [dutyEvent(hkIso(15, 30), { displayAt: "15:30" }), dutyEvent(hkIso(5, 5, 25), { displayAt: "05:05" })];
+    for (const [now, at, prefix] of [
+      [hkDate(14, 0, 23), hkIso(15, 30), "接下來 15:30 · 落更"],
+      [hkDate(20, 0, 23), hkIso(5, 5, 25), "接下來 10/25 05:05 · 落更"],
+    ]) {
+      data.duty.events = [dutyEvent(at, { displayAt: prefix.includes("05:05") ? "05:05" : "15:30" })];
+      ok(has((await run({ view: "today", family: "large", now, iCloud: JSON.stringify(data) })).widget, prefix), prefix);
+    }
+  });
+  await test("today 明日同一地點標地點，有箭頭先標路線", async () => {
+    const data = planningFixture();
+    data.duty.tomorrow.route = "紅磡廠 HHS";
+    let output = texts((await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("地點 · 紅磡廠 HHS"));
+    ok(!output.includes("路線 · 紅磡廠 HHS"));
+    data.duty.tomorrow.route = "紅磡廠 HHS → 烏溪沙";
+    output = texts((await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget).join("\n");
+    ok(output.includes("路線 · 紅磡廠 HHS → 烏溪沙"));
   });
   await test("today 大尺寸補回 7 日更份、明日、假期、學校；medium 保持精簡", async () => {
     for (const family of ["large", "extraLarge", "extraLargePortrait"]) {
       const output = texts((await run({ view: "today", family, iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
       for (const value of ["00158 屯門", "06:00–14:00", "重陽節", "10月26日", "3 日後", "明日科學測驗"]) ok(output.includes(value), `${family}: ${value}`);
-      for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
-      equal(output.includes("本週 5 更"), true, `${family}: week summary`);
+      for (const label of ["五 23", "六 24", "日 25", "一 26", "二 27", "三 28", "四 29"]) ok(output.includes(label), `${family}: ${label}`);
+      equal(output.includes("今週（一至日） 5 更"), true, `${family}: week summary`);
     }
     const medium = texts((await run({ view: "today", family: "medium", iCloud: JSON.stringify(planningFixture()) })).widget).join("\n");
     ok(!medium.includes("明日科學測驗"));
@@ -814,10 +868,58 @@ if (require.main === module) (async () => {
   await test("today 主要文字維持可讀字級", async () => {
     const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
     const find = (value) => texts(widget).includes(value) ? all(widget, (e) => e.kind === "text" && e.text === value)[0] : null;
-    equal(find("五23").font.size, 11);
+    equal(find("五 23").font.size, 11);
     equal(find("死早").font.size, 12);
     equal(all(widget, (e) => e.kind === "text" && e.text.startsWith("接下來 15:30"))[0].font.size, 12);
     equal(find("明日科學測驗").font.size, 13);
+  });
+  await test("今週統計緊跟七日表，屬於上半分組而唔夾喺動態之間", async () => {
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
+    const rows = widget.children.filter((child) => child.kind !== "spacer");
+    const week = rows.findIndex((row) => row.kind === "stack" && row.children.filter((child) => child.size?.width === 40).length === 7);
+    const summary = rows.findIndex((row) => row.kind === "text" && row.text === "今週（一至日） 5 更");
+    const dynamics = rows.findIndex((row) => row.kind === "stack" && row.children.some((child) => child.kind === "text" && child.text === "更份動態"));
+    ok(week >= 0);
+    equal(summary, week + 1, `week row ${week}, summary row ${summary}`);
+    ok(dynamics >= summary + 1, `dynamics row ${dynamics}`);
+    const nextEvent = rows.findIndex((row) => row.children?.some((child) => child.kind === "text" && child.text.startsWith("接下來")));
+    ok(nextEvent > dynamics);
+    const summaryChild = widget.children.findIndex((child) => child.kind === "text" && child.text === "今週（一至日） 5 更");
+    equal(widget.children[summaryChild + 1].length, 8);
+  });
+  await test("學校列固定圖示位、標題左欄同全日右欄", async () => {
+    const data = planningFixture();
+    data.school.today.items[0].allDay = true;
+    const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(data) })).widget;
+    const row = all(widget, (e) => e.kind === "stack" && e.children.some((child) => child.kind === "text" && child.text === "中三家長會"))[0];
+    equal(row.layout, "h");
+    equal(row.children[0].kind, "image");
+    equal(row.children[0].image.symbol, "pin.fill");
+    equal(row.children.map((child) => child.kind), ["image", "spacer", "text", "spacer", "text", "spacer", "text"]);
+    equal(row.children[4].text, "中三家長會");
+    equal(row.children[4].lineLimit, 1);
+    equal(row.children[4].minimumScaleFactor, 0.85);
+    equal(row.children[6].text, "全日");
+    equal(row.children[6].font.size, 11);
+    equal(row.children[6].textAlign, "right");
+    equal(row.children[5].length, undefined);
+  });
+  await test("extraLarge 即時氣溫同預報最高溫有唔同標籤", async () => {
+    const widget = (await run({ view: "today", family: "extraLarge", iCloud: JSON.stringify(planningFixture()) })).widget;
+    ok(has(widget, "即時 28°"));
+    equal(texts(widget).filter((value) => value === "即時 28°").length, 1);
+  });
+  await test("small 冇今日卡時亦用結構化事件，唔重複通知全文", async () => {
+    const data = planningFixture();
+    data.duty.today = null;
+    data.duty.events = [dutyEvent(hkIso(5, 5, 24), {
+      action: "返工", displayAt: "05:05", title: "返工 05:05 · 紅磡廠 HHS",
+      detail: "返工，05:05 喺紅磡廠 HHS，506 更", place: "紅磡廠 HHS", note: "506 更",
+    })];
+    const widget = (await run({ view: "today", family: "small", now: hkDate(20, 0, 23), iCloud: JSON.stringify(data) })).widget;
+    ok(has(widget, "明日 05:05 · 返工 · 紅磡廠 HHS · 506 更"));
+    const output = texts(widget).join("\n");
+    ok(!output.includes("返工，05:05"));
   });
   await test("today small 維持精簡，仍有 cached duty 失敗提示", async () => {
     const data = planningFixture();
@@ -825,7 +927,7 @@ if (require.main === module) (async () => {
     const output = texts((await run({ view: "today", family: "small", iCloud: JSON.stringify(data) })).widget).join("\n");
     ok(output.includes("更份讀取失敗 · 沿用快取"));
     ok(output.includes("00157 錦上路"));
-    ok(!output.includes("本週 5 更"));
+    ok(!output.includes("今週（一至日） 5 更"));
     ok(!output.includes("天氣7"));
   });
   await test("today small 過期橫幅仍限四行，優先保留主要更份同錯誤", async () => {
@@ -859,7 +961,7 @@ if (require.main === module) (async () => {
       equal(output.includes("事件199"), false, family);
       equal(all(widget, (e) => e.kind === "stack" && e.cornerRadius === 18).length, 1, `${family}: one duty card`);
       if (family !== "medium") {
-        for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
+        for (const label of ["五 23", "六 24", "日 25", "一 26", "二 27", "三 28", "四 29"]) ok(output.includes(label), `${family}: ${label}`);
         equal(output.includes("活動2"), true, `${family}: school visible`);
         equal(output.includes("活動5"), family === "extraLarge", `${family}: school budget`);
         equal(output.includes("活動9"), false, `${family}: school cap`);
@@ -913,35 +1015,50 @@ if (require.main === module) (async () => {
     equal(defaultState.widget.backgroundStyle, "default");
     ok(defaultState.widget.backgroundColor);
   });
-  await test("today 中同大尺寸即使冇未來事件都有重讀鈕", async () => {
+  await test("today 中同大尺寸即使冇未來事件都有細細重讀控制", async () => {
     for (const family of ["medium", "large", "extraLarge", "extraLargePortrait"]) {
       const state = await run({ view: "today", family, iCloud: JSON.stringify(fixture()) });
-      equal(all(state.widget, (e) => e.kind === "refreshButton").length, 1, family);
+      const controls = refreshControls(state.widget);
+      equal(controls.length, 1, family);
+      equal(controls[0].kind, "stack");
+      equal(controls[0].action, { title: "重新讀取", options: { id: "refresh" } });
+      ok(controls[0].backgroundColor.dynamic);
+      const label = all(controls[0], (e) => e.kind === "text" && e.text === "重讀")[0];
+      equal(label.font.size, 12);
+      equal(all(controls[0], (e) => e.kind === "image" && e.image.symbol === "arrow.clockwise").length, 1);
     }
     const small = await run({ view: "today", family: "small", iCloud: JSON.stringify(fixture()) });
-    equal(all(small.widget, (e) => e.kind === "refreshButton").length, 0);
+    equal(refreshControls(small.widget).length, 0);
   });
-  await test("更新鈕只用喺支援互動嘅 Home Screen family，保留 URL 與舊版 fallback", async () => {
+  await test("更新控制只用喺支援互動 family，保留 URL 同舊版 fallback", async () => {
     for (const family of ["small", "medium", "large", "extraLarge", "extraLargePortrait", "accessoryRectangular"]) {
       const state = await run({ view: "info", family, iCloud: JSON.stringify(fixture()) });
-      const buttons = all(state.widget, (e) => e.kind === "refreshButton");
+      const controls = refreshControls(state.widget);
       const supported = ["medium", "large", "extraLarge", "extraLargePortrait"].includes(family);
-      equal(buttons.length, supported ? 1 : 0, family);
-      if (supported) equal(buttons[0].title, "重讀");
+      equal(controls.length, supported ? 1 : 0, family);
+      if (supported) ok(texts(controls[0]).includes("重讀"));
       equal(state.widget.url, "iwidget://info");
     }
     const oldOS = await run({ view: "info", device: { systemVersion: () => "16.9" }, iCloud: JSON.stringify(fixture()) });
-    equal(all(oldOS.widget, (e) => e.kind === "refreshButton").length, 0);
-    const legacy = await run({ view: "info", refreshControls: false, iCloud: JSON.stringify(fixture()) });
-    equal(all(legacy.widget, (e) => e.kind === "refreshButton").length, 0);
-    equal(legacy.widget.url, "iwidget://info");
+    equal(refreshControls(oldOS.widget).length, 0);
+    const legacy = await run({ view: "info", widgetActions: false, iCloud: JSON.stringify(fixture()) });
+    equal(all(legacy.widget, (e) => e.kind === "refreshButton").length, 1);
+    equal(all(legacy.widget, (e) => e.kind === "refreshButton")[0].title, "重讀");
+    const disabled = await run({ view: "info", refreshControls: false, iCloud: JSON.stringify(fixture()) });
+    equal(refreshControls(disabled.widget).length, 0);
+    equal(disabled.widget.url, "iwidget://info");
+    const nestedLegacy = await run({ view: "today", widgetActions: false, iCloud: JSON.stringify(fixture()) });
+    equal(all(nestedLegacy.widget, (e) => e.kind === "refreshButton").length, 1);
+    equal(refreshControls(nestedLegacy.widget).length, 1);
+    const nestedDisabled = await run({ view: "today", refreshControls: false, iCloud: JSON.stringify(fixture()) });
+    equal(refreshControls(nestedDisabled.widget).length, 0);
   });
   await test("extraLargePortrait 有完整 today 內容並用新預覽 API，缺少時退回 extraLarge", async () => {
     const data = planningFixture();
     const preview = await run({ view: "today", family: "extraLargePortrait", runsInWidget: false, iCloud: JSON.stringify(data) });
     equal(preview.widgetObj.presented, "extraLargePortrait");
     const output = texts(preview.widgetObj).join("\n");
-    for (const value of ["00158 屯門", "本週 5 更", "明日科學測驗", "重陽節"]) ok(output.includes(value), value);
+    for (const value of ["00158 屯門", "今週（一至日） 5 更", "明日科學測驗", "重陽節"]) ok(output.includes(value), value);
     const legacy = await run({ family: "extraLargePortrait", runsInWidget: false, portraitPreview: false, iCloud: JSON.stringify(data) });
     equal(legacy.widgetObj.presented, "extraLarge");
   });
@@ -963,9 +1080,9 @@ if (require.main === module) (async () => {
     equal(card.children[card.children.length - 1].kind, "spacer");
     equal(card.children[0].length, undefined);
     equal(card.children[card.children.length - 1].length, undefined);
-    equal(all(card, (e) => e.kind === "refreshButton").length, 1);
+    equal(refreshControls(card).length, 1);
     equal(card.backgroundGradient.colors.length, 3);
-    equal(card.backgroundGradient.locations, [0, 0.015, 0.07]);
+    equal(card.backgroundGradient.locations, [0, 0.006, 0.014]);
     equal([card.backgroundGradient.startPoint.x, card.backgroundGradient.endPoint.x], [0, 1]);
     ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 270 && e.size.height === 7).length >= 1);
     const cells = all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 40 && e.size.height === 0);
@@ -984,12 +1101,13 @@ if (require.main === module) (async () => {
     ok(!texts(widget).includes("..."));
     ok(!texts(widget).includes("…"));
   });
-  await test("today 長事件拆行，直向特大卡下半部分兩欄", async () => {
+  await test("today 事件唔硬斬長句，直向特大卡下半部分兩欄", async () => {
     const data = planningFixture();
     data.duty.events = [dutyEvent(hkIso(15, 30), {
       title: "紅磡站交接並帶同沿途路線資料", place: "紅磡站月台", detail: "帶交接文件核對車序",
+      note: "Run 16 · 交 118 更",
     })];
-    const detail = "紅磡站交接並帶同沿途路線資料 · 紅磡站月台 · 帶交接文件核對車序";
+    const detail = "紅磡站月台 · Run 16 · 交 118 更";
     for (const width of [375, 393, 430]) {
       const state = await run({
         view: "today", family: "extraLargePortrait", iCloud: JSON.stringify(data),
@@ -997,10 +1115,15 @@ if (require.main === module) (async () => {
       });
       const widget = state.widget;
       ok(has(widget, "接下來 15:30 · 落更"));
+      const title = all(widget, (e) => e.kind === "text" && e.text === "接下來 15:30 · 落更")[0];
+      equal(title.lineLimit, 1);
+      equal(title.minimumScaleFactor, 0.85);
       const detailText = all(widget, (e) => e.kind === "text" && e.text === detail)[0];
       ok(detailText);
-      equal(detailText.lineLimit, 2);
+      equal(detailText.lineLimit, 1);
       equal(detailText.minimumScaleFactor, 0.85);
+      ok(!texts(widget).includes("紅磡站交接並帶同沿途路線資料"));
+      ok(!texts(widget).includes("帶交接文件核對車序"));
       ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 270 && e.size.height === 7).length >= 1);
       equal(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 320 && e.size.height === 7).length, 0);
       const columns = widget.children.find((e) => e.kind === "stack" && e.layout === "h"
@@ -1009,7 +1132,7 @@ if (require.main === module) (async () => {
       const [left, right] = columns.children.filter((child) => child.kind === "stack" && child.layout === "v");
       ok(left.size.width > 0 && right.size.width > 0);
       ok(left.size.width + right.size.width + 12 <= width - 70);
-      ok(has(left, "本週 5 更"));
+      ok(has(widget, "今週（一至日） 5 更"));
       ok(has(left, "00158 屯門"));
       ok(has(right, "明日科學測驗"));
       ok(!has(left, "明日科學測驗"));

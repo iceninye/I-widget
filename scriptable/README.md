@@ -118,17 +118,19 @@ courts: { listDate, updatedAt, items }
 - `reloadMinutes`：一般最早 reload 間隔，預設 60 分鐘；午夜／01:00 正確性邊界仍會提前。
 - `previewFamily`、`previewView`：Scriptable app 直接執行時嘅預覽；`previewFamily` 可設 `extraLargePortrait`。
 - `transparentBackground`：設 `true` 可預設透明背景；仍受 iOS／iPadOS 27.2+ 同非鎖屏限制。widget parameter `background=transparent` 亦可個別開啟。
-- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge`／`extraLargePortrait` 會顯示「重讀」鈕，`today` 唔需要先有未來事件。按鈕只重新執行 Scriptable 同讀取現有 JSON／cache，**唔會令 app 重新上網或匯出**；呢個互動範圍優先於 containing stack 嘅 URL。
+- `showRefreshButton`：預設開；iOS／iPadOS 17+ 嘅 `medium`／`large`／`extraLarge`／`extraLargePortrait` 會顯示 12pt「重讀」小控制，`today` 唔需要先有未來事件。有 `setAction` 時用 `arrow.clockwise` 自訂控制，並以 `id: "refresh"` 重新執行 script；兩類互動 API 都存在先會啟用。按鈕只重新執行 Scriptable 同讀取現有 JSON／cache，**唔會令 app 重新上網或匯出**；呢個互動範圍優先於 containing stack 嘅 URL。
 - `maxPayloadBytes`、`cacheName`：512 KiB 上限同 `i-widget-last-good.json`。
 
 ## Scriptable 1.8 增強
 
 - `clock` 嘅電量、亮度、今日進度同鎖屏圓電量改用原生 `addProgress()`；更份時間條仍保留能精確表示返工至放工區段嘅幾何色條。
 - 原生 circular progress 返回 stack 直接承载中間電量文字，唔另加一行，避免鎖屏空間不足。
-- 透明背景、重讀鈕同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 或 `presentExtraLargePortrait` 時安全略過／fallback。
+- 透明背景、重讀控制同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 時安全略過，有舊按鈕但冇 `setAction` 時退回原生按鈕，冇 `presentExtraLargePortrait` 時 fallback。
 - 主要更份時間用 `Font.heavyMonospacedSystemFont`，倒數用 `WidgetText.rightAlignText()`；API 不存在時仍有原本字型同對齊 fallback。
-- 今日主卡以左至右漸層重現原生色條；七日格等寬，今日格唔會再被固定 28pt 寬度截成「…」。大尺寸補回本週更份摘要，放工後有明日更份或未來「返工」事件就顯示「下一更」倒數。
-- 今日卡更份背景改用 full-width 橫向框架，重讀掣收入標題列；七日格以彈性 spacer 拉滿，主要字級提高。長事件拆成兩行，直向特大卡下半部分使用兩欄，減少被迫縮細字體。
+- 今日主卡以左至右漸層重現原生色條，色條收窄到大約 4–5pt；七日格等寬，日期写成「六 24」格式。大尺寸補回今週（一至日）更份摘要，放工後有明日更份或未來「返工」事件就顯示「下一更」倒數。
+- 今日卡更份背景改用 full-width 橫向框架，重讀掣收入標題列；七日格以彈性 spacer 拉滿，主要字級提高。特大尺寸即時氣溫明確標成「即時 28°」，同最高溫分開。
+- 「接下來」只用事件嘅 `action`／`displayAt` 組標題，副標只用結構化 `place`／`note`，避免重複通知全文；非今日事件加「明日」或月／日。明日詳情同一地點叫「地點」，有 `→` 先叫「路線」。長副標維持單行並容許適度縮放。
+- 今週統計緊跟七日表，屬於上半分組；「更份動態」同「學校」留 8–10pt 間距。學校列固定圖示位、統一左欄，全日或時間放右欄；直向特大卡下半部分用兩欄，減少被迫縮細字體。
 
 ## 測試與真機驗收
 
