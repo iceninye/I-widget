@@ -814,8 +814,8 @@ if (require.main === module) (async () => {
   await test("today 主要文字維持可讀字級", async () => {
     const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
     const find = (value) => texts(widget).includes(value) ? all(widget, (e) => e.kind === "text" && e.text === value)[0] : null;
-    equal(find("五23").font.size, 10);
-    equal(find("死早").font.size, 11);
+    equal(find("五23").font.size, 11);
+    equal(find("死早").font.size, 12);
     equal(all(widget, (e) => e.kind === "text" && e.text.startsWith("接下來 15:30"))[0].font.size, 12);
     equal(find("明日科學測驗").font.size, 13);
   });
@@ -861,7 +861,7 @@ if (require.main === module) (async () => {
       if (family !== "medium") {
         for (const label of ["五23", "六24", "日25", "一26", "二27", "三28", "四29"]) ok(output.includes(label), `${family}: ${label}`);
         equal(output.includes("活動2"), true, `${family}: school visible`);
-        equal(output.includes("活動5"), family !== "medium" && family !== "large", `${family}: school budget`);
+        equal(output.includes("活動5"), family === "extraLarge", `${family}: school budget`);
         equal(output.includes("活動9"), false, `${family}: school cap`);
       }
     }
@@ -958,18 +958,62 @@ if (require.main === module) (async () => {
     const widget = (await run({ view: "today", family: "large", iCloud: JSON.stringify(planningFixture()) })).widget;
     const card = all(widget, (e) => e.kind === "stack" && e.cornerRadius === 18)[0];
     ok(card.backgroundGradient);
+    equal(card.layout, "h");
+    equal(card.children[0].kind, "spacer");
+    equal(card.children[card.children.length - 1].kind, "spacer");
+    equal(card.children[0].length, undefined);
+    equal(card.children[card.children.length - 1].length, undefined);
+    equal(all(card, (e) => e.kind === "refreshButton").length, 1);
     equal(card.backgroundGradient.colors.length, 3);
     equal(card.backgroundGradient.locations, [0, 0.015, 0.07]);
     equal([card.backgroundGradient.startPoint.x, card.backgroundGradient.endPoint.x], [0, 1]);
-    ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 292 && e.size.height === 7).length >= 1);
-    const cells = all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 42 && e.size.height === 0);
+    ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 270 && e.size.height === 7).length >= 1);
+    const cells = all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 40 && e.size.height === 0);
     equal(cells.length, 7);
     for (const cell of cells) {
-      equal(cell.children.filter((e) => e.kind === "stack" && e.size && e.size.width === 38 && e.size.height === 18).length, 1);
+      equal(cell.children.filter((e) => e.kind === "stack" && e.size && e.size.width === 36 && e.size.height === 19).length, 1);
     }
+    const weekRow = widget.children.find((e) => e.kind === "stack"
+      && e.children.filter((child) => child.kind === "stack" && child.size && child.size.width === 40).length === 7);
+    ok(weekRow);
+    equal(weekRow.children[0].kind, "spacer");
+    equal(weekRow.children[weekRow.children.length - 1].kind, "spacer");
+    equal(weekRow.children[0].length, undefined);
+    equal(weekRow.children[weekRow.children.length - 1].length, undefined);
     equal(texts(widget).filter((value) => value === "死早").length, 4);
     ok(!texts(widget).includes("..."));
     ok(!texts(widget).includes("…"));
+  });
+  await test("today 長事件拆行，直向特大卡下半部分兩欄", async () => {
+    const data = planningFixture();
+    data.duty.events = [dutyEvent(hkIso(15, 30), {
+      title: "紅磡站交接並帶同沿途路線資料", place: "紅磡站月台", detail: "帶交接文件核對車序",
+    })];
+    const detail = "紅磡站交接並帶同沿途路線資料 · 紅磡站月台 · 帶交接文件核對車序";
+    for (const width of [375, 393, 430]) {
+      const state = await run({
+        view: "today", family: "extraLargePortrait", iCloud: JSON.stringify(data),
+        device: { screenSize: () => new Size(width, 932) },
+      });
+      const widget = state.widget;
+      ok(has(widget, "接下來 15:30 · 落更"));
+      const detailText = all(widget, (e) => e.kind === "text" && e.text === detail)[0];
+      ok(detailText);
+      equal(detailText.lineLimit, 2);
+      equal(detailText.minimumScaleFactor, 0.85);
+      ok(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 270 && e.size.height === 7).length >= 1);
+      equal(all(widget, (e) => e.kind === "stack" && e.size && e.size.width === 320 && e.size.height === 7).length, 0);
+      const columns = widget.children.find((e) => e.kind === "stack" && e.layout === "h"
+        && e.children.filter((child) => child.kind === "stack" && child.layout === "v").length === 2);
+      ok(columns);
+      const [left, right] = columns.children.filter((child) => child.kind === "stack" && child.layout === "v");
+      ok(left.size.width > 0 && right.size.width > 0);
+      ok(left.size.width + right.size.width + 12 <= width - 70);
+      ok(has(left, "本週 5 更"));
+      ok(has(left, "00158 屯門"));
+      ok(has(right, "明日科學測驗"));
+      ok(!has(left, "明日科學測驗"));
+    }
   });
   await test("放工後倒數改為下一更返工時間", async () => {
     const data = planningFixture();
