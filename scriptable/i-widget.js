@@ -1130,23 +1130,32 @@ function todayDutyCard(w, data, family, snapshot) {
   const duty = data.duty.today;
   const tone = duty ? duty.tone : "unknown";
   const tint = dutyColor(tone);
-  const box = w.addStack();
-  box.layoutVertically();
-  box.setPadding(10, 12, 10, 12);
-  box.cornerRadius = 18;
-  box.backgroundColor = dutyCardColor(tone);
+  // 背景掛喺橫向 frame：兩邊 flexible spacer 令卡片鋪滿 widget，
+  // 唔會被 shiftBar／文字嘅固有寬度逼成左邊細卡。
+  const frame = w.addStack();
+  frame.layoutHorizontally();
+  frame.setPadding(10, 12, 10, 12);
+  frame.cornerRadius = 18;
+  frame.backgroundColor = dutyCardColor(tone);
   const gradient = dutyCardGradient(tone);
-  if (gradient) box.backgroundGradient = gradient;
+  if (gradient) frame.backgroundGradient = gradient;
+  frame.addSpacer();
+  const box = frame.addStack();
+  box.layoutVertically();
+  frame.addSpacer();
 
   const heading = box.addStack();
   heading.layoutHorizontally();
   heading.centerAlignContent();
-  text(heading, duty ? duty.title || "今日更份" : "今日更份", family === "medium" ? 16 : 18, C.label, true);
+  const headingTitle = text(heading, duty ? duty.title || "今日更份" : "今日更份", family === "medium" ? 17 : 20, C.label, true);
+  headingTitle.lineLimit = 1;
+  headingTitle.minimumScaleFactor = 0.85;
   if (duty && duty.group) { heading.addSpacer(5); badge(heading, duty.group, tint); }
   if (duty && duty.datedSheet) { heading.addSpacer(4); badge(heading, duty.datedSheet, C.orange); }
   if (duty && duty.isOverride) { heading.addSpacer(4); badge(heading, "改", C.orange); }
   heading.addSpacer();
   text(heading, dutyDateLabel(duty), 11, C.secondary, false);
+  addRefreshControl(heading, family);
 
   const status = dutyStatus(data.duty);
   if (status) text(box, status, 11, status.includes("失敗") ? C.red : C.secondary, true);
@@ -1155,16 +1164,16 @@ function todayDutyCard(w, data, family, snapshot) {
       const timeRow = box.addStack();
       timeRow.layoutHorizontally();
       timeRow.centerAlignContent();
-      const timeSize = family === "medium" ? 23 : 26;
+      const timeSize = family === "medium" ? 24 : 28;
       const times = text(timeRow, duty.times, timeSize, C.label, true);
       times.font = safe(() => Font.heavyMonospacedSystemFont(timeSize), times.font);
       timeRow.addSpacer();
       const countdown = multilineText(timeRow, dutyCountdown(duty, data.duty.tomorrow, data.duty.events), 11, C.secondary, true, 2);
       safe(() => countdown.rightAlignText());
     } else {
-      text(box, duty.code || "上落班時間未有資料", family === "medium" ? 18 : 22, tint, true);
+      text(box, duty.code || "上落班時間未有資料", family === "medium" ? 20 : 24, tint, true);
     }
-    shiftBar(box, duty, family === "medium" ? 250 : isExtraLargeFamily(family) ? 320 : 292);
+    shiftBar(box, duty, family === "medium" ? 250 : family === "extraLarge" ? 320 : 270);
     if (duty.route || duty.hoursText) {
       const detail = box.addStack();
       detail.layoutHorizontally();
@@ -1182,18 +1191,18 @@ function todayDutyCard(w, data, family, snapshot) {
   weatherRow.centerAlignContent();
   if (weather) {
     if (symbol(weatherRow, weather.symbol, C.blue, 14)) weatherRow.addSpacer(4);
-    text(weatherRow, Number.isFinite(data.weather.currentTemp) ? `${Math.round(data.weather.currentTemp)}°` : MISSING, 14, C.label, true);
+    text(weatherRow, Number.isFinite(data.weather.currentTemp) ? `${Math.round(data.weather.currentTemp)}°` : MISSING, 16, C.label, true);
     weatherRow.addSpacer(5);
-    text(weatherRow, weather.codeText, 12, C.secondary, false);
+    text(weatherRow, weather.codeText, 13, C.secondary, false);
     weatherRow.addSpacer(5);
-    text(weatherRow, weather.tempText, 12, C.secondary, false);
+    text(weatherRow, weather.tempText, 13, C.secondary, false);
     if (weather.rainChance !== null && weather.rainChance !== undefined) {
       weatherRow.addSpacer(5);
-      if (symbol(weatherRow, "umbrella.fill", C.blue, 11)) weatherRow.addSpacer(2);
-      text(weatherRow, `${weather.rainChance}%`, 11, C.blue, false);
+      if (symbol(weatherRow, "umbrella.fill", C.blue, 12)) weatherRow.addSpacer(2);
+      text(weatherRow, `${weather.rainChance}%`, 12, C.blue, false);
     }
   } else {
-    text(weatherRow, "天氣未有資料", 12, C.secondary, false);
+    text(weatherRow, "天氣未有資料", 13, C.secondary, false);
   }
   const forecasts = data.duty.shiftForecast || [];
   if (family !== "medium" && forecasts.length) {
@@ -1202,14 +1211,14 @@ function todayDutyCard(w, data, family, snapshot) {
     shiftRow.centerAlignContent();
     forecasts.slice(0, 2).forEach((item, index) => {
       if (index) shiftRow.addSpacer(10);
-      text(shiftRow, item.label, 11, C.secondary, false);
+      text(shiftRow, item.label, 12, C.secondary, false);
       shiftRow.addSpacer(4);
-      if (item.symbol && symbol(shiftRow, item.symbol, C.blue, 11)) shiftRow.addSpacer(3);
-      text(shiftRow, item.tempText, 12, C.label, true);
+      if (item.symbol && symbol(shiftRow, item.symbol, C.blue, 12)) shiftRow.addSpacer(3);
+      text(shiftRow, item.tempText, 13, C.label, true);
       if (item.rainChance !== null && item.rainChance !== undefined) {
         shiftRow.addSpacer(4);
-        if (symbol(shiftRow, "umbrella.fill", C.blue, 10)) shiftRow.addSpacer(2);
-        text(shiftRow, `${item.rainChance}%`, 11, C.blue, false);
+        if (symbol(shiftRow, "umbrella.fill", C.blue, 11)) shiftRow.addSpacer(2);
+        text(shiftRow, `${item.rainChance}%`, 12, C.blue, false);
       }
     });
     shiftRow.addSpacer();
@@ -1217,7 +1226,7 @@ function todayDutyCard(w, data, family, snapshot) {
   weatherRow.addSpacer();
   if (snapshot) {
     const weatherStatus = weatherFreshness(snapshot);
-    const stamp = text(weatherRow, weatherStatus.text, 9, weatherStatus.stale ? C.orange : C.secondary, false);
+    const stamp = text(weatherRow, weatherStatus.text, 10, weatherStatus.stale ? C.orange : C.secondary, false);
     safe(() => stamp.rightAlignText());
   }
   return box;
@@ -1232,16 +1241,16 @@ function todayAlerts(w, data) {
   row.layoutHorizontally();
   row.centerAlignContent();
   if (!warnings.available) {
-    text(row, "天氣警告：未有資料", 11, C.secondary, false);
+    text(row, "天氣警告：未有資料", 12, C.secondary, false);
   } else if (warnings.items.length) {
-    if (symbol(row, "exclamationmark.triangle.fill", warnings.items[0].severe ? C.red : C.orange, 12)) row.addSpacer(4);
-    multilineText(row, warnings.items[0].text, 11, warnings.items[0].severe ? C.red : C.orange, true, 2);
-    if (warnings.items.length > 1) { row.addSpacer(4); text(row, `+${warnings.items.length - 1} 項`, 10, C.orange, false); }
+    if (symbol(row, "exclamationmark.triangle.fill", warnings.items[0].severe ? C.red : C.orange, 13)) row.addSpacer(4);
+    multilineText(row, warnings.items[0].text, 12, warnings.items[0].severe ? C.red : C.orange, true, 2);
+    if (warnings.items.length > 1) { row.addSpacer(4); text(row, `+${warnings.items.length - 1} 項`, 11, C.orange, false); }
   }
   if (trainIssue || trainMissing) {
     row.addSpacer(6);
-    if (symbol(row, "tram.fill", trainMissing ? C.secondary : C.orange, 12)) row.addSpacer(4);
-    text(row, trainMissing ? "屯馬綫：未有資料" : [data.train.stateText, data.train.message].filter(Boolean).join(" · "), 11, trainMissing ? C.secondary : C.orange, true);
+    if (symbol(row, "tram.fill", trainMissing ? C.secondary : C.orange, 13)) row.addSpacer(4);
+    text(row, trainMissing ? "屯馬綫：未有資料" : [data.train.stateText, data.train.message].filter(Boolean).join(" · "), 12, trainMissing ? C.secondary : C.orange, true);
   }
   row.addSpacer();
   return true;
@@ -1253,35 +1262,37 @@ function todayWeekStrip(w, data, family) {
   const row = w.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
-  const cellWidth = isExtraLargeFamily(family) ? 48 : 42;
+  const cellWidth = isExtraLargeFamily(family) ? 46 : 40;
+  row.addSpacer();
   week.slice(0, 7).forEach((item, index) => {
-    if (index) row.addSpacer(3);
+    if (index) row.addSpacer();
     const cell = row.addStack();
     cell.layoutVertically();
     cell.centerAlignContent();
     cell.size = new Size(cellWidth, 0);
-    text(cell, `${item.weekday}${item.dayNumber}`, 10, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
+    text(cell, `${item.weekday}${item.dayNumber}`, 11, index === 0 ? C.label : C.secondary, index === 0).centerAlignText();
     const label = cell.addStack();
     label.layoutHorizontally();
     label.centerAlignContent();
     label.setPadding(3, 4, 3, 4);
     label.cornerRadius = 5;
-    label.size = new Size(cellWidth - 4, 18);
+    label.size = new Size(cellWidth - 4, 19);
     label.backgroundColor = dutyColor(item.tone);
     if (index === 0) {
       label.borderColor = C.label;
       label.borderWidth = 1;
     }
-    text(label, item.label, 11, WHITE, true).centerAlignText();
+    text(label, item.label, 12, WHITE, true).centerAlignText();
     const weather = item.weather || ((data.weather.daily || []).find((entry) => entry.date === item.date) || {}).day;
     if (weather) {
       const temp = cell.addStack();
       temp.layoutHorizontally();
       temp.centerAlignContent();
-      if (symbol(temp, weather.symbol, C.secondary, 10)) temp.addSpacer(2);
-      text(temp, `${Math.round(weather.maxTemp)}°`, 10, C.secondary, false);
+      if (symbol(temp, weather.symbol, C.secondary, 11)) temp.addSpacer(2);
+      text(temp, `${Math.round(weather.maxTemp)}°`, 11, C.secondary, false);
     }
   });
+  row.addSpacer();
   return true;
 }
 
@@ -1292,14 +1303,18 @@ function todayNextEvent(w, data, family) {
   const row = w.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
-  if (symbol(row, "clock", C.accent, 12)) row.addSpacer(4);
-  text(row, `接下來 ${event.displayAt} · ${event.action} · ${event.title}`, 12, C.label, true);
-  const detail = [event.place, event.detail].filter(Boolean).join(" · ");
-  if (detail) text(w, detail, 11, C.secondary, false);
+  if (symbol(row, "clock", C.accent, 13)) row.addSpacer(4);
+  text(row, `接下來 ${event.displayAt} · ${event.action}`, 12, C.label, true);
+  row.addSpacer();
+  const detail = [event.title, event.place, event.detail].filter(Boolean).join(" · ");
+  if (detail) {
+    const detailText = multilineText(w, detail, 12, C.secondary, false, 2);
+    detailText.minimumScaleFactor = 0.85;
+  }
   return true;
 }
 
-function todayTomorrow(w, data) {
+function todayTomorrow(w, data, compact = false) {
   const day = data.duty.tomorrow;
   if (!day) return false;
   const row = w.addStack();
@@ -1313,9 +1328,12 @@ function todayTomorrow(w, data) {
   dot.backgroundColor = dutyColor(day.tone);
   row.addSpacer(5);
   text(row, day.title || "明日更份", 13, C.label, true);
-  if (day.times) { row.addSpacer(6); text(row, day.times, 12, C.secondary, false); }
-  if (day.route) { row.addSpacer(6); text(row, day.route, 11, C.secondary, false); }
+  if (day.times && !compact) { row.addSpacer(6); text(row, day.times, 12, C.secondary, false); }
   row.addSpacer();
+  const details = compact
+    ? [day.times, day.route && `路線 ${day.route}`].filter(Boolean).join(" · ")
+    : day.route && `路線 · ${day.route}`;
+  if (details) text(w, details, 11, C.secondary, false);
   return true;
 }
 
@@ -1347,7 +1365,9 @@ function todaySchool(w, data, family) {
       row.addSpacer(5);
       text(row, item.allDay ? "全日" : hhmm(new Date(item.start)), 12, C.secondary, false);
       row.addSpacer(6);
-      text(row, item.title, 13, C.label, false);
+      const title = text(row, item.title, 13, C.label, false);
+      title.lineLimit = 1;
+      title.minimumScaleFactor = 0.85;
       row.addSpacer();
     });
     if (rows.length > limit) text(w, `另有 ${rows.length - limit} 項`, 10, C.secondary, false);
@@ -1404,12 +1424,35 @@ function buildToday(w, family, snapshot) {
   todayDutyCard(w, data, family, snapshot);
   w.addSpacer(6);
   todayAlerts(w, data);
-  addRefreshControl(w, family);
   if (family === "medium") return;
 
   w.addSpacer(6);
   todayWeekStrip(w, data, family);
   w.addSpacer(5);
+  if (family === "extraLargePortrait") {
+    // 直向特大卡下半部分兩欄，換取更大字級同長句換行空間。
+    const screenWidth = safe(() => Device.screenSize().width, 402);
+    const contentWidth = Math.max(280, Math.min(380, screenWidth - 70));
+    const leftWidth = Math.round(contentWidth * 0.54);
+    const rightWidth = Math.max(120, contentWidth - leftWidth - 12);
+    const columns = w.addStack();
+    columns.layoutHorizontally();
+    columns.centerAlignContent();
+    const left = columns.addStack();
+    left.layoutVertically();
+    left.size = new Size(leftWidth, 0);
+    columns.addSpacer(12);
+    const right = columns.addStack();
+    right.layoutVertically();
+    right.size = new Size(rightWidth, 0);
+    columns.addSpacer();
+    todayNextEvent(left, data, family);
+    if (data.duty.weekText) text(left, `本週 ${data.duty.weekText}`, 12, C.secondary, false);
+    left.addSpacer(5);
+    todayTomorrow(left, data, true);
+    todaySchool(right, data, "large");
+    return;
+  }
   todayNextEvent(w, data, family);
   if (data.duty.weekText) {
     text(w, `本週 ${data.duty.weekText}`, 12, C.secondary, false);

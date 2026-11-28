@@ -128,6 +128,7 @@ courts: { listDate, updatedAt, items }
 - 透明背景、重讀鈕同特大直向預覽都按 API／OS／family 檢查；舊 Scriptable 冇 `addProgress` 時用回自製色條，冇 `addRefreshButton` 或 `presentExtraLargePortrait` 時安全略過／fallback。
 - 主要更份時間用 `Font.heavyMonospacedSystemFont`，倒數用 `WidgetText.rightAlignText()`；API 不存在時仍有原本字型同對齊 fallback。
 - 今日主卡以左至右漸層重現原生色條；七日格等寬，今日格唔會再被固定 28pt 寬度截成「…」。大尺寸補回本週更份摘要，放工後有明日更份或未來「返工」事件就顯示「下一更」倒數。
+- 今日卡更份背景改用 full-width 橫向框架，重讀掣收入標題列；七日格以彈性 spacer 拉滿，主要字級提高。長事件拆成兩行，直向特大卡下半部分使用兩欄，減少被迫縮細字體。
 
 ## 測試與真機驗收
 
